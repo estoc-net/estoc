@@ -38,7 +38,7 @@ and **MAY** as described in BCP 14 when they appear in all capitals.
 - [11. Early private-address policy and notifications](#early-private-address-policy-and-notifications)
 - [12. Peer address changes](#peer-address-changes)
 - [13. Remote errors and integrity failures](#remote-errors-and-integrity-failures)
-- [14. Retry, replacement and address rollover](#retry-replacement-and-address-rollover)
+- [14. Retry, manual resend and address rollover](#retry-replacement-and-address-rollover)
 - [15. Phase-1 execution and deferred replication](#phase-1-execution-and-deferred-replication)
 - [16. Privacy, abuse, interoperability and security](#privacy-abuse-interoperability-and-security)
 - [17. Required conformance cases](#required-conformance-cases)
@@ -167,17 +167,19 @@ Rotation is a channel link, not global address retirement. Keep old and new
 recipient routes through exact-successor confirmation. It changes selection
 for newly created intents only. An existing fixed-channel message never moves
 to the successor; explicit key/route retirement can make its retry impossible.
-New old-peer inputs received after verified supersession are saved but cannot
-start new application work under [channels.md](channels.md#continuity).
+Old-peer inputs remain receivable. At creation of a new application intent,
+check current verified supersession under [channels.md](channels.md#continuity),
+including when the input was received before that supersession became known.
 
 <a id="ordinary-sending-and-birth-selection"></a>
 
 ## 8. Ordinary sending and channel selection
 
 Before intent commit, select one exact eligible channel explicitly or through
-[the contact's send choices](vault-events.md#contact-fold). Verified successors
-may guide this selection; an explicit address choice can start a new channel
-without a handshake. Existing intents keep their channels.
+[the contact's send choices](vault-events.md#contact-fold). Defaults follow the
+unique verified head under [channel selection](channels.md#fixed-outbound-channel);
+an explicit address choice can start a new channel without a handshake.
+Existing intents keep their channels.
 
 <a id="ordinary-sending-requirements"></a>
 
@@ -247,21 +249,24 @@ Pre-receipt waits concern only the ability to identify the exact local
 key-agreement method, recover local key/document/route state, safely open the
 envelope, authenticate the current sender, or commit durable channel evidence.
 Locked/incomplete recovery is not evidence that a recipient is foreign.
-Current-sender resolution follows section 10.1's bounded retry rules; other
-recoverable cryptographic/local prerequisites suspend its active budget.
+Current-sender resolution follows section 10.1's bounded retry rules;
+recoverable local receive prerequisites suspend its active budget.
 
-[channels.md section 3.1](channels.md#receipt) governs a DIDComm library that
-cannot authenticate a carrier without predecessor material. Failed unpack
-supplies no authenticated observation or pickup ACK. Missing invitation
-decisions or continuity alone cannot defer independent authentication and receipt.
+The [phase-1 adapter](channels.md#carried-proof-and-library-boundary) authenticates
+the current sender without verifying `from_prior`. Missing predecessor material,
+failed proof verification, invitation decisions or continuity history cannot
+defer receipt or pickup ACK. Failed envelope authentication supplies no
+authenticated observation: a recoverable prerequisite waits here, while a
+definitive rejection or exhausted sender-resolution sequence follows section
+9.2's terminal pickup-ACK path.
 
 After durable `message.in`, each consumer waits only for its required evidence.
 These upper-layer waits do not withhold pickup ACK. Recovery uses saved sender
 evidence without restarting resolution; invitation recovery follows
 [its own rules](channels.md#invitation-consumed).
 
-Local wait state for an unopened delivery is runtime scheduling state. Retry
-when its actual cryptographic/local prerequisite changes; unrelated evidence
+Wait state for missing local receive prerequisites is runtime scheduling state.
+Retry when its actual local receive prerequisite changes; unrelated evidence
 does not retry it. Redelivery while that wait is retained does not restart
 authentication. Loss of that local state re-enters ordinary authentication
 with one shared bounded sequence when resolution is required. Such waits have
@@ -318,11 +323,14 @@ A safely classified hard rejection received through Message Pickup:
 - MUST NOT create a contact or response effect; and
 - MAY leave only a bounded local diagnostic.
 
-Direct transport has no pickup ACK. Malformed crypto, wrong recipient,
+Direct transport has no pickup ACK. Malformed envelope crypto, wrong recipient,
 a definitively unresolvable sender DID, exhaustion of
 [section 10.1](#did-resolution-requirements)'s sender-resolution budget and hard abuse/resource
 limits are examples of this gate. Supersession, invitation and channel
 policy are checked after receipt when consuming an invitation or starting new work.
+A malformed or invalid string-valued `from_prior` is post-receipt proof evidence,
+not malformed envelope crypto. It cannot change the authenticated sender used
+for ingress limits or supply predecessor authority.
 
 <a id="integrity-checks-and-durable-receipt"></a>
 
@@ -361,11 +369,15 @@ Before the first channel package is submitted, its sender MUST durably retain:
 - the exact presented peer DID;
 - the canonical peer DID;
 - the exact RFC 8785 canonical resolved DID document under its raw DASL CID;
-- the selected authentication `kid`;
-- the selected key-agreement `kid`; and
+- the document's authorized authentication and key-agreement method lists;
+- the selected peer key under `peer.resolved.peerPublicKey`; and
 - the resolution event ID.
 
 These are immutable operation snapshots, not a permanent channel key set.
+The exact envelope identifies the selected recipient `kid`; it must name an
+authorized key-agreement method for that selected key in the retained document.
+Merely preparing an encrypted
+package selects no peer authentication method for a future rotation proof.
 Each message or proof records the exact resolution it used; later operations
 may use a method-authorized updated document. Recovery of a saved operation
 may retrieve missing bytes only when their canonical raw CID matches its
@@ -523,11 +535,12 @@ retention, and require no cumulative delivery-lifetime wait history.
 All workers share one resolution sequence per mediation/pickup delivery ID;
 replica-scoped pickup additionally includes that replica ID. Direct input uses
 its normalized envelope CID. Redelivery/reconnect does not replenish an active
-sequence. Local or cryptographic prerequisite waits suspend an active sequence
+sequence. Local receive prerequisite waits suspend an active sequence
 without resetting its consumed attempts or active time. If sender resolution
-already succeeded and unpack then waits for historical cryptographic material,
+already succeeded but receipt then waits for recoverable local receive state,
 an evidence-change retry starts one fresh sequence to authenticate the current
-sender again. Loss of accounting, or loss of local wait state followed by
+sender again. Predecessor proof evidence is not such a prerequisite.
+Loss of accounting, or loss of local wait state followed by
 redelivery, also starts one fresh finite sequence when resolution is required;
 a past or now-unknown retention deadline alone cannot terminate that retry.
 
@@ -551,7 +564,7 @@ the DID; the sender may make a new explicit attempt under ordinary sending
 rules. It never authorizes automatic retry of a submitted message ID. A successful
 resolution within budget instead proceeds through normal authentication and
 durable receipt. Locked-vault, incomplete-recovery, recoverable local
-key/route/historical-cryptographic-evidence deferrals under section
+key/document/route deferrals under section
 9.1 suspend this accounting: do not schedule resolution calls or apply this
 terminal path while the delivery remains in such a wait. This bounds an
 unresolved authentication attempt, not the age, expiry or acceptance time of a
@@ -561,9 +574,10 @@ valid initial message.
 
 #### Evidence-change retries
 
-For an unopened delivery, retry only when its missing local or cryptographic
-material changes. Reapply current authentication with the one shared bounded
-resolution sequence under the accounting rule above. Resume a suspended active
+For an unopened delivery in a local-prerequisite wait, retry only when its
+missing local receive material changes. Reapply current authentication with
+the one shared bounded resolution sequence under the accounting rule above.
+Resume a suspended active
 sequence; start a fresh one only when that rule permits it.
 
 For a committed channel observation, evidence changes schedule continuity
@@ -590,12 +604,16 @@ the predecessor again, independently of current sender authentication.
 
 #### Predecessor resolution for DID replacement
 
-First reuse a complete proof witness for the exact carrier context and compact
+After durable receipt and without delaying pickup ACK, first reuse a complete
+proof witness for the exact carrier context and compact
 JWT under [the continuity fold](channels.md#continuity), if one exists. Each
 new carrier still passes current-sender authentication. Deriving a link requires
 its exact endpoints and complete proof evidence.
 
-Otherwise resolve the prior DID for this verification.
+Otherwise parse the retained JWT using library decoding APIs only to locate and
+validate its claimed issuer and protected key ID. Malformed syntax or intrinsically
+invalid claims make the proof invalid without a lookup; decoding grants no authority.
+Resolve the prior DID for this verification.
 A `did:peer:4` predecessor uses its validated immutable document. A `did:web`
 predecessor requires fresh method resolution, allowing online conditional
 revalidation but no stale/offline fallback. With the already committed carrier
@@ -748,8 +766,9 @@ Verify the new recipient registration before disclosure, then follow
 
 Use the exact-address, authenticated-peer and local-only/join context checks in
 [channels.md](channels.md#continuity). Input at a predecessor confirms no
-successor. A peer ACK names a
-message and is independent of address knowledge.
+successor. An ACK's named message IDs alone confirm no address knowledge.
+Its complete authenticated carrier, including a pure ACK, can independently
+confirm the exact successor address to which it was sent.
 Retain both recipient routes through confirmation; retire a shared resource
 only when no other channel or disclosure still needs it.
 
@@ -842,7 +861,7 @@ roll back; explicit new communication is a new channel and new message.
 3. <a id="rz-3"></a> No emitted message uses an Estoc rendezvous request, accept or decline type, or a wire contact ID.
 4. <a id="rz-4"></a> Public/public, public/pairwise and pairwise/pairwise pairs use the same channel receipt and operation-evidence rules.
 
-5. <a id="rz-5"></a> Run both channel naming fixtures in both directions; distinct canonical pairs differ. Contact IDs do not enter the derivation.
+5. <a id="rz-5"></a> Channel identity preserves canonical local/peer roles: C(A,B) differs from C(B,A), and changing either endpoint changes the channel. Contacts and document revisions do not enter this pair.
 
 6. <a id="rz-6"></a> Validated Peer long/short spellings name one channel endpoint; shared keys, endpoints and labels do not alias distinct DIDs.
 
@@ -852,7 +871,7 @@ roll back; explicit new communication is a new channel and new message.
 
 9. <a id="rz-9"></a> A live public channel can carry ordinary content before a reply or private allocation.
 
-10. <a id="rz-10"></a> Offline intent commits its fixed sender/recipient pair without DNS; first preparation resolves and accepts the exact peer evidence.
+10. <a id="rz-10"></a> Offline intent commits its fixed sender/recipient pair without DNS; first preparation resolves, validates and commits the exact peer evidence.
 
 11. <a id="rz-11"></a> Preparation validates the fixed-channel intent and current recipient evidence. Different valid imported Web revisions coexist without a winning revision or a union of authorized keys.
 
@@ -960,7 +979,7 @@ roll back; explicit new communication is a new channel and new message.
 
 56. <a id="rz-56"></a> Confirmation in an unrelated channel does not permit short-form disclosure or proof omission; validated equivalent predecessor spellings verify against the exact retained method evidence.
 
-57. <a id="rz-57"></a> Independently authenticated carriers are saved while predecessor evidence is pending. Restore validates local links; failed unpack never fabricates receipt, and proof-free input alone consumes no invitation.
+57. <a id="rz-57"></a> The phase-1 adapter saves authenticated carriers with the unchanged proof while predecessor evidence is pending or the proof is invalid. Proof resolution never suspends sender accounting or pickup ACK. Definitive envelope/authentication failures are terminal pre-vault input; recoverable local prerequisites still wait. Restore validates local links, and proof-free input alone consumes no invitation.
 
 58. <a id="rz-58"></a> Long/short Peer spellings retain the same canonical document CID and cannot create another document revision by resolver transformation.
 

@@ -291,8 +291,7 @@ and `message.out`;
 `disclosureEventId` in `invitation.consumed` names `did.disclosed`;
 `fromDidId` and `toDidId` in `did.rotationSelected` name local DID entities;
 `rotationEventId` in
-`message.out` names `did.rotationSelected`.
-`triggerEventId` is `EventReference<"message.in">`. The referencing schema also owns
+`message.out` names `did.rotationSelected`. The referencing schema also owns
 presence and nullability; a nullable reference has the same typed non-null
 value. Generic event-store APIs continue to use `EventId`.
 
@@ -302,7 +301,7 @@ and `did.disclosed.didId`, for example. Add a role prefix when needed, such as
 entity ID behind a bare `id`, `contact` or `mediation` field.
 `cid` and `*Cid` always mean content addresses; `*Did` always means a DID
 string, while `*DidId` means a local entity UUID. Arrays of references use the
-plural suffix, such as `attachmentCids` and `localDidIds`; collections of view
+plural suffix, such as `attachmentCids`; collections of view
 records retain their own names and carry typed identifiers in each record.
 
 The type distinction is part of the API contract. One possible TypeScript
@@ -738,9 +737,9 @@ The long form is disclosed before the short form is relied upon by a peer.
 The short form is canonical for vault references and mediator recipient
 registration after the mapping is known.
 
-The early privacy allocator may use a UUIDv5 entity ID; ordinary
-creation uses UUIDv7. Same ID with different identity fields is an integrity
-conflict.
+Every locally created communication DID entity ID, including a privacy
+successor, is a fresh UUIDv7. Same ID with different identity fields is an
+integrity conflict.
 
 <a id="delivery-routes"></a>
 
@@ -857,7 +856,7 @@ First disclosure exposes the validated `did:peer:4` long form.
   "roots": [],
   "data": {
     "didId": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
-    "because": "contact-deleted"
+    "because": "address-no-longer-needed"
   }
 }
 ```
@@ -1318,8 +1317,9 @@ source-labelled application data and channel-local messages without merging thei
 identities or counting a message twice within one combined view. Missing or
 conflicting authentication evidence remains visible in the source channel.
 
-`writeTo[]` is the concrete eligible channel choices shown for a new user send
-from the contact's selected channels and their verified continuations.
+`writeTo[]` contains the distinct eligible head channels for a new user send
+from the contact's selected contexts, under
+[the head-selection rule](channels.md#fixed-outbound-channel).
 Each choice needs its exact pair, usable local key/route, current send policy
 and, for a derived continuation, complete link evidence. An empty selection
 gives an empty `writeTo[]`.
@@ -1327,9 +1327,13 @@ A newly discovered peer address first needs an explicit local-DID choice to
 form a complete channel. Add that pair to the contact's selection or send to
 it independently of a contact. Its fixed-channel intent may precede peer
 resolution; preparation still validates its own peer resolution.
-`contact.useDid` only expresses a local-address preference among eligible
-options. If it does not resolve to one channel, the caller must explicitly
-select an eligible channel before intent commit. Names, peer-DID matches and
+`contact.useDid` expresses a local-address preference among those heads,
+following verified local successors in the same context even when its saved
+`didId` names a predecessor. If applying the preference does not leave exactly
+one eligible head, the caller must explicitly select an eligible channel before
+intent commit. A superseded channel is outside `writeTo[]`; an explicit
+pre-rotation choice follows the same head-selection section's restrictions.
+Names, peer-DID matches and
 contact merges cannot resolve ambiguity or supply dispatch authority.
 
 Blocking and cleanup follow [contact deletion](#delete-a-contact), independently
@@ -1699,32 +1703,44 @@ fields of this portable event and do not participate in the delivery fold.
   "roots": [],
   "data": {
     "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "scope": "message",
     "packageId": null,
     "code": "expired"
   }
 }
 ```
 
-This event records terminal failure or explicit cancellation. `scope` is
-`package` or `message`.
-`packageId` is REQUIRED for package scope and null when no package exists.
+This event records terminal failure or explicit cancellation. Its closed data
+contains exactly `messageId`, `packageId` and `code`; `roots` is empty.
+Every termination is message-scoped: it stops all preparation and submission
+for the intent, including manual retry. Further sending requires a new message ID.
 
-- package scope makes that package terminal. It cannot be replaced or retried;
-  further sending requires a new message ID.
-- message scope stops all preparation and submission for the intent, including
-  manual retry.
-- `code == "expired"` MUST be message-scoped.
-- `code == "cancelled"` MUST be message-scoped.
-- `code == "peer-key-changed"` is message-scoped with `packageId == null`;
-  [relationships.md section 10.1](relationships.md#did-resolution-requirements) defines this failure before package preparation.
+`code` is exactly one of:
+
+- `expired`: the unsubmitted intent reached its non-null expiry;
+- `cancelled`: an explicit user action cancelled the unsubmitted intent;
+- `peer-key-changed`: the definitive resolution failure before preparation
+  defined by [relationships.md section 10.1](relationships.md#did-resolution-requirements);
+  `packageId` is always null; or
+- `rejected`: the transport's defined response semantics prove permanent
+  rejection of this exact fixed package; `packageId` MUST be non-null.
+  A timeout, disconnect, retryable refusal or unclassified response does not
+  prove this condition.
+
+When producing the event, `packageId` names the message's committed package
+if one already exists and is null otherwise. A non-null value must name a
+valid matching `message.prepared` for this message; a missing preparation leaves
+that evidence pending, not invalid. Package availability is a producer ordering
+rule: a null termination remains valid when a preparation is imported earlier
+or later. Import MUST NOT infer producer knowledge from event timestamps or
+canonical order, or turn a null termination into a package reference.
+A termination never proves nondelivery; an earlier unrecorded call may have
+succeeded. Any independently complete submission takes precedence after import.
 
 An explicit cancel action serializes with dispatch for the message, rechecks
 submission under the operation lock and appends `code == "cancelled"` only
 while unsubmitted. It may cancel before preparation or after an outcome-unknown
-call; `packageId` is null before preparation and otherwise names the fixed
-package. Cancellation preserves message content and does not prove nondelivery.
-An independently complete submission still takes precedence after import.
+call; the same `packageId` rule applies to cancellation and expiry before or
+after preparation. Cancellation preserves message content.
 
 Retryable failures, the `resolve`/`prepare`/`submit` phase and retry diagnostics
 belong only to local trace and retry policy. They MUST NOT append
@@ -1791,7 +1807,7 @@ Derive these independent facts:
   historical fact. An incomplete unrelated row cannot erase it;
 - `ackWitnesses`: all complete source witnesses satisfying section 9.6;
 - `acknowledged`: at least one such witness exists; and
-- package/message terminations and permanent erasures under their schemas.
+- message terminations and permanent erasures under their schemas.
 
 For an inbound-derived output, verify its `(executionId, effectType)` tuple
 against its exact complete source witness in the channel-local
@@ -1922,6 +1938,9 @@ Requirements:
   preserve normalized wire headers; absent `please_ack` is null, a present
   array is retained exactly, absent `ack` is `[]`, and no additional header is
   `{}`;
+- `fromPrior` is null when absent, otherwise the exact original string, even
+  when it is not a valid JWT. Parsing, claim and signature failures belong to
+  continuity verification and do not invalidate this authenticated observation;
 - ACK processing expands `""` in `pleaseAck` to this `wireMessageId` and ignores only
   later duplicate targets; stored arrays are not rewritten;
 - `headers` contains every otherwise-unmodeled permitted top-level member and
@@ -2128,8 +2147,8 @@ evidence and policy checks for intents, rotation decisions and observations.
 
 [distributed-delivery.md section 11](distributed-delivery.md#automatic-effects) defines effect identity and commit ordering;
 [section 8.2](distributed-delivery.md#deterministic-pure-ack) there owns the pure-ACK vector. [Section 9.1](#ids) of this document defines
-outbound ID derivation. [relationships.md section 11.1](relationships.md#automatic-response-selection)
-owns rotation-notification selection; its [section 13](relationships.md#remote-errors-and-integrity-failures)
+outbound ID derivation. [Built-in independent operations](distributed-delivery.md#built-in-independent-operations)
+owns rotation-notification selection; [relationships.md section 13](relationships.md#remote-errors-and-integrity-failures)
 defines remote error handling.
 
 <a id="15-erasure-and-collection"></a>
@@ -2202,12 +2221,11 @@ For a consistent outbound `M` and valid package `P`, define:
 retainEnvelopeForMessage(M, P) =
     !erased(M, P.envelopeCid)
     and !submitted(M)
-    and !packageTerminal(P)
     and !messageTerminal(M)
 ```
 
-Terminal means valid committed `delivery.failed` at the specified scope,
-including message-scoped expiry or cancellation. Sampling wall
+Terminal means a valid committed message termination under `delivery.failed`,
+including expiry or cancellation. Sampling wall
 time beyond expiry blocks unsubmitted work but MUST NOT release its envelope
 until that durable termination is committed. `submitted(M)` is defined by
 [section 9.7](#outbound-message-and-delivery-fold) and remains true after envelope collection or termination.
@@ -2387,15 +2405,20 @@ Shared keys/routes are not retired merely because one display contact disappears
 
 1. Select the exact predecessor pair from an existing local DID and canonical
    peer DID, verify exact predecessor confirmation and check current rotation policy.
-2. Create a fresh local DID/eligible route and sign one frozen predecessor proof.
-3. Commit the successor, then `did.rotationSelected` with `fromDidId`, `peerDid`,
-   `toDidId`, nullable `sourceEventId` and frozen `fromPrior`. Recheck lifecycle,
-   denial, supersession and conflict under the lock. Do not retire shared resources.
+2. With an already configured eligible route, allocate a fresh local DID and
+   sign one frozen predecessor proof without committing that new DID yet.
+3. Under the lock, recheck lifecycle, denial, supersession, conflict and an
+   existing decision for the same `fromDidId`/`peerDid`. Reuse an existing
+   decision; otherwise atomically commit the new successor's `did.created`
+   and `did.rotationSelected` with `fromDidId`, `peerDid`, `toDidId`, nullable
+   `sourceEventId` and frozen `fromPrior`. Resolve an uncertain commit before
+   allocating again. Do not retire shared resources.
 4. Commit or reuse the dedicated Empty notification intent naming this rotation
    decision under [delivery](distributed-delivery.md#built-in-independent-operations).
    Verify recipient registration before disclosure and use the initial/manual
-   dispatch rules. Other new messages may use the successor; existing messages
-   keep their fixed channels.
+   dispatch rules. New user sends default to the verified head under
+   [channel selection](channels.md#fixed-outbound-channel); automatic replies
+   follow their own fixed selection rule. Existing messages keep their channels.
 5. Derive exact-successor confirmation; only then retire unneeded resources.
 
 Reuse an existing complete decision after interruption; missing references defer.
@@ -2678,7 +2701,7 @@ derivation requires a new vault version.
 
 45. <a id="ve-45"></a> New unconfirmed successor packages carry their frozen proof/long form. A committed package never changes after confirmation, even if it has never been sent.
 
-46. <a id="ve-46"></a> Invalid upper-layer evidence refuses dependent decisions/effects while retaining independently authenticated receipt; failed unpack creates no message.in.
+46. <a id="ve-46"></a> Invalid upper-layer evidence refuses dependent decisions/effects while retaining independently authenticated receipt; failed envelope authentication creates no message.in and follows the gate's wait or terminal rules.
 
 47. <a id="ve-47"></a> Public channels can send before a first reply. Every intent fixes its oriented channel, and display preferences never substitute another at preparation.
 
@@ -2901,7 +2924,7 @@ derivation requires a new vault version.
 
 128. <a id="ve-128"></a> Confirmation in an unrelated channel does not permit short-form disclosure. Exact predecessor verification evidence and validated DID spelling equivalence govern JWT method comparison.
 
-129. <a id="ve-129"></a> Incomplete continuity does not block authenticated receipt/pickup ACK. Recovered predecessor evidence validates local links; invalid paths grant no new operation authority and failed unpack remains pre-receipt.
+129. <a id="ve-129"></a> The phase-1 adapter preserves the original proof string and authenticates receipt independently of continuity. Missing proof evidence and invalid JWTs do not block message.in or pickup ACK; restored exact proof evidence updates verification without another receipt. Invalid paths grant no new operation authority; envelope/current-sender authentication failure remains pre-receipt under the gate's wait or terminal rules.
 
 130. <a id="ve-130"></a> Given the same validated numalgo-4 long form L and short form S, every
      stored resolution document uses id=L, preserves input alsoKnownAs entries
@@ -2981,3 +3004,9 @@ derivation requires a new vault version.
 154. <a id="ve-154"></a> Application views attribute received claims to their exact authenticated inbound channel and submitted information to its exact outbound channel. Missing source endpoint evidence defers attribution. The same peer at another local DID receives no inferred name or sharing fact.
 
 155. <a id="ve-155"></a> contact.channelsSet sorts complete canonical localDid/peerDid tuples by their specified encoding. Duplicate pairs, equal endpoints, noncanonical spellings and extra selector fields are invalid; an empty set clears selection and missing documents grant no processing authority.
+
+### Termination payload and rotation allocation (VE-156–VE-157)
+
+156. <a id="ve-156"></a> delivery.failed has exactly messageId, nullable packageId and one of expired, cancelled, peer-key-changed or rejected, with empty roots. Extra scope or unknown codes are invalid. Expiry and cancellation name an already prepared package and otherwise use null; peer-key-changed requires null and rejected requires the matching package. A null termination stops a preparation imported in either order. A non-null mismatched package is invalid, a missing own package is pending, and a complete submission still takes precedence. Every valid termination releases its message's envelope contribution without package-scoped state.
+
+157. <a id="ve-157"></a> New rotation allocation commits its UUIDv7 did.created and did.rotationSelected atomically. A crash exposes both or neither; recovery of an uncertain commit reuses the committed successor/decision instead of allocating a second DID. Import of the decision without its creation remains pending until exact evidence arrives. No crash prefix alone permits disclosure or dispatch.

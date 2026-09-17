@@ -64,9 +64,10 @@ Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 
 Change the defining section and align its consumers. ES owns event envelopes,
 DO owns raw objects/retention APIs and SQ owns SQLite lifecycle. CH owns channels,
-invitation/proof/rotation/denial/display events, the continuity fold and dispatch authority. VE owns
-the remaining domain payloads/folds; DD owns runtime ordering and message/effect
-identity; RZ owns DID resolution and address/display policy.
+invitation/proof/rotation/denial events, the continuity fold and dispatch
+authority. VE owns contact selections, display payloads and the remaining
+domain payloads/folds; DD owns runtime ordering and message/effect identity;
+RZ owns DID resolution and address/display policy.
 
 | Rule | Definition | Consumers |
 | --- | --- | --- |

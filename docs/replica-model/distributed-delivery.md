@@ -34,7 +34,7 @@ appear in all capitals.
 - [6. Preparing a package](#preparing-a-package)
 - [7. Submission completion and termination](#submission-completion-and-expiration)
 - [8. Durable end-to-end acknowledgment](#durable-end-to-end-acknowledgment)
-- [9. Observation identity, logical aliasing and execution identity](#observation-identity-logical-aliasing-and-execution-identity)
+- [9. Channel-local message and execution identity](#observation-identity-logical-aliasing-and-execution-identity)
 - [10. First contact and address policy](#first-contact-and-address-policy)
 - [11. Automatic effects](#automatic-effects)
 - [12. Required vault observations](#required-vault-observations)
@@ -238,7 +238,10 @@ this message's work and performs these steps:
    action. Release the lock, consume that action's one invocation locally and
    call transport with the exact envelope and package ID.
 5. Record transport acceptance as `delivery.submitted` naming the message/package,
-   or terminal failure where proven. Failure/uncertainty grants no next call.
+   or a proven permanent rejection as `delivery.failed(code="rejected")` with
+   the same message/package under [termination](vault-events.md#delivery-failed).
+   Retryable or uncertain outcomes stay in local trace. Failure/uncertainty
+   grants no next call.
 
 Keep per-message dispatch serialized across this procedure, without holding
 the vault lock across network I/O. Resolve an uncertain preparation commit
@@ -252,7 +255,9 @@ or not transport was called; reopen cannot replay it. Further calls follow
 
 1. Resolve exact local recipient/key/route eligibility and authenticate the
    current sender under [the gate](relationships.md#hard-pre-vault-gate).
-   Missing cryptographic material may require unopened wait.
+   The [phase-1 adapter](channels.md#carried-proof-and-library-boundary) preserves
+   any string-valued `from_prior` without verifying it. Missing local receive
+   material may require unopened wait; missing predecessor material cannot.
 2. Validate normalized wire fields, supported content and resource limits.
 3. Under the lock, commit/reuse exact resolution evidence, then commit content
    and `message.in` with fixed channel and fresh receipt ordinal.
@@ -444,6 +449,9 @@ submission. Later ACK evidence can report receipt without reopening anything.
 Explicit cancellation commits message-scoped `delivery.failed` with code
 `cancelled` under [the termination rules](vault-events.md#delivery-failed),
 stopping pending work without claiming nondelivery.
+All `delivery.failed` records terminate the message. Their closed code set and
+nullable package reference follow the same termination schema; no separate
+package termination can permit replacement or leave the message pending.
 Erasure, security denial, key/route retirement and missing exact bytes separately
 govern manual retry. Ordinary address rotation selects new messages only.
 
@@ -461,12 +469,14 @@ be recreated for a duplicate input or manual "send again" with a new ID.
 
 ### 8.1 Freezing an ACK target set
 
-Before creating an ACK intent, require a complete source witness,
-non-erased eligible source and an authorized usable local sending channel.
-The channel can be the carrier's channel or its verified role-preserving
-successor. An unrelated channel in the same contact is never a substitute. If no
-eligible sender exists, preserve the input for manual action; do not commit
-an incomplete response or automatically dispatch it after a later restore.
+Before creating an ACK intent, require an eligible complete source witness
+and choose its exact sender/recipient under
+[the built-in operation rule](#built-in-independent-operations). An unrelated
+channel in the same contact is never a substitute. If no eligible sender exists,
+preserve the input for manual action; do not commit an incomplete response or
+automatically dispatch it after a later restore. An ACK uses retained receipt
+and header evidence, so body erasure alone does not disqualify its source or
+targets. It does not restore any permission for content-derived work.
 
 Under the operation lock, look up the pure-ACK tuple for this execution before
 choosing timing or targets. Reuse its fixed intent without sending it on
@@ -487,7 +497,7 @@ If multiple otherwise eligible channel inputs with that wire ID are ambiguous,
 omit it. The current carrier can identify itself by its exact source.
 
 Sort eligible targets by their minimum complete receipt key, then freeze their
-wire IDs in one output. Unknown, conflicted, erased or unauthorized targets are
+wire IDs in one output. Unknown, conflicted or unauthorized targets are
 omitted and later discovery cannot change the saved array. Generic replies use
 `thid = carrier.thid ?? carrier.wireMessageId`, copy nullable `pthid`, and follow
 the producing protocol's response rules. No-response errors still do not reply.
@@ -734,6 +744,17 @@ Pure ACK and rotation notification both use DIDComm type
 `https://didcomm.org/empty/1.0/empty`. Their distinct effect types keep both
 operations independent for one execution.
 
+Before selecting addresses for a built-in ACK or Ping reply, reuse an existing
+intent for its tuple. For a new intent, use the carrier's actual channel when
+its local DID remains eligible for sending there. Otherwise use the unique
+non-conflicted verified local-only successor head that retains the carrier's
+canonical peer DID, if eligible; otherwise create no automatic intent.
+`recipientDid` is the source's canonical `did`, never its `presentedDid` spelling.
+Temporary network unavailability or pending recipient registration delays
+dispatch without changing the selected channel. This is a producer selection
+rule; import validates the saved intent's evidence, not the producer's then-visible
+lifecycle state. A later rotation or retirement never reselects a committed intent.
+
 A Ping reply requires `response_requested != false` and current protocol/policy
 eligibility. It uses type `https://didcomm.org/trust-ping/2.0/ping-response`,
 `thid = source.wireMessageId`, source `pthid`, `createdTime` and `expiresTime`,
@@ -901,7 +922,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 27. <a id="dd-27"></a> Control input with a complete source witness may supply authorized ACK evidence. It creates no contacts or recursive privacy notifications, and its type alone consumes no invitation.
 
-28. <a id="dd-28"></a> Invalid carried proof prevents link/ACK effects and cannot supply a proof-free invitation source; independent authentication can still retain receipt and failed unpack creates none.
+28. <a id="dd-28"></a> Invalid carried proof prevents link/ACK effects and cannot supply a proof-free invitation source; independently authenticated receipt is retained. Failed envelope authentication creates no receipt and follows the gate's wait or terminal rules.
 
 29. <a id="dd-29"></a> Duplicate explicit ACKs are harmless and affect only peer receipt
     information, never submission completion or envelope retention.
@@ -1026,7 +1047,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 68. <a id="dd-68"></a> Receipt precedes invitation.consumed and other concrete source-derived work. Only a complete consumption assigns an invitation consumer; all crash prefixes reopen without automatic replies.
 
-69. <a id="dd-69"></a> Missing required verification snapshots or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt; invitation state does not. Saved authentication is reusable; failed unpack still withholds receipt/pickup ACK.
+69. <a id="dd-69"></a> Missing required verification snapshots or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt and pickup ACK; invitation state does not. Saved authentication is reusable. Failed envelope authentication creates no receipt; recoverable local prerequisites wait and definitive rejection follows the terminal pickup-ACK path.
 
 ### Group waits and transition validity (DD-70–DD-71)
 
@@ -1043,3 +1064,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 74. <a id="dd-74"></a> Crash after a rotation decision but before notification intent leaves manual work. Completion reuses the original trigger, successor and proof; a later input cannot change the notification tuple or allocate another successor.
 
 75. <a id="dd-75"></a> Notification submission does not confirm successor knowledge. Other new successor messages still carry the same proof until exact-address confirmation; committed packages never change afterward.
+
+### Built-in response address selection (DD-76–DD-77)
+
+76. <a id="dd-76"></a> With an eligible carrier local DID, an ACK or Ping reply uses the carrier channel even when a privacy successor already exists. A no-longer-eligible local DID selects only its unique eligible verified local-only successor head; ambiguous or unusable successors create no automatic intent. All equivalent long/short source spellings produce the canonical recipientDid. Handler order, pending registration and temporary network outage do not choose different addresses; existing intents are reused after lifecycle changes.
+
+77. <a id="dd-77"></a> Body erasure leaves complete retained receipt/header evidence eligible for ACK source and target selection. It cannot justify a new Ping reply whose response_requested field is unavailable. Manual completion still requires an explicit action and current policy; erasure or recovery alone dispatches neither output.
