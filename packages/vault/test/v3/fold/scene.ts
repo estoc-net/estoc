@@ -71,6 +71,13 @@ export async function peerAgreeingOn(keys: Keys, didId: DidId, keyAgreement: Pub
 
 export type Local = { didId: DidId; did: Did; longFormDid: Did };
 
+/** One of our own DIDs as a peer would present it: what a message claiming to come from ourselves names. */
+export function asPeer(local: Local): Peer {
+  const resolution = peerResolution(local.longFormDid);
+  const [keyAgreement] = authorizedMethodIds(resolution.document, "keyAgreement");
+  return { didId: local.didId, did: local.did, longFormDid: local.longFormDid, resolution, publicKey: methodPublicKey(resolution.document, keyAgreement!) };
+}
+
 export async function vaults() {
   const keys = await openKeys();
   const peerKeys = await openKeys(OTHER_SEED);
@@ -175,6 +182,11 @@ export async function rotation(scene: Scene, keys: Keys, r: Rotation, options: E
     },
     options
   );
+}
+
+/** Our permanent denial of a channel, with or without its verified successors. */
+export function blocked(scene: Scene, local: { did: Did }, peer: { did: Did }, includeSuccessors = false): VaultEvent<"channel.blocked"> {
+  return scene.add("channel.blocked", { localDid: local.did, peerDid: peer.did, includeSuccessors });
 }
 
 /** The verdicts on every resolution and proof of a set of events, computed once: they depend on the set, not on its order. */

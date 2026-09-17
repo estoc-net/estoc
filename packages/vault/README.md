@@ -121,7 +121,23 @@ the fields it needs, not held for the entities' creations; `foldChannelEvidence`
 which sources are `positive`, the ones the continuity graph may be
 built from; the signatures are `verifyProofs` beside the fold, each
 carried or frozen proof against the issuer's document its long form
-derives or a verified resolution retains), the whole fold
+derives or a verified resolution retains), the continuity graph
+(`fold/continuity.ts`: `foldContinuity` closes the positive evidence
+into a graph of channels whose edges replace one endpoint — the peer's
+by a carrier's verified proof, ours by a rotation decision once the
+peer or a verified successor has written to exactly the predecessor,
+that confirmation never coming from the decision's own descendants —
+and joins a local and a peer replacement leaving one pair into the
+pair of both successors, transporting each to the other's successor;
+then, over the whole graph, finds the conflicts, competing successors
+of one endpoint in one context, cycles and a join that would pair a
+DID with itself; then answers: each carrier's and decision's six-state
+`status`, what each source `witness`es, whether a channel is
+`conflicted` or `superseded` in its local-only context, its default
+`head`, whether a local DID is `confirmed` toward a peer, the
+role-preserving `ackPath` from an outbound to a carrier, the denials
+that cover a channel and the decisions already made in its peer-only
+context; a conflict masks authority and removes no edge), the whole fold
 (`fold/vault.ts`: `foldVault` runs every fold over one set, each fed
 the ones it reads, and adds the retention edge by edge and the roots
 it holds; `checkVault` computes every verdict beside it in one motion,
@@ -135,9 +151,9 @@ message over every root its events and packages still name, in one
 commit, and `closeErasures` appends the equivalent erases a later
 observation or package made an erased message owed, `eraseDrafts` /
 `erasureClosure` being the decisions). The channel model's remaining
-folds — continuity, invitations, contacts, inbound executions, outbound
-delivery, the views and the procedures over them — are being rebuilt
-on this base.
+folds — invitations, contacts, inbound executions, outbound delivery,
+the views and the procedures over them — are being rebuilt on this
+base.
 Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned

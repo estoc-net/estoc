@@ -17,7 +17,6 @@ import {
   foldVault,
   foldVaultChecked,
   methodPublicKey,
-  peerResolution,
   receiptOrderKey,
   type ChannelChecks,
   type ChannelEvidence,
@@ -32,7 +31,7 @@ import {
   type WireMessageId,
 } from "../../../src/v3/index.js";
 import { AUTHOR2, MEDIATED, ROUTE, checksOf, createdDid, expectOrderFree, foldChecked, snapshot, type KeyChecks, type Scene } from "./helpers.js";
-import { IAT, PEER_ID3, channel, evidenceChecks, noObjects, peerAgreeingOn, proof, receipt, resolved, rotation, vaults, type Local, type Peer } from "./scene.js";
+import { IAT, PEER_ID3, asPeer, channel, evidenceChecks, noObjects, peerAgreeingOn, proof, receipt, resolved, rotation, vaults, type Peer } from "./scene.js";
 
 const UNCREATED = "019b7000-0000-7000-8000-000000000c00" as DidId;
 const FOREIGN = "019b7000-0000-7000-8000-000000000c01" as DidId;
@@ -54,13 +53,6 @@ async function resign(keys: Keys, didId: DidId, header: Record<string, unknown>,
   return new SignJWT(payload)
     .setProtectedHeader(header as never)
     .sign(await importJWK(key.privateJwk(), "EdDSA"));
-}
-
-/** Our own DID as a peer would present it: what a message claiming to come from ourselves names. */
-function asPeer(local: Local): Peer {
-  const resolution = peerResolution(local.longFormDid);
-  const [keyAgreement] = authorizedMethodIds(resolution.document, "keyAgreement");
-  return { didId: local.didId, did: local.did, longFormDid: local.longFormDid, resolution, publicKey: methodPublicKey(resolution.document, keyAgreement!) };
 }
 
 type Folded = { evidence: ChannelEvidence; checks: KeyChecks; proofs: Required<ChannelChecks> };
