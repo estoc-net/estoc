@@ -208,12 +208,6 @@ export async function disclose(link: MediatorLink | null, runtime: VaultRuntime,
   return { disclosed, longFormDid: created.longFormDid, invitation: oobId === null ? null : invitationOf(created.longFormDid, oobId, goal) };
 }
 
-/**
- * The one disclosure recorded under `oobId`, when it says exactly
- * `data`; null when there is none. Two disclosures under the ID, or one
- * that says otherwise — another DID, use limit or goal — are refused:
- * the invitation would then name more than one disclosure.
- */
 function invitationDisclosureOf(fold: VaultFold, oobId: string, data: VaultData["did.disclosed"]): VaultEvent<"did.disclosed"> | null {
   const recorded = fold.set.of("did.disclosed").filter((event) => event.data.oobId === oobId);
   if (recorded.length === 0) return null;

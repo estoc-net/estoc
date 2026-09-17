@@ -35,8 +35,7 @@ const MEDIATION = "019b2a51-118f-7e46-b31b-c63cd090c92c";
 const ROUTE = "019b2a58-fef5-7d59-ae1c-46e4f0a13c73";
 const DID_ID = "019b2a60-c68e-75bf-b6fb-ae1a41f8d715";
 const DID_ID2 = "019b6a10-12c0-7410-89ab-38e54b097c21";
-/** a well-formed UUIDv5, which no local DID entity is minted as */
-const DERIVED_DID_ID = "019b0000-0000-5000-8000-00000000000c";
+const UUID_V5_DID_ID = "019b0000-0000-5000-8000-00000000000c";
 const CONTACT = "019b2a63-48bf-7214-961d-4c3f97cb95da";
 const CONTACT2 = "019b2a66-c794-7b41-bff1-68a4ecdd0b67";
 const PACKAGE = "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c";
@@ -312,11 +311,11 @@ describe("rules between members", () => {
   });
 
   it("a DID entity is minted, never derived: a UUIDv5 is refused wherever an entity ID is named", () => {
-    rejects("did.created", { ...(ALL["did.created"][0] as Loose), didId: DERIVED_DID_ID }, [], /didId must be a canonical UUIDv7/);
-    rejects("did.disclosed", { ...(ALL["did.disclosed"][0] as Loose), didId: DERIVED_DID_ID }, [], /didId must be a canonical UUIDv7/);
-    rejects("did.retired", { ...(ALL["did.retired"][0] as Loose), didId: DERIVED_DID_ID }, [], /didId must be a canonical UUIDv7/);
-    rejects("contact.useDid", { ...(ALL["contact.useDid"][0] as Loose), didId: DERIVED_DID_ID }, [], /didId must be a canonical UUIDv7/);
-    rejects("peer.resolved", { ...(ALL["peer.resolved"][0] as Loose), localKeyName: `did/${DERIVED_DID_ID}/key-agreement` }, [DOC], /localKeyName must be a vault key name/);
+    rejects("did.created", { ...(ALL["did.created"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
+    rejects("did.disclosed", { ...(ALL["did.disclosed"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
+    rejects("did.retired", { ...(ALL["did.retired"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
+    rejects("contact.useDid", { ...(ALL["contact.useDid"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
+    rejects("peer.resolved", { ...(ALL["peer.resolved"][0] as Loose), localKeyName: `did/${UUID_V5_DID_ID}/key-agreement` }, [DOC], /localKeyName must be a vault key name/);
   });
 
   it("did.created holds a numalgo-4 short form and its long form", () => {
@@ -423,7 +422,7 @@ describe("message.out", () => {
     rejects("message.out", { ...OUT_DATA, pleaseAck: [1] }, [BODY, PHOTO]);
     rejects("message.out", { ...OUT_DATA, thid: "" }, [BODY, PHOTO]);
     rejects("message.out", { ...OUT_DATA, senderDidId: KEY }, [BODY, PHOTO], /senderDidId must be a canonical UUIDv7/);
-    rejects("message.out", { ...OUT_DATA, senderDidId: DERIVED_DID_ID }, [BODY, PHOTO], /senderDidId must be a canonical UUIDv7/);
+    rejects("message.out", { ...OUT_DATA, senderDidId: UUID_V5_DID_ID }, [BODY, PHOTO], /senderDidId must be a canonical UUIDv7/);
   });
 
   it("a locally initiated send mints its ID, derives from no observation and acknowledges nothing; a manual notification names only its rotation", () => {
