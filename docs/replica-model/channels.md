@@ -514,9 +514,11 @@ historical input follows section 8's dispatch rules.
 ```
 
 The DID pair obeys section 2's selector rules; `includeSuccessors` is Boolean.
-It is a permanent local denial decision for that channel; when true it also
-covers evidence-backed successors through directed links/joins. Missing
-required evidence defers inheritance and supplies no continuity authority;
+It is a permanent local denial decision for that channel. When
+`includeSuccessors` is true, the denial covers successors in the least
+positive closure of section 5.1, including paths masked by a continuity
+conflict. This deny-only traversal grants no continuity or operation
+authority. Missing required evidence still defers inheritance;
 each operation still checks its own evidence and policy. Known contradictory
 authority prevents new work. It does not prevent authenticated receipt/pickup
 ACK or infer a global block of a DID.
@@ -664,7 +666,7 @@ must define an authenticated application operation ID and its own rules.
 - <a id="ch-43"></a> **CH-43.** An unassigned channel supports receipt, sending and continuity without a contact. Contact creation is a separate product decision.
 - <a id="ch-44"></a> **CH-44.** Two channels sharing a peer DID but using different local DIDs can be selected independently for a contact. Selection does not globally associate that peer DID's channels.
 - <a id="ch-45"></a> **CH-45.** Newly verified continuity may extend a contact's derived history or eligible send choices without changing contact.channelsSet. Missing/conflicting evidence changes only the affected view or eligibility; no stable chain ID or automatic send is created.
-- <a id="ch-46"></a> **CH-46.** Contact and block selectors compare both canonical localDid and peerDid. The same peer at another local DID stays separate; successor blocking requires a verified directed path from the selected pair.
+- <a id="ch-46"></a> **CH-46.** Contact and block selectors compare both canonical localDid and peerDid. The same peer at another local DID stays separate; successor blocking follows every directed path of the least positive closure from the selected pair, conflicted continuity included, and grants no authority by that traversal.
 - <a id="ch-47"></a> **CH-47.** One invitation fixes its local recipient. Consumption by the same canonical peer is idempotent across validated long/short spelling; another peer conflicts, while another disclosure with a distinct oobId at a different local DID has independent consumption. Verified peer rotation neither transfers nor reopens the recorded consumption.
 
 - <a id="ch-48"></a> **CH-48.** Missing exact local-DID or peer-resolution evidence leaves a source-derived pair pending. Another event, contact selector or shared key cannot substitute for that evidence; restoring it derives the same pair without changing saved message identities.
