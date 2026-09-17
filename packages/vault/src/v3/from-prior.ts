@@ -14,7 +14,7 @@
 import { isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
 import { isLongForm } from "@estoc/did-peer";
 import { base64urlnopad } from "@scure/base";
-import { SignJWT, compactVerify, decodeProtectedHeader, importJWK } from "jose";
+import { SignJWT, compactVerify, importJWK } from "jose";
 
 import { InvalidDidDocument, InvalidFromPrior } from "./errors.js";
 import { resolvedDocumentOf, type ReadObject } from "./fold/evidence.js";
@@ -69,14 +69,32 @@ function resolution(longFormDid: string): PeerResolution {
   }
 }
 
-function claimsOf(jwt: string, kid: DidUrl): FromPriorClaims {
-  let payload: unknown;
+function segmentsOf(jwt: string): [header: string, payload: string, signature: string] {
+  if (!isCompactJwt(jwt)) throw new InvalidFromPrior("not a compact JWT");
+  return jwt.split(".") as [string, string, string];
+}
+
+function decoded(segment: string, what: string): Uint8Array {
   try {
-    payload = parseStrict(base64urlnopad.decode(jwt.split(".")[1] as string));
+    return base64urlnopad.decode(segment);
   } catch (err) {
-    throw new InvalidFromPrior(`the payload is not JSON: ${err instanceof Error ? err.message : String(err)}`);
+    throw new InvalidFromPrior(`the ${what} is not base64url: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (!isJsonObject(payload)) throw new InvalidFromPrior("the payload is a JSON object");
+}
+
+function jsonObjectOf(segment: string, what: string): JsonObject {
+  let value: unknown;
+  try {
+    value = parseStrict(decoded(segment, what));
+  } catch (err) {
+    if (err instanceof InvalidFromPrior) throw err;
+    throw new InvalidFromPrior(`the ${what} is not JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!isJsonObject(value)) throw new InvalidFromPrior(`the ${what} is a JSON object`);
+  return value;
+}
+
+function claimsOf(payload: JsonObject, kid: DidUrl): FromPriorClaims {
   const { iss, sub, iat } = payload;
   if (!isDid(iss)) throw new InvalidFromPrior("iss is a DID");
   if (!isDid(sub)) throw new InvalidFromPrior("sub is a DID");
@@ -84,17 +102,13 @@ function claimsOf(jwt: string, kid: DidUrl): FromPriorClaims {
   return { iss: iss as Did, sub: sub as Did, iat: iat as number, kid };
 }
 
-function protectedKid(jwt: string): DidUrl {
-  let header: ReturnType<typeof decodeProtectedHeader>;
-  try {
-    header = decodeProtectedHeader(jwt);
-  } catch (err) {
-    throw new InvalidFromPrior(`the protected header is not one: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  if (header.alg !== FROM_PRIOR_ALG) throw new InvalidFromPrior(`alg is ${FROM_PRIOR_ALG}`);
-  if (header.typ !== undefined && header.typ !== "JWT") throw new InvalidFromPrior("typ is JWT");
-  if (!isDidUrl(header.kid)) throw new InvalidFromPrior("kid is a DID URL");
-  return header.kid as DidUrl;
+/** The key ID of a protected header that a JWT may carry: no unencoded payload, no critical extension. */
+function protectedKid(header: JsonObject): DidUrl {
+  if (header["alg"] !== FROM_PRIOR_ALG) throw new InvalidFromPrior(`alg is ${FROM_PRIOR_ALG}`);
+  if (header["typ"] !== undefined && header["typ"] !== "JWT") throw new InvalidFromPrior("typ is JWT");
+  if (header["b64"] !== undefined || header["crit"] !== undefined) throw new InvalidFromPrior("a JWT encodes its payload and names no critical header");
+  if (!isDidUrl(header["kid"])) throw new InvalidFromPrior("kid is a DID URL");
+  return header["kid"] as DidUrl;
 }
 
 function canonical(did: string): Did {
@@ -106,16 +120,23 @@ function canonical(did: string): Did {
   }
 }
 
-/** The canonical DID of a channel endpoint spelling: a did:peer:4 short form, or a long form that validates. */
-function channelDid(spelling: Did, claim: string): Did {
+function canonicalChannelDid(spelling: Did, claim: string): Did {
   if (!isPeer4Short(spelling) && !isPeer4Long(spelling)) throw new InvalidFromPrior(`${claim} is a did:peer:4`);
   return canonical(spelling);
 }
 
-/** The claims a proof carries and the key it names, read without verifying anything: what a carrier says before the evidence to check it is here. */
+/**
+ * The claims a proof carries and the key it names, read without
+ * verifying the signature: what a carrier says before the evidence to
+ * check it is here. Every segment must be base64url, the header and
+ * payload strict JSON objects, so that what fails here is the proof's
+ * form and no later material can repair it.
+ */
 export function fromPriorClaims(jwt: string): FromPriorClaims {
-  if (!isCompactJwt(jwt)) throw new InvalidFromPrior("not a compact JWT");
-  return claimsOf(jwt, protectedKid(jwt));
+  const [header, payload, signature] = segmentsOf(jwt);
+  const kid = protectedKid(jsonObjectOf(header, "protected header"));
+  decoded(signature, "signature");
+  return claimsOf(jsonObjectOf(payload, "payload"), kid);
 }
 
 /**
@@ -129,8 +150,8 @@ export function fromPriorClaims(jwt: string): FromPriorClaims {
 export function carriedClaims(jwt: string, presentedDid: Did): CarriedClaims {
   const claims = fromPriorClaims(jwt);
   if (claims.sub !== presentedDid) throw new InvalidFromPrior("sub is the DID the message came from");
-  const predecessorDid = channelDid(claims.iss, "iss");
-  const successorDid = channelDid(claims.sub, "sub");
+  const predecessorDid = canonicalChannelDid(claims.iss, "iss");
+  const successorDid = canonicalChannelDid(claims.sub, "sub");
   if (predecessorDid === successorDid) throw new InvalidFromPrior("sub is another DID than iss");
   if (splitDidUrl(claims.kid)[0] !== claims.iss) throw new InvalidFromPrior("the kid DID portion is the iss DID");
   return { ...claims, predecessorDid, successorDid };
@@ -195,14 +216,16 @@ export async function verifyFromPrior(jwt: string, document: JsonObject): Promis
     if (err instanceof InvalidDidDocument) throw new InvalidFromPrior(`the issuer's document: ${err.message}`);
     throw err;
   }
-  const decoded = decodePublicKey(publicKey);
-  if (decoded.type !== "Ed25519") throw new InvalidFromPrior(`${methodId} is a ${decoded.type} key, not Ed25519`);
-  const key = await importJWK({ kty: "OKP", crv: "Ed25519", x: base64urlnopad.encode(decoded.bytes) }, FROM_PRIOR_ALG);
+  const decodedKey = decodePublicKey(publicKey);
+  if (decodedKey.type !== "Ed25519") throw new InvalidFromPrior(`${methodId} is a ${decodedKey.type} key, not Ed25519`);
+  const key = await importJWK({ kty: "OKP", crv: "Ed25519", x: base64urlnopad.encode(decodedKey.bytes) }, FROM_PRIOR_ALG);
+  let signed: Uint8Array;
   try {
-    await compactVerify(jwt, key, { algorithms: [FROM_PRIOR_ALG] });
+    ({ payload: signed } = await compactVerify(jwt, key, { algorithms: [FROM_PRIOR_ALG] }));
   } catch {
     throw new InvalidFromPrior(`the signature does not verify under ${methodId}`);
   }
+  if (base64urlnopad.encode(signed) !== segmentsOf(jwt)[1]) throw new InvalidFromPrior("the signature does not cover the claims");
   return { ...claims, methodId, publicKey };
 }
 

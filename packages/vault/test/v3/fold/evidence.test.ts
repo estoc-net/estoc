@@ -1,7 +1,9 @@
 import { canonicalize } from "@estoc/event-store/v3";
+import { sha256 } from "@noble/hashes/sha2";
+import { base58 } from "@scure/base";
 import { describe, expect, it } from "vitest";
 
-import { InvalidDidDocument, VaultEventSet, authorizedMethodIds, didKeyName, rawCidOfBytes, resolvedDocumentOf, verifyResolutions, type Cid, type Did, type EventId, type EvidenceCheck } from "../../../src/v3/index.js";
+import { InvalidDidDocument, VaultEventSet, authorizedMethodIds, didKeyName, foldVaultChecked, rawCidOfBytes, resolvedDocumentOf, verifyResolutions, type Cid, type Did, type EventId, type EvidenceCheck } from "../../../src/v3/index.js";
 import { PEER_ID0, noObjects, resolved, vaults, type Peer } from "./scene.js";
 
 const WEB_DID = "did:web:bob.example" as Did;
@@ -61,6 +63,20 @@ describe("verifyResolutions", () => {
     expect(checks.get(genuine.eventId)).toBe("verified");
     expect(await resolvedDocumentOf(genuine.data, readObject)).toEqual(b0.resolution.document);
     expect(await resolvedDocumentOf(genuine.data, noObjects)).toBeNull();
+  });
+
+  it("finds a snapshot invalid whose presented long form hashes right but encodes no JSON, and still folds the others", async () => {
+    const { scene, a0, b0 } = await vaults();
+    const encoded = "z" + base58.encode(Uint8Array.from([0x80, 0x04, ...new TextEncoder().encode('{"authentication": BROKEN_JSON}')]));
+    const broken = `did:peer:4z${base58.encode(Uint8Array.from([0x12, 0x20, ...sha256(new TextEncoder().encode(encoded))]))}:${encoded}` as Did;
+    const malformed = resolved(scene, a0.didId, b0, { presentedDid: broken, did: broken.slice(0, broken.lastIndexOf(":")) as Did, authenticationMethodIds: [], keyAgreementMethodIds: [] });
+    const genuine = resolved(scene, a0.didId, b0);
+    const set = VaultEventSet.of(scene.events);
+    expect(set.invalid).toEqual([]);
+    const checks = await verifyResolutions(set, noObjects);
+    expect(checks.get(malformed.eventId)).toBe("invalid");
+    expect(checks.get(genuine.eventId)).toBe("verified");
+    await expect(foldVaultChecked(set, null, noObjects)).resolves.toBeDefined();
   });
 
   it("a snapshot whose presented spelling is not the canonical DID's — another short form, did:web in another case — is not its document's, whatever document it names", async () => {

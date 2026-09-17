@@ -1,8 +1,9 @@
 import type { JsonObject } from "@estoc/event-store/v3";
 import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import { importSeed } from "@estoc/keystore";
-import { base64urlnopad } from "@scure/base";
-import { SignJWT, decodeProtectedHeader, importJWK } from "jose";
+import { sha256 } from "@noble/hashes/sha2";
+import { base58, base64urlnopad } from "@scure/base";
+import { FlattenedSign, SignJWT, decodeProtectedHeader, importJWK } from "jose";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -81,6 +82,24 @@ function retained(resolution: PeerResolution, presentedDid: Did = resolution.pre
   };
 }
 
+/** A long form over exact document bytes, hash and all: what only a hand-built encoder can put on the wire. */
+function longFormOfBytes(json: string): Did {
+  const encoded = "z" + base58.encode(Uint8Array.from([0x80, 0x04, ...new TextEncoder().encode(json)]));
+  const hash = "z" + base58.encode(Uint8Array.from([0x12, 0x20, ...sha256(new TextEncoder().encode(encoded))]));
+  return `did:peer:4${hash}:${encoded}` as Did;
+}
+
+/** A JWS over the unencoded payload segment, signed by a key of ours: what a JWT may not be. */
+async function unencodedPayload(keys: Keys, didId: DidId, kid: string, payload: JsonObject): Promise<string> {
+  const key = await keys.signing(didKeyName(didId, "authentication"));
+  const privateKey = await importJWK(key.privateJwk(), "EdDSA");
+  const segment = encode(payload);
+  const signed = await new FlattenedSign(new TextEncoder().encode(segment))
+    .setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid, b64: false, crit: ["b64"] })
+    .sign(privateKey);
+  return `${signed.protected}.${segment}.${signed.signature}`;
+}
+
 const noObjects = async () => null;
 const readerOf = (objects: Map<Cid, Uint8Array>) => async (wanted: Cid) => objects.get(wanted) ?? null;
 
@@ -157,7 +176,9 @@ describe("fromPriorClaims", () => {
     expect(() => fromPriorClaims(withHeader({ alg: "EdDSA", typ: "JWS", kid }))).toThrow(/typ is JWT/);
     expect(() => fromPriorClaims(withHeader({ alg: "EdDSA", kid: "key-1" }))).toThrow(/kid is a DID URL/);
     expect(() => fromPriorClaims(withHeader({ alg: "EdDSA" }))).toThrow(/kid is a DID URL/);
-    expect(() => fromPriorClaims(`${encode([])}.${payload}.${signature}`)).toThrow(/protected header is not one/);
+    expect(() => fromPriorClaims(`${encode([])}.${payload}.${signature}`)).toThrow(/protected header is a JSON object/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, crit: ["kid"] })}.${payload}.${signature}`)).toThrow(/names no critical header/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, b64: true })}.${payload}.${signature}`)).toThrow(/encodes its payload/);
     const signed = async (payload: JsonObject) => resign(keys, PREDECESSOR, { alg: "EdDSA", kid }, payload);
     expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid })}.${encode({ ...claims, iat: 1.5 })}.${signature}`)).toThrow(/iat is an integer/);
     expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid })}.${encode({ ...claims, iat: "1" })}.${signature}`)).toThrow(/iat is an integer/);
@@ -170,6 +191,27 @@ describe("fromPriorClaims", () => {
     expect(() => fromPriorClaims("not.a.jwt")).toThrow(InvalidFromPrior);
     expect(() => fromPriorClaims(`${payload}.${signature}`)).toThrow(/compact JWT/);
     expect(() => fromPriorClaims("")).toThrow(/compact JWT/);
+  });
+
+  it("refuses a segment that is not base64url, the signature included, before any issuer material is asked for", async () => {
+    const { keys, predecessor, successor, jwt } = await setup();
+    const [header, payload, signature] = segments(jwt);
+    expect(() => fromPriorClaims(`A.${payload}.${signature}`)).toThrow(/protected header is not base64url/);
+    expect(() => fromPriorClaims(`${header}.A.${signature}`)).toThrow(/payload is not base64url/);
+    expect(() => fromPriorClaims(`${header}.${payload}.A`)).toThrow(/signature is not base64url/);
+    const short = await resign(keys, PREDECESSOR, { alg: "EdDSA", kid: `${predecessor.did}${AUTHENTICATION_METHOD}` }, { iss: predecessor.did, sub: successor.longFormDid, iat: IAT });
+    const [shortHeader, shortPayload] = segments(short);
+    expect(() => carriedClaims(`${shortHeader}.${shortPayload}.A`, successor.longFormDid)).toThrow(/signature is not base64url/);
+  });
+
+  it("refuses a JWS over an unencoded payload, which a JWT may not be, on every path", async () => {
+    const { keys, predecessor, successor, document } = await setup();
+    const kid = `${predecessor.longFormDid}${AUTHENTICATION_METHOD}`;
+    const unencoded = await unencodedPayload(keys, PREDECESSOR, kid, { iss: predecessor.longFormDid, sub: successor.longFormDid, iat: IAT });
+    expect(() => fromPriorClaims(unencoded)).toThrow(/encodes its payload/);
+    expect(() => carriedClaims(unencoded, successor.longFormDid)).toThrow(/encodes its payload/);
+    await expect(verifyFromPrior(unencoded, document)).rejects.toThrow(/encodes its payload/);
+    await expect(verifyLocalProof(unencoded, keys, predecessor, successor.longFormDid)).rejects.toThrow(/encodes its payload/);
   });
 });
 
@@ -204,6 +246,20 @@ describe("carriedClaims", () => {
     expect(() => carriedClaims(badSub, badHash)).toThrow(/Hash is invalid/);
     const sameDid = await resign(keys, PREDECESSOR, { alg: "EdDSA", kid }, { iss: predecessor.longFormDid, sub: predecessor.did, iat: IAT });
     expect(() => carriedClaims(sameDid, predecessor.did)).toThrow(/sub is another DID than iss/);
+  });
+
+  it("finds a long form invalid whose hash is right but whose encoded document is not JSON, wherever it appears", async () => {
+    const { keys, successor, resolution } = await setup();
+    const broken = longFormOfBytes('{"authentication": BROKEN_JSON}');
+    const brokenShort = broken.slice(0, broken.lastIndexOf(":")) as Did;
+    const asIssuer = await resign(keys, PREDECESSOR, { alg: "EdDSA", kid: `${broken}${AUTHENTICATION_METHOD}` }, { iss: broken, sub: successor.longFormDid, iat: IAT });
+    expect(() => carriedClaims(asIssuer, successor.longFormDid)).toThrow(/encoded document is not JSON/);
+    expect(() => carriedClaims(asIssuer, successor.longFormDid)).toThrow(InvalidFromPrior);
+    const asSuccessor = await resign(keys, PREDECESSOR, { alg: "EdDSA", kid: `${resolution.presentedDid}${AUTHENTICATION_METHOD}` }, { iss: resolution.presentedDid, sub: broken, iat: IAT });
+    expect(() => carriedClaims(asSuccessor, broken)).toThrow(InvalidFromPrior);
+    await expect(issuerDocumentOf(broken, [], noObjects)).rejects.toThrow(InvalidFromPrior);
+    const retainedBroken = { ...retained(resolution), presentedDid: broken, did: brokenShort, authenticationMethodIds: [], keyAgreementMethodIds: [] };
+    expect(await issuerDocumentOf(brokenShort, [retainedBroken], noObjects)).toBeNull();
   });
 
   it("refuses a kid whose DID portion is not iss byte for byte, even another spelling of it", async () => {

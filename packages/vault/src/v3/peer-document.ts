@@ -102,10 +102,12 @@ function validateServiceIds(document: JsonObject, base: Did): void {
 
 /**
  * The input document a validated long form encodes. The method's own
- * decoder checks the hash; the document is then read again from the
- * raw bytes under the event format's strict JSON, since a lenient parse
- * would retain a document another implementation refuses, with invalid
- * UTF-8 replaced and a duplicated member's last value kept.
+ * decoder checks the hash and parses the bytes leniently, so its JSON
+ * syntax errors are the spelling's fault too; the document is then
+ * read again from the raw bytes under the event format's strict JSON,
+ * since a lenient parse would retain a document another implementation
+ * refuses, with invalid UTF-8 replaced and a duplicated member's last
+ * value kept.
  */
 function inputDocumentOf(longFormDid: string): JsonObject {
   if (!isLongForm(longFormDid)) throw new InvalidDidDocument("not a did:peer:4 long form");
@@ -113,6 +115,7 @@ function inputDocumentOf(longFormDid: string): JsonObject {
     decodeLongForm(longFormDid);
   } catch (err) {
     if (err instanceof PeerDID4Error) throw new InvalidDidDocument(err.message);
+    if (err instanceof SyntaxError) throw new InvalidDidDocument(`the encoded document is not JSON: ${err.message}`);
     throw err;
   }
   const encoded = base58.decode(longFormDid.slice(longFormDid.lastIndexOf(":") + 2));
