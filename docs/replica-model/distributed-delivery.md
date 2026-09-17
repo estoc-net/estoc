@@ -203,7 +203,7 @@ when a full vault runtime process-durably appends `message.out`.
 | Transport invocation | Committed package plus a live initial/manual action | One call using the fixed package; no invocation event is stored |
 | Submission completion | `delivery.submitted` naming that message/package | Stop preparation and sending for this message ID |
 | Channel receipt | Current authentication, exact resolution, objects and `message.in` | Normal pickup ACK may follow |
-| Proof resolution | Exact carrier plus `message.fromPriorResolved` and its document | Fold can compute proof result and continuity status |
+| Proof verification | Exact authenticated carrier with its original JWT and derivable or retained immutable issuer material | Fold computes proof result and continuity status without another event |
 | New source-derived work | Complete source/proof evidence, current policy and any additional evidence required by that consumer | Only the specific eligible operation may proceed |
 | Peer ACK | Complete source witness and exact channel/path target | Receipt information only |
 
@@ -260,9 +260,10 @@ or not transport was called; reopen cannot replay it. Further calls follow
 3. Under the lock, commit/reuse exact resolution evidence, then commit content
    and `message.in` with fixed channel and fresh receipt ordinal.
 4. Pickup-ACK process-durable receipt independently of channel policy/history.
-5. If `from_prior` is present, reuse a complete proof witness or obtain its
-   predecessor document and commit `message.fromPriorResolved`. Fold proof
-   status and continuity, showing missing evidence as pending.
+5. If `from_prior` is present, derive its immutable issuer document and verify
+   this carrier's original JWT under [predecessor resolution](relationships.md#predecessor-resolution).
+   Fold proof status and continuity without appending a proof-association event,
+   showing missing evidence as pending.
 6. For each consumer, validate exact source/proof evidence and its required
    target or protocol fields. Before new work, recheck supersession, denial
    and that operation's current policy. Commit the concrete intent or local
@@ -285,7 +286,8 @@ recursive privacy notifications.
 
 Rebuild receipt-derived state from retained evidence without current-sender
 re-resolution or another receipt event. Recover missing bytes/references and
-obtain missing proof evidence under [predecessor resolution](relationships.md#predecessor-resolution).
+recompute proofs from retained JWTs and immutable issuer material under
+[predecessor resolution](relationships.md#predecessor-resolution).
 The active runtime automatically completes missing
 [invitation consumption](channels.md#invitation-consumed).
 
@@ -618,8 +620,8 @@ Anonymous and mediator-control input have no application execution.
 
 ### Source observations
 
-Validate each source with its own recipient/key mapping and authentication
-snapshot under [operation eligibility](channels.md#operation-eligibility).
+Validate each source with its own recipient/key mapping and immutable
+authentication document under [operation eligibility](channels.md#operation-eligibility).
 Equal intent within one sender/recipient/wire-ID input shares one execution;
 disagreement follows [the conflict rules](vault-events.md#duplicate-transition-and-conflict-rules).
 Continuity links never merge inputs from different channels.
@@ -776,8 +778,11 @@ Different selected notification IDs for one rotation decision conflict for
 notification work; neither new triggers nor retries may create another selection.
 Its source/effect fields are null, while `rotationEventId` remains present.
 In either case, notification recovery reuses the rotation; it never allocates
-another successor. A missing notification is manual work under the current
-dispatch profile, not authority for automatic replay.
+another successor. A missing notification is manual work only while its source,
+when present, remains eligible under [channels.md](channels.md#operation-eligibility).
+Supersession of that source's peer prevents creating the intent. An existing
+intent may still be manually dispatched under the ordinary restrictions;
+recovery itself grants no automatic replay.
 
 <a id="required-vault-observations"></a>
 
@@ -790,7 +795,6 @@ delivery.submitted         observed transport acceptance of the fixed package
 delivery.failed            terminal failure or message cancellation
 delivery.acknowledged      exact authorized peer receipt observation
 message.in                 independent authenticated channel receipt
-message.fromPriorResolved  exact issuer-document association for a received proof
 did.rotationSelected       local successor and frozen proof selected before sending
 invitation.consumed        exact one-use disclosure and source-backed consumer
 channel.blocked            local channel/successor denial
@@ -983,7 +987,7 @@ or mediator-visible IDs.
 
 ### Recovery and automatic effects (DD-50–DD-56)
 
-- <a id="dd-50"></a> **DD-50.** Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. A new proof verification may resolve its predecessor; existing receipt/link verification uses saved evidence.
+- <a id="dd-50"></a> **DD-50.** Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. Proof verification derives the immutable issuer document from its original JWT or matching retained material; receipt authentication still uses its exact saved references. Neither verification nor a cache rebuild appends a proof event.
 
 - <a id="dd-51"></a> **DD-51.** A crash before transport and a crash after acceptance but before submission commit expose the same prepared state. Neither proves delivery or nondelivery; manual retry preserves wire ID, package, channel and expiry.
 
@@ -1011,7 +1015,7 @@ or mediator-visible IDs.
 
 ### Rotation membership and receipt recovery (DD-63–DD-69)
 
-- <a id="dd-63"></a> **DD-63.** A complete proof witness establishes an exact channel link. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own evidence and policy requirements.
+- <a id="dd-63"></a> **DD-63.** An authenticated carrier with its own verified JWT establishes an exact channel link. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own evidence and policy requirements.
 
 - <a id="dd-64"></a> **DD-64.** Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
 
@@ -1023,7 +1027,7 @@ or mediator-visible IDs.
 
 - <a id="dd-68"></a> **DD-68.** Receipt precedes invitation.consumed and other concrete source-derived work. Only a complete consumption assigns an invitation consumer; all crash prefixes reopen without automatic replies.
 
-- <a id="dd-69"></a> **DD-69.** Missing required verification snapshots or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt and pickup ACK; invitation state does not. Saved authentication is reusable. Failed envelope authentication creates no receipt; recoverable local prerequisites wait and definitive rejection follows the terminal pickup-ACK path.
+- <a id="dd-69"></a> **DD-69.** Missing required immutable issuer material or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt and pickup ACK; invitation state does not. Saved authentication is reusable for its original receipt. Failed envelope authentication creates no receipt; recoverable local prerequisites wait and definitive rejection follows the terminal pickup-ACK path.
 
 ### Group waits and transition validity (DD-70–DD-71)
 
@@ -1037,7 +1041,7 @@ or mediator-visible IDs.
 
 - <a id="dd-73"></a> **DD-73.** Missing optional successor registration or notification preparation does not block an eligible ACK or Ping reply on an authorized usable channel. Their committed channels remain fixed when notification work later completes.
 
-- <a id="dd-74"></a> **DD-74.** Crash after a rotation decision but before notification intent leaves manual work. Completion reuses the original trigger, successor and proof; a later input cannot change the notification tuple or allocate another successor.
+- <a id="dd-74"></a> **DD-74.** Crash after a rotation decision but before notification intent leaves manual work only while the source remains eligible. Supersession of the trigger's peer prevents creating the missing intent; an already committed intent may still be manually dispatched under ordinary restrictions. A source-free manual decision remains subject to send restrictions without a source-peer check. Completion reuses the original trigger, successor and proof; a later input cannot change the notification tuple or allocate another successor.
 
 - <a id="dd-75"></a> **DD-75.** Notification submission does not confirm successor knowledge. Other new successor messages still carry the same proof until exact-address confirmation; committed packages never change afterward.
 

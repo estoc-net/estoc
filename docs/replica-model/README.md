@@ -9,8 +9,9 @@ format. This guide is informative; linked specification sections define requirem
 ## Model overview
 
 A vault has one seed, immutable events and raw content-addressed objects.
-[Channels](channels.md#model) are ordered local/peer DID pairs. Each receipt,
-package and proof retains its own verification evidence. Phase-1 channel
+[Channels](channels.md#model) are ordered local/peer DID pairs. Each receipt and
+package retains its own authentication or encryption evidence. Carried proofs
+retain their original JWTs and derive their immutable issuer documents. Phase-1 channel
 endpoints use immutable `did:peer:4` documents; mediator DID resolution is
 independent. Received proofs and local rotation decisions
 derive directed links between pairs. Receipt may precede continuity verification,
@@ -62,7 +63,7 @@ Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 
 Change the defining section and align its consumers. ES owns event envelopes,
 DO owns raw objects/retention APIs and SQ owns SQLite lifecycle. CH owns channels,
-invitation/proof/rotation/denial events, the continuity fold and dispatch
+invitation/rotation/denial events, proof verification, the continuity fold and dispatch
 authority. VE owns contact selections, display payloads and the remaining
 domain payloads/folds; DD owns runtime ordering and message/effect identity;
 RZ owns DID resolution and address/display policy.

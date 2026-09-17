@@ -175,8 +175,7 @@ replica, domain owner or process location.
 Changing a communication DID's keys or embedded service creates another
 `did:peer:4` entity. A local `did.rotationSelected` under
 [section 6.5](#relationship-localtransitioned) authorizes a successor channel
-for new intents; existing intents retain their channel. Rendezvous replacement
-follows [relationships.md section 14](relationships.md#retry-replacement-and-address-rollover). There is no local
+for new intents; existing intents retain their channel. There is no local
 communication-key generation or key-generation selection. Store generations
 retain their separate storage meaning.
 
@@ -276,7 +275,7 @@ it does not imply that every identifier has the same encoding or scope.
 
 For every payload `*EventId`, `T` is the target event type fixed by the
 referencing schema. `sourceEventId` is `EventReference<"message.in">` in
-`invitation.consumed`, `message.fromPriorResolved`, `did.rotationSelected`
+`invitation.consumed`, `did.rotationSelected`
 and `message.out`;
 `disclosureEventId` in `invitation.consumed` names `did.disclosed`;
 `fromDidId` and `toDidId` in `did.rotationSelected` name local DID entities;
@@ -422,7 +421,7 @@ exact string.
 For an inbound observation it is the key that authenticated the message; for
 an outbound package it is the selected recipient key. A peer resolution records
 the key-agreement key used for receipt/preparation. Predecessor JWT checks use
-the document associated by `message.fromPriorResolved` and its authentication
+the immutable issuer document derived under [section 6.4](#relationship-peertransitioned) and its authentication
 methods directly. Selection alone is not evidence
 of authenticated inbound traffic or remote receipt.
 
@@ -528,10 +527,10 @@ peer key. `localKeyName` identifies the local communication key/context.
 - `service` is the selected DIDComm service URI or null.
 
 Receipts and packages retain exact resolution references for the immutable
-peer document. Predecessor JWT documents are associated separately through
-`message.fromPriorResolved`; the receipt's
-`peerResolutionEventId` continues to authenticate the current sender only.
-Both use the canonical document representation below. Those exact objects
+peer document. The receipt's `peerResolutionEventId` authenticates the current
+sender only; predecessor JWT verification derives its issuer document under
+[section 6.4](#relationship-peertransitioned) using the same canonical representation.
+The referenced resolution objects
 remain historical evidence; another document cannot replace any reference.
 If the event or object is temporarily missing, processing is deferred until
 verified recovery material is available; absence is not proof that the
@@ -1049,41 +1048,43 @@ Membership grants no protocol authority. Derived related history follows
 
 ### 6.4 Peer proof evidence and continuity
 
-Use `message.fromPriorResolved` under
-[channels.md](channels.md#message-frompriorresolved) to associate an exact
-committed carrier with its issuer document CID. The event's own root retains
-that document independently of message-content erasure. It stores no link,
-consumption decision or trusted verification result. The carrier needs no
-handler execution or known predecessor channel to save proof evidence.
+Derive the issuer document and verify each committed carrier's original
+`fromPrior` under [channels.md](channels.md#peer-proof-evidence). A long-form
+issuer supplies its immutable document directly; a short-form issuer requires
+the matching retained `peer.resolved` document. The original JWT is event
+metadata, and `peer.resolved` independently retains its document root, so
+message-content erasure removes neither source of issuer material.
+No association, link or trusted verification result is stored as an event.
+Verification requires neither handler execution nor a known predecessor channel.
 
-The proof's `iss` canonicalizes to the associated document's DID and, for
+The proof's `iss` canonicalizes to the derived document's DID and, for
 channel inheritance, the predecessor channel's peer DID; `sub` equals
 the carrier's exact plaintext `from` and authcrypt sender spelling and
 canonicalizes to the successor DID. The two canonical DIDs must differ.
 `iat` is an integer Epoch-Seconds value: it has no message-age acceptance window
-and elects neither a branch nor a document snapshot. The protected JWT `kid`
+and elects no branch or alternative issuer document. The protected JWT `kid`
 has a DID portion byte-identical to `iss` and names an authentication method
 authorized by the exact predecessor document. Use maintained signature and
 encoding APIs to verify the original JWT; decoding alone proves nothing.
 
 For predecessor comparison, validate any Peer long form and derive its short
 form under [the DID profile](relationships.md#peer-did-numalgo-4-profile).
-The stored document's DID spelling need not equal
+The document's DID spelling need not equal
 `iss` if these validated canonical forms agree. To compare `kid` with that document's
 authentication methods, resolve relative method references against its `id`,
 then canonicalize only the DID portions of the two DID URLs. All remaining
 components, including the fragment, match byte-for-byte. This comparison
 rewrites neither the JWT signing input nor the retained document or CID.
 
-New proof evidence follows [predecessor resolution](relationships.md#predecessor-resolution).
-Recovery of a saved association uses only its exact referenced document.
-Restored or newly disclosed long-form material can repair missing bytes only
-when its canonical document CID matches.
+Verification and rebuild follow [predecessor resolution](relationships.md#predecessor-resolution).
+Restored issuer material can complete a short-form proof only when its validated
+long form derives the exact issuer; referenced document bytes can be repaired
+only when their canonical CID matches.
 Missing material defers verification; an invalid signature, claim, method or
 long form grants no proof authority. Repeated evidence for the same predecessor and
 successor is the same DID replacement across validated long/short spellings.
-Verify each complete witness's own references against its immutable documents;
-another spelling alone is not a competing successor. Shared
+Verify each carrier's own authentication references and original JWT against
+the immutable documents; another spelling alone is not a competing successor. Shared
 keys, current resolution alone and display assignment cannot replace the
 channel context and verified proof.
 
@@ -1310,7 +1311,7 @@ resolution; preparation still validates its own peer resolution.
 following verified local successors in the same context even when its saved
 `didId` names a predecessor. If applying the preference does not leave exactly
 one eligible head, the caller must explicitly select an eligible channel before
-intent commit. A superseded channel is outside `writeTo[]`; an explicit
+intent commit. A channel replaced for default selection is outside `writeTo[]`; an explicit
 pre-rotation choice follows the same head-selection section's restrictions.
 Names, peer-DID matches and
 contact merges cannot resolve ambiguity or supply dispatch authority.
@@ -1695,6 +1696,9 @@ cancellation. Its closed data contains exactly `messageId` and `code`;
 - `expired`: the unsubmitted intent reached its non-null expiry; or
 - `cancelled`: an explicit user action cancelled the unsubmitted intent.
 
+An `expired` failure for an intent with null `expiresTime` is invalid and
+terminates nothing.
+
 Both codes terminate the entire message, before or after preparation. They
 stop all preparation and submission, including manual retry. Termination
 requires no package reference or preparation evidence; a preparation imported
@@ -1712,8 +1716,9 @@ retry diagnostics belong only to local trace and retry policy. They MUST NOT app
 `delivery.failed`. Losing that local state does not terminate the intent or
 change its portable delivery state.
 
-A worker that observes `now >= expiresTime` for an unsubmitted outbound before
-prepare or retry appends that expired failure and submits nothing. It does not
+A worker that observes a non-null `expiresTime` with `now >= expiresTime` for an
+unsubmitted outbound before prepare or retry appends that expired failure and
+submits nothing. It does not
 append an expired failure merely because an already-submitted message later
 reaches expiry. A later user attempt requires a new `message.out` and wire ID.
 Sensitive strings remain in local trace; `code` is a stable non-secret value.
@@ -1862,7 +1867,6 @@ See [distributed-delivery.md section 9](distributed-delivery.md#observation-iden
       "bafkrei...attachment"
     ],
     "bytes": 48213,
-    "signedBy": null,
     "receivedVia": {
       "mediationId": "019b2a51-118f-7e46-b31b-c63cd090c92c",
       "deliveryId": "01J...opaque"
@@ -1871,6 +1875,11 @@ See [distributed-delivery.md section 9](distributed-delivery.md#observation-iden
 }
 ```
 
+Phase 1 records no separate inner-signature evidence. Channel sender authority
+requires authenticated encryption under [the receive gate](relationships.md#hard-pre-vault-gate);
+an inner signature does not supply an alternative authenticated sender. The
+carried `fromPrior` retains its separate continuity-verification role.
+
 Requirements:
 
 - `messageId` is the deterministic observation value above;
@@ -1878,11 +1887,11 @@ Requirements:
   this newly committed observation event under the vault-wide allocator below;
   it is immutable portable evidence, not an EventStore `ChangeToken`;
 - `intentHash` and `plaintextHash` are computed under [distributed-delivery.md section 5](distributed-delivery.md#canonical-projections-and-hashes);
-- `localKeyName` is the exact local key that decrypted or verified the message;
+- `localKeyName` is the exact local key that decrypted the message;
 - `peerResolutionEventId` is REQUIRED and names the exact `peer.resolved` used to
   authenticate the sender. It is null exactly for an anonymous observation,
   in which `did`, `presentedDid` and the derived peer key are also null.
-  An authenticated or signed sender requires DID resolution evidence; there
+  An authenticated sender requires DID resolution evidence; there
   is no DID-less authenticated-key fallback. A non-null reference supplies
   the authenticated peer key under [section 4.1](#key-evidence); its `localKeyName`, `did` and
   `presentedDid` match this observation. Sender authentication and evidence
@@ -1911,7 +1920,7 @@ Requirements:
   later duplicate targets; stored arrays are not rewritten;
 - `headers` contains every otherwise-unmodeled permitted top-level member and
   MUST NOT contain any reserved field, including `return_route`;
-- `thid`, `pthid` and `signedBy` are present with null when absent;
+- `thid` and `pthid` are present with null when absent;
 - event `author` identifies the active receiving runtime;
 - mediation and delivery ID are null for direct transport without them;
 - `bytes` is the canonical retained document byte length; and
@@ -1993,7 +2002,7 @@ check [operation eligibility](channels.md#operation-eligibility).
 
 Group by `(canonical sender DID, canonical recipient DID, wireMessageId)` and its deterministic
 message ID. Each complete observation authenticates independently with its own
-method-valid snapshot and derives the same exact sender/recipient pair. Equal intent hashes
+method-valid immutable document and derives the same exact sender/recipient pair. Equal intent hashes
 represent one logical input; differences conflict. Transport, author, ordinal,
 authorized key and exact plaintext may
 differ without creating a new logical input in this same channel. Incomplete
@@ -2043,12 +2052,13 @@ The consumer defines the candidate set and its required comparisons and
 validation. `ackMessageId` in [section 9.6](#delivery-acknowledged) restricts
 candidates to that observation message ID's group. Any complete matching
 duplicate can witness that claim. In contrast, `sourceEventId` in a
-`message.fromPriorResolved`, `did.rotationSelected`, `message.out` or `invitation.consumed`
+`did.rotationSelected`, `message.out` or `invitation.consumed`
 names one exact observation and cannot replace it with a duplicate. That source
 must supply its own complete sender authentication and immutable claims.
-The continuity fold may reuse a complete proof witness only under its explicit
-same-JWT/context rule; this does not retarget the source reference or combine
-incomplete rows. Every exact reference required by a schema must match as specified.
+If that source carries a JWT, it must independently verify under
+[the proof rules](channels.md#peer-proof-evidence). Immutable issuer material may
+be shared, but another carrier's authentication or proof result cannot replace
+this source's checks. Every exact reference required by a schema must match as specified.
 
 This matching rule does not replace authentication, scope, historical
 membership, proof or group-validity checks. A matching candidate cannot clear
@@ -2266,8 +2276,9 @@ list when no new objects are needed; `Vault.events` is read-only.
    package and submission records. Never infer "not sent" from missing history.
 6. Rebuild permanent erasure closure, then application display views from their
    remaining source evidence under [section 7.3](#application-message-views).
-   This work may recover data or resolve a predecessor for a previously
-   unverified proof, but grants no protocol dispatch or business effect.
+   This work may recover retained issuer material and recompute a previously
+   pending proof, but appends no proof-association event and grants no protocol
+   dispatch or business effect.
    Automatically complete missing invitation consumption from retained,
    non-erased sources under [channels.md](channels.md#invitation-consumed),
    rechecking current policy and lifecycle after rebuilding erasure and denials.
@@ -2384,7 +2395,9 @@ Shared keys/routes are not retired merely because one display contact disappears
    and `did.rotationSelected` with `fromDidId`, `peerDid`, `toDidId`, nullable
    `sourceEventId` and frozen `fromPrior`. Resolve an uncertain commit before
    allocating again. Do not retire shared resources.
-4. Commit or reuse the dedicated Empty notification intent naming this rotation
+4. Reuse the dedicated Empty notification intent, or create it only while the
+   decision's source, when present, remains eligible under
+   [channels.md](channels.md#operation-eligibility). The intent names this rotation
    decision under [delivery](distributed-delivery.md#built-in-independent-operations).
    Verify recipient registration before disclosure and use the initial/manual
    dispatch rules. New user sends default to the verified head under
@@ -2393,9 +2406,13 @@ Shared keys/routes are not retired merely because one display contact disappears
 5. Derive exact-successor confirmation; only then retire unneeded resources.
 
 Reuse an existing complete decision after interruption; missing references defer.
-Recovery does not dispatch a notification. Manual completion reuses its existing
-intent or creates the one missing notification under the same decision; it never
-substitutes another source or successor. Live automatic privacy policy follows
+Recovery does not dispatch a notification. Manual completion reuses an existing
+intent under ordinary dispatch restrictions. It creates the one missing
+notification under the same decision only while its source, when present,
+remains eligible. A superseded source peer prevents creation, but does not by
+itself prohibit manual dispatch of an already committed intent. Completion
+never substitutes another source or successor.
+Live automatic privacy policy follows
 [relationships.md](relationships.md#early-private-address-policy-and-notifications).
 Opposite-side rotation uses verified joins, never contact lookup.
 
@@ -2455,6 +2472,19 @@ supplies initial or retry dispatch authority, even after an exact local move.
 It also reconciles unfinished committed inbound work under [section 13.1](#open-the-writable-full-runtime),
 including observations already pickup-ACKed before the snapshot. Local queue
 state is not a recovery source.
+
+A snapshot can predate a peer's successor long form even though the peer has
+already received confirmation and now sends its short form. Such a delivery
+cannot authenticate after restore and follows the terminal receive gate:
+pickup ACK when mediated, no `message.in`, and the bounded visible diagnostic
+under [relationships.md](relationships.md#hard-pre-vault-gate). Waiting alone
+does not recover the long form. A new long-form disclosure can enable sender
+authentication but does not itself recover missing continuity history or a
+discarded delivery. Importing a newer complete snapshot may restore retained
+evidence; otherwise the channel may need to be established again. Sending to
+an old address is no guaranteed repair, since supersession can prevent a reply.
+Restore UI MUST explain these limits under
+[vault-sqlite.md](vault-sqlite.md#restore).
 
 No previous process must be online. Mediator retention still bounds messages
 that were never committed to the vault. The seed recovery credential must be
@@ -2620,7 +2650,7 @@ derivation requires a new vault version.
 
 - <a id="ve-31"></a> **VE-31.** The first message uses its ordinary application protocol with no custom
     rendezvous wrapper or wire contact ID.
-- <a id="ve-32"></a> **VE-32.** message.in records exact channel/authentication evidence. Automatic intents directly reference their source; application views derive from retained messages in their fixed channels. Carried-proof eligibility derives from exact document associations and endpoints independently of invitation use.
+- <a id="ve-32"></a> **VE-32.** message.in records exact channel/authentication evidence and no separate inner-signature evidence. An inner signature does not replace authenticated encryption for channel authority. Automatic intents directly reference their source; application views derive from retained messages in their fixed channels. Carried-proof eligibility derives from the source JWT, immutable issuer material and endpoints independently of invitation use.
 
 - <a id="ve-33"></a> **VE-33.** Sending to a peer and receiving from it use the same local/peer pair within a vault. The other vault observes the reversed local/peer roles; message identity preserves sender/recipient direction.
 
@@ -2640,10 +2670,10 @@ derivation requires a new vault version.
 - <a id="ve-38"></a> **VE-38.** Local `from_prior.iss` uses the predecessor's long form and its protected
     `kid` has that exact DID portion. Peer verification matches validated
     predecessor spellings and method IDs under [section 6.4](#relationship-peertransitioned), without changing
-    the referenced snapshot or JWT bytes.
+    the immutable document or JWT bytes.
 - <a id="ve-39"></a> **VE-39.** `from_prior.sub` equals plaintext `from` byte-for-byte; before confirmation
     both use the successor's Peer-DID long form.
-- <a id="ve-40"></a> **VE-40.** Proof verifies against its exact message.fromPriorResolved document CID and original JWT. Link derivation uses its exact source and endpoint evidence; iat never selects a snapshot and recovery cannot substitute current resolver bytes.
+- <a id="ve-40"></a> **VE-40.** Each carrier's original JWT verifies against the immutable document derived from its long-form issuer or matching retained peer.resolved material for a short-form issuer. Link derivation uses that carrier's exact authentication and endpoint evidence; iat selects no alternative document. Rebuild needs no association event or prior verification cache.
 
 - <a id="ve-41"></a> **VE-41.** Successor/local decision and exact package commit before disclosure. Each transport call requires current eligibility and a live initial/manual action; an uncertain preparation commit permits neither dispatch nor a replacement package until resolved. Links themselves have no commit boundary.
 
@@ -2777,9 +2807,9 @@ derivation requires a new vault version.
 
 ### Transition evidence and automatic intent (VE-90–VE-100)
 
-- <a id="ve-90"></a> **VE-90.** message.fromPriorResolved contains only exact sourceEventId and documentCid, retaining that object as its root. did.rotationSelected contains exactly fromDidId, peerDid, toDidId, nullable sourceEventId and frozen fromPrior. Channel links derive from these inputs without stored link IDs.
+- <a id="ve-90"></a> **VE-90.** Peer proof verification appends no association or verification event. did.rotationSelected contains exactly fromDidId, peerDid, toDidId, nullable sourceEventId and frozen fromPrior. Channel links derive from authenticated carriers, immutable issuer material and local decisions without stored link IDs.
 
-- <a id="ve-91"></a> **VE-91.** Erasure preserves invitation consumptions, exact source/disclosure skeletons, proof-document associations, source JWTs and local decisions. Independent evidence roots retain issuer documents; missing bytes defer instead of selecting replacements.
+- <a id="ve-91"></a> **VE-91.** Erasure preserves invitation consumptions, exact source/disclosure skeletons, original source JWTs and local decisions. A long-form issuer remains derivable from the JWT; peer.resolved roots retain documents used by short-form issuers independently of message content. Missing required material defers verification; deleting all local verification caches changes no rebuild result.
 
 - <a id="ve-92"></a> **VE-92.** Two automatic intents for the same `(executionId, effectType)`
     have one effect key and message ID. Different intent hashes conflict after any
@@ -2904,7 +2934,7 @@ derivation requires a new vault version.
 
 ### Group waits and transition validity (VE-140–VE-142)
 
-- <a id="ve-140"></a> **VE-140.** A complete proof witness can derive a peer link while an equivalent sibling lacks evidence. An invitation consumption with a missing exact disclosure/source waits; reuse of a proof requires the explicit complete-witness rule and never assembles incomplete rows.
+- <a id="ve-140"></a> **VE-140.** A carrier with complete authentication and its own verified JWT can derive a peer link while an equivalent sibling lacks authentication evidence. That sibling cannot borrow authentication or a proof result. An invitation consumption with a missing exact disclosure/source still waits; sharing immutable issuer material does not assemble incomplete observations.
 
 - <a id="ve-141"></a> **VE-141.** A complete predecessor observation remains a valid confirmation when another observation later appears at a successor channel. Those messages have distinct identities; missing successor evidence cannot erase the predecessor witness.
 
@@ -2944,6 +2974,6 @@ derivation requires a new vault version.
 
 ### Termination payload and rotation allocation (VE-156–VE-157)
 
-- <a id="ve-156"></a> **VE-156.** delivery.failed has exactly messageId and one of expired or cancelled, with empty roots. Additional fields, including packageId or scope, and unknown codes are invalid. Either code terminates its consistent intent without preparation evidence and blocks preparation/dispatch regardless of preparation import order. Termination releases the message's envelope contribution but preserves content. An independently complete submission still takes precedence.
+- <a id="ve-156"></a> **VE-156.** delivery.failed has exactly messageId and one of expired or cancelled, with empty roots. Additional fields, including packageId or scope, and unknown codes are invalid. An expired failure for an intent with null expiresTime is invalid and terminates nothing; explicit cancellation remains valid. Either valid code terminates its consistent intent without preparation evidence and blocks preparation/dispatch regardless of preparation import order. Termination releases the message's envelope contribution but preserves content. An independently complete submission still takes precedence.
 
 - <a id="ve-157"></a> **VE-157.** New rotation allocation commits its UUIDv7 did.created and did.rotationSelected atomically. A crash exposes both or neither; recovery of an uncertain commit reuses the committed successor/decision instead of allocating a second DID. Import of the decision without its creation remains pending until exact evidence arrives. No crash prefix alone permits disclosure or dispatch.

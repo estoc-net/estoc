@@ -255,8 +255,8 @@ proofs, which use only locally available numalgo-4 material.
 
 ## 4. Deferred conformance cases
 
-The identifiers retain their original owners. Links from the phase-1 lists
-reserve these entries; none is a phase-1 conformance obligation. Any references
+These identifiers are not reserved; an adopted profile assigns its own case IDs.
+None is a phase-1 conformance obligation. Any references
 to current-document or network-resolution behavior below use this candidate
 extension in addition to the shared receipt and evidence rules.
 
@@ -318,7 +318,7 @@ Authenticated did:web receipt commits and pickup-ACKs while continuity is incomp
 
 ### CH-33
 
-After a Web key update, a received replacement proof can use a new authorized authentication key through its exact message.fromPriorResolved document association. Unassociated old snapshots cannot bypass removal; a retained valid witness still verifies offline.
+After a Web key update, a received replacement proof can use a new authorized authentication key through retained evidence associating the exact carrier and document revision. This deferred profile must define that evidence's schema and retention; phase 1 has no such association event. Unassociated old snapshots cannot bypass removal; a retained valid witness still verifies offline.
 
 <a id="ch-34"></a>
 

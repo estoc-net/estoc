@@ -464,6 +464,16 @@ A failed construction is not an empty vault and cannot silently mint another see
 Recovery from a damaged runtime restores only the snapshot's history. Salvaging
 history absent from that snapshot is outside the phase-1 contract.
 
+Before enabling communication after restore, the product MUST explain that
+peer addresses and continuity learned after the snapshot may be missing.
+Messages from unknown short-form senders can therefore be discarded under
+[the receive gate](relationships.md#hard-pre-vault-gate), even if those peers
+previously received address confirmation. Expose that gate's bounded visible
+diagnostic. Recovery may require importing a newer complete snapshot or
+establishing a channel again; waiting or contacting an old address is not a
+guaranteed repair. Recovering sender material alone does not restore missing
+continuity history or discarded messages under [vault restore](vault-events.md#restore).
+
 <a id="import"></a>
 
 ### 12.2 Import
@@ -605,7 +615,10 @@ read and maintenance strategies.
     Portable inspection rejects views, triggers or other forbidden schema before
     querying application data, including when only reading metadata.
 34. <a id="sq-34"></a> Restore unlocks the real wrapper and reconstructs state with fresh IDs;
-    pending message dispatch remains manual.
+    pending message dispatch remains manual. Before enabling communication,
+    explain the unknown-short-form and missing-continuity limitations and the
+    possible need to establish channels again. Discarded unknown-short-form
+    deliveries have bounded visible diagnostics without authenticated peer attribution.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
 36. <a id="sq-36"></a> A fork, or any `requiredRoots` member with neither verified source
     bytes nor sound accepted target bytes, aborts without semantic writes. Check
