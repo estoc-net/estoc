@@ -152,7 +152,6 @@ class Graph {
 
   constructor(private readonly admits: (channel: Channel) => boolean) {}
 
-  /** Adds the edge unless an endpoint is refused; a join's edges pass through here as well. */
   add(from: Channel, to: Channel, replaces: Replaced, carriers: Iterable<EventId>, decisions: Iterable<EventId>): void {
     if (!this.admits(from) || !this.admits(to)) return;
     const fromKey = this.vertex(from);
