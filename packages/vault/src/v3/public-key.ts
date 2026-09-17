@@ -7,6 +7,7 @@
  * authorization check that involves a peer key uses it.
  */
 
+import { x25519 } from "@noble/curves/ed25519";
 import { p256, p384, p521 } from "@noble/curves/nist";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { base58, base64urlnopad } from "@scure/base";
@@ -143,4 +144,31 @@ export function parsePublicKey(text: string): PublicKey {
 export function decodePublicKey(key: PublicKey): DecodedPublicKey {
   const { codec, bytes } = decodeMultibase(key);
   return { type: codec.type, bytes };
+}
+
+/**
+ * Clamped, the zero X25519 scalar is 2^254: a multiple of the cofactor,
+ * which takes every low-order point to zero, and no multiple of the
+ * group order, which would take every point there.
+ */
+const ZERO_SCALAR = new Uint8Array(32);
+
+/**
+ * The key as one that agrees keys: of a type DIDComm v2 runs ECDH
+ * over, and not one of the low-order X25519 points, with which every
+ * shared secret is zero and the other party's private key contributes
+ * nothing. The Weierstrass curves here have no low-order points besides
+ * infinity, which no encoding decodes to.
+ */
+export function agreementKey(key: PublicKey): DecodedPublicKey {
+  const decoded = decodePublicKey(key);
+  if (!KEY_AGREEMENT_TYPES.has(decoded.type)) throw new InvalidPublicKey(`${key} is a ${decoded.type} key, which agrees no keys`);
+  if (decoded.type === "X25519") {
+    try {
+      x25519.getSharedSecret(ZERO_SCALAR, decoded.bytes);
+    } catch {
+      throw new InvalidPublicKey(`${key} is a low-order X25519 point, which agrees no keys`);
+    }
+  }
+  return decoded;
 }

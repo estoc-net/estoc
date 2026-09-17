@@ -1,10 +1,10 @@
 import { canonicalize, type JsonObject } from "@estoc/event-store/v3";
 import { sha256 } from "@noble/hashes/sha2";
-import { base58 } from "@scure/base";
+import { base58, base64urlnopad } from "@scure/base";
 import { describe, expect, it } from "vitest";
 
-import { InvalidDidDocument, VaultEventSet, authorizedMethodIds, didKeyName, foldVaultChecked, methodPublicKey, rawCidOfBytes, resolvedDocumentOf, verifyResolutions, type Cid, type Did, type EventId, type EvidenceCheck, type Keys } from "../../../src/v3/index.js";
-import { PEER_ID0, noObjects, resolved, vaults, type Peer } from "./scene.js";
+import { InvalidDidDocument, VaultEventSet, authorizedMethodIds, canonicalPublicKey, didKeyName, foldVaultChecked, methodPublicKey, rawCidOfBytes, resolvedDocumentOf, verifyResolutions, type Cid, type Did, type EventId, type EvidenceCheck, type Keys } from "../../../src/v3/index.js";
+import { PEER_ID0, PEER_ID3, noObjects, peerAgreeingOn, resolved, vaults, type Peer } from "./scene.js";
 
 const WEB_DID = "did:web:bob.example" as Did;
 
@@ -73,6 +73,20 @@ describe("verifyResolutions", () => {
     expect(checks.get(signingOnly.eventId)).toBe("invalid");
     expect(checks.get(listedButSigning.eventId)).toBe("invalid");
     expect(checks.get(listedAndAgreeing.eventId)).toBe("verified");
+    expect(checks.get(genuine.eventId)).toBe("verified");
+  });
+
+  it("takes no low-order X25519 point as the peer key, however the document lists it: with such a point every shared secret is zero", async () => {
+    const { scene, peerKeys, a0, b0 } = await vaults();
+    const lowOrder = (u: number) => canonicalPublicKey({ kty: "OKP", crv: "X25519", x: base64urlnopad.encode(Uint8Array.from([u, ...new Array<number>(31).fill(0)])) });
+    const derived = await Promise.all([0, 1].map(async (u) => resolved(scene, a0.didId, await peerAgreeingOn(peerKeys, PEER_ID3, lowOrder(u)))));
+    const web = await webPeer(peerKeys, (document) => ({ ...document, verificationMethod: [(document["verificationMethod"] as JsonObject[])[0]!, { id: `${WEB_DID}#key-2`, type: "Multikey", controller: WEB_DID, publicKeyMultibase: lowOrder(0) }] }));
+    const fetched = resolved(scene, a0.didId, web);
+    const genuine = resolved(scene, a0.didId, b0);
+    const checks = await verifyResolutions(VaultEventSet.of(scene.events), readerOf(new Map([[web.resolution.cid, web.bytes]])));
+    for (const event of derived) expect(checks.get(event.eventId)).toBe("invalid");
+    expect(web.publicKey).toBe(lowOrder(0));
+    expect(checks.get(fetched.eventId)).toBe("invalid");
     expect(checks.get(genuine.eventId)).toBe("verified");
   });
 

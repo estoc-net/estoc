@@ -21,9 +21,9 @@ import { isLongForm } from "@estoc/did-peer";
 
 import { InvalidDidDocument, InvalidFromPrior, InvalidPublicKey } from "../errors.js";
 import { carriedClaims, fromPriorClaims, issuerDocumentOf, verifyFromPrior, type CarriedClaims } from "../from-prior.js";
-import { channelKey, channelOf, inboundMessageId } from "../ids.js";
+import { channelOf, didKeyName, inboundMessageId } from "../ids.js";
 import { methodPublicKey } from "../peer-document.js";
-import { decodePublicKey, type KeyType } from "../public-key.js";
+import { agreementKey, decodePublicKey, type DecodedPublicKey, type KeyType } from "../public-key.js";
 import type { VaultEvent } from "../schema.js";
 import type { AuthorId, Channel, Did, DidId, EventId, MessageId, VaultData } from "../types.js";
 import type { EvidenceCheck, ReadObject } from "./evidence.js";
@@ -160,11 +160,12 @@ export function foldChannelEvidence(set: VaultEventSet, routes: RouteFold, check
  * from is consistent, the seed has confirmed the entity's keys, the
  * key is the entity's key-agreement key, the resolution it names is
  * here, is its own — same key, same sender under the same spelling —
- * and is verified against its document, the peer key it selected is
- * on the curve the entity's own key-agreement key is, and its message
- * ID is the one its endpoints and wire ID derive. Whatever contradicts
- * the observation does so for good, however much else is still
- * missing, so every contradiction is looked for before any absence is
+ * and is verified against its document, the peer key it selected
+ * agrees keys and is on the curve the entity's own key-agreement key
+ * is, and its message ID is the one its endpoints and wire ID derive.
+ * Whatever contradicts the observation does so for good, however much
+ * else is still missing, so each contradiction is looked for as soon
+ * as what it needs is here, and every one before any absence is
  * reported. An anonymous one has nothing to authenticate and no
  * channel.
  */
@@ -189,9 +190,9 @@ function sourceOf(event: VaultEvent<"message.in">, localDidId: DidId | null, loc
 
   if (local === null) missing.push("no communication DID here derives the local key");
   else if (local.conflict) return conflict(`the local entity is in conflict: ${local.faults[0]}`);
+  else if (local.keyNames.keyAgreement !== data.localKeyName) return conflict("the local key is not the entity's key-agreement key");
   else if (local.created === null) missing.push("the local entity has no creation here");
   else {
-    if (local.keyNames.keyAgreement !== data.localKeyName) return conflict("the local key is not the entity's key-agreement key");
     if (local.created.did === data.did) return conflict("the sender is the recipient");
     channel = channelOf(local.created.did, data.did);
     const expected = inboundMessageId(data.did, local.created.did, data.wireMessageId);
@@ -208,10 +209,16 @@ function sourceOf(event: VaultEvent<"message.in">, localDidId: DidId | null, loc
     if (resolution.data.localKeyName !== data.localKeyName || resolution.data.did !== data.did || resolution.data.presentedDid !== data.presentedDid) {
       return conflict("the resolution it names is not of this sender at this key");
     }
+    let peerKey: DecodedPublicKey;
+    try {
+      peerKey = agreementKey(resolution.data.peerPublicKey);
+    } catch (err) {
+      if (!(err instanceof InvalidPublicKey)) throw err;
+      return conflict(err.message);
+    }
     const check = resolutionChecks.get(resolution.eventId);
     if (check === "invalid") return conflict("the resolution's snapshot is not its document's");
-    const peerKeyType = decodePublicKey(resolution.data.peerPublicKey).type;
-    if (localKeyType !== null && peerKeyType !== localKeyType) return conflict(`the peer key is ${peerKeyType} and the entity's key-agreement key ${localKeyType}: no key is agreed across curves`);
+    if (localKeyType !== null && peerKey.type !== localKeyType) return conflict(`the peer key is ${peerKey.type} and the entity's key-agreement key ${localKeyType}: no key is agreed across curves`);
     if (check === undefined) missing.push("the resolution's document is not here");
   }
 
@@ -219,7 +226,6 @@ function sourceOf(event: VaultEvent<"message.in">, localDidId: DidId | null, loc
   return { event, localDidId, resolution, channel, standing };
 }
 
-/** The curve of the entity's own key-agreement key, read from its document; null while that document or key does not read. */
 function keyAgreementTypeOf(local: LocalDidEntity): KeyType | null {
   const [id] = local.methodIds.keyAgreement;
   if (local.resolution === null || id === undefined) return null;
@@ -297,16 +303,19 @@ function proofOf(jwt: string, presentedDid: Did, local: Did | null, check: Evide
 /**
  * Each rotation decision checked against its own fields: both entities
  * consistent, created and confirmed by the seed, the successor another
- * DID than both old endpoints, the frozen proof spelled over the two
- * entities' exact long forms and verified under the predecessor's
- * document, and the source, when named, a positive observation in the
- * very pair the decision rotates away from. What contradicts the
- * decision does so for good — an entity in conflict, a proof refused,
- * a source that can never be positive: anonymous, its authentication
- * contradicted, its own proof refused — so all of that is looked for
- * before the decision is left pending on what may still arrive. What
- * the predecessor was confirmed by is the graph's question, not asked
- * here.
+ * DID than the peer (another entity than the predecessor by the
+ * schema, and no two consistent entities share a DID), the frozen
+ * proof spelled over the two entities' exact long forms and verified
+ * under the predecessor's document, and the source, when named, a
+ * positive observation in the very pair the decision rotates away
+ * from: from the peer the decision names, at the predecessor's
+ * key-agreement key. What contradicts the decision does so for good
+ * — an entity in conflict, a proof refused, a source that can never be
+ * positive: anonymous, of another pair, its authentication
+ * contradicted, its own proof refused — so each is looked for as soon
+ * as what it needs is here, all before the decision is left pending on
+ * what may still arrive. What the predecessor was confirmed by is the
+ * graph's question, not asked here.
  */
 export function foldDecisions(
   set: VaultEventSet,
@@ -347,7 +356,7 @@ function decisionStatus(
   const successor = creationOf(to, "successor", missing);
   if (typeof successor === "string") return conflict(successor);
   if (predecessor !== null && channel === null) return invalid("the peer is the predecessor's own DID");
-  if (predecessor !== null && successor !== null && (successor.did === predecessor.did || successor.did === data.peerDid)) return invalid("the successor is one of the old endpoints");
+  if (successor !== null && successor.did === data.peerDid) return invalid("the successor is the peer's DID");
 
   let iss: string;
   let sub: string;
@@ -369,7 +378,8 @@ function decisionStatus(
     else {
       const source = sources.get(data.sourceEventId)!;
       if (source.event.data.peerResolutionEventId === null) return conflict("the source is anonymous, in no pair");
-      if (channel !== null && source.channel !== null && channelKey(source.channel) !== channelKey(channel)) return conflict("the source is not in the pair the decision rotates away from");
+      if (source.event.data.did !== data.peerDid) return conflict("the source is not from the peer the decision rotates away from");
+      if (source.event.data.localKeyName !== didKeyName(data.fromDidId, "key-agreement")) return conflict("the source is not at the predecessor's key-agreement key");
       if (source.standing.status === "conflict") return conflict(`the source's authentication is in conflict: ${source.standing.because}`);
       const carrier = carriers.get(data.sourceEventId);
       if (carrier?.proof.status === "invalid") return conflict(`the source's proof is invalid: ${carrier.proof.because}`);

@@ -39,12 +39,14 @@ const FOREIGN = "019b7000-0000-7000-8000-000000000c01" as DidId;
 const readerOf = (objects: Map<Cid, Uint8Array>) => async (wanted: Cid) => objects.get(wanted) ?? null;
 const segments = (jwt: string) => jwt.split(".") as [string, string, string];
 
-/** A fixed public key on a NIST curve, as the canonical value. */
 function nistKey(curve: typeof p256, crv: "P-256" | "P-384" | "P-521", size: number): PublicKey {
   const point = curve.getPublicKey(new Uint8Array(size).fill(1), false);
   return canonicalPublicKey({ kty: "EC", crv, x: base64urlnopad.encode(point.subarray(1, 1 + size)), y: base64urlnopad.encode(point.subarray(1 + size)) });
 }
 const NIST_KEYS: [typeof p256, "P-256" | "P-384" | "P-521", number][] = [[p256, "P-256", 32], [p384, "P-384", 48], [p521, "P-521", 66]];
+const x25519Key = (u: number) => canonicalPublicKey({ kty: "OKP", crv: "X25519", x: base64urlnopad.encode(Uint8Array.from([u, ...new Array<number>(31).fill(0)])) });
+const agreesNoKeys = (key: PublicKey, what: string) => `${key} is ${what}, which agrees no keys`;
+const without = (events: readonly Event[], dropped: Event) => events.filter((event) => event !== dropped);
 
 /** A proof under any header and claims, signed by the authentication key a seed derives for an entity. */
 async function resign(keys: Keys, didId: DidId, header: Record<string, unknown>, payload: JsonObject): Promise<string> {
@@ -135,7 +137,7 @@ describe("foldSources", () => {
     expect(because(wrongType)).toEqual({ status: "conflict", because: "the resolution it names is a mediation.created" });
     expect(because(notItsOwn)).toEqual({ status: "conflict", because: "the resolution it names is not of this sender at this key" });
     expect(because(invalidSnapshot)).toEqual({ status: "conflict", because: "the resolution's snapshot is not its document's" });
-    expect(because(signingKeyOnly)).toEqual({ status: "conflict", because: "the resolution's snapshot is not its document's" });
+    expect(because(signingKeyOnly)).toEqual({ status: "conflict", because: agreesNoKeys(signingKey.data.peerPublicKey, "a Ed25519 key") });
     expect(because(wrongId)).toMatchObject({ status: "conflict", because: expect.stringMatching(/^the message ID is not the one the endpoints and wire ID derive, /) });
     expect(because(fromSelf)).toEqual({ status: "conflict", because: "the sender is the recipient" });
     for (const event of [authenticationKey, wrongType, notItsOwn, invalidSnapshot, signingKeyOnly, wrongId, fromSelf]) {
@@ -323,9 +325,34 @@ describe("foldCarriers", () => {
     const { evidence, proofs } = await fold(scene, keys);
     expect(proofs.resolutionChecks.get(signingKey.eventId)).toBe("invalid");
     expect(proofs.proofChecks.get(carrier.eventId)).toBe("verified");
-    expect(evidence.carriers.get(carrier.eventId)).toMatchObject({ proof: { status: "verified" }, link: null, source: { standing: { status: "conflict", because: "the resolution's snapshot is not its document's" } } });
+    expect(evidence.carriers.get(carrier.eventId)).toMatchObject({ proof: { status: "verified" }, link: null, source: { standing: { status: "conflict", because: agreesNoKeys(signingKey.data.peerPublicKey, "a Ed25519 key") } } });
     expect(evidence.peerLinks).toEqual([]);
     expect(evidence.positive(carrier.eventId)).toBe(false);
+  });
+
+  it("lends no link to a verified proof whose carrier's resolution selected a low-order X25519 point, with or without the seed, the point being refused before any document is asked for", async () => {
+    for (const u of [0, 1]) {
+      const { scene, keys, peerKeys, a0, a1, b0 } = await vaults();
+      const lowOrder = x25519Key(u);
+      const peer = await peerAgreeingOn(peerKeys, PEER_ID3, lowOrder);
+      const root = resolved(scene, a0.didId, peer);
+      const carrier = receipt(scene, { local: a0, peer, resolution: root, ordinal: 1, fromPrior: await proof(peerKeys, b0, peer) });
+      const decision = await rotation(scene, keys, { from: a0, peer, to: a1, source: carrier });
+      const because = agreesNoKeys(lowOrder, "a low-order X25519 point");
+      const { evidence, checks, proofs } = await fold(scene, keys);
+      expect(proofs.resolutionChecks.get(root.eventId)).toBe("invalid");
+      expect(proofs.proofChecks.get(carrier.eventId)).toBe("verified");
+      expect(evidence.sources.get(carrier.eventId)).toMatchObject({ resolution: root, channel: null, standing: { status: "conflict", because } });
+      expect(evidence.carriers.get(carrier.eventId)).toMatchObject({ proof: { status: "verified" }, link: null });
+      expect(evidence.peerLinks).toEqual([]);
+      expect(evidence.positive(carrier.eventId)).toBe(false);
+      expect(evidence.decisions.get(decision.eventId)!.status).toEqual({ status: "conflict", because: `the source's authentication is in conflict: ${because}` });
+      const withoutSeed = (await foldVaultChecked(scene.set(), null, noObjects)).channels;
+      expect(withoutSeed.sources.get(carrier.eventId)!.standing).toEqual({ status: "conflict", because });
+      const unchecked = foldChannelEvidence(scene.set(), foldChecked(scene.set(), checks).routes, { resolutionChecks: new Map(), proofChecks: proofs.proofChecks });
+      expect(unchecked.sources.get(carrier.eventId)!.standing).toEqual({ status: "conflict", because });
+      expectSameOverEveryOrder(scene.events, checks, proofs);
+    }
   });
 
   it("keeps a verified proof through erasure of the message's content, the proof being event metadata", async () => {
@@ -487,8 +514,9 @@ describe("foldDecisions", () => {
     expectSameOverEveryOrder(scene.events, missingDocument.checks, missingDocument.proofs);
 
     const withoutSeed = (await foldVaultChecked(scene.set(), null, noObjects)).channels;
-    expect(withoutSeed.sources.get(atSigningKey.eventId)!.standing).toEqual({ status: "conflict", because: "the resolution's snapshot is not its document's" });
-    expect(withoutSeed.decisions.get(fromSigningKey.eventId)!.status).toEqual({ status: "conflict", because: "the source's authentication is in conflict: the resolution's snapshot is not its document's" });
+    const signingKeyAgreesNone = agreesNoKeys(signingKey.data.peerPublicKey, "a Ed25519 key");
+    expect(withoutSeed.sources.get(atSigningKey.eventId)!.standing).toEqual({ status: "conflict", because: signingKeyAgreesNone });
+    expect(withoutSeed.decisions.get(fromSigningKey.eventId)!.status).toEqual({ status: "conflict", because: `the source's authentication is in conflict: ${signingKeyAgreesNone}` });
     expect(withoutSeed.decisions.get(fromAnonymous.eventId)!.status).toEqual({ status: "conflict", because: "the source is anonymous, in no pair" });
     expect(withoutSeed.decisions.get(fromRefused.eventId)!.status).toEqual({ status: "conflict", because: "the source's proof is invalid: not a compact JWT" });
     expect(withoutSeed.decisions.get(fromSound.eventId)!.status).toEqual({ status: "pending", because: "the predecessor entity's keys are not yet checked against the seed" });
@@ -512,7 +540,7 @@ describe("foldDecisions", () => {
     const { evidence, checks, proofs } = await fold(scene, keys);
     const status = (event: VaultEvent<"did.rotationSelected">) => evidence.decisions.get(event.eventId)!.status;
     expect(status(wrongType)).toEqual({ status: "conflict", because: "the source it names is a peer.resolved" });
-    expect(status(wrongPair)).toEqual({ status: "conflict", because: "the source is not in the pair the decision rotates away from" });
+    expect(status(wrongPair)).toEqual({ status: "conflict", because: "the source is not at the predecessor's key-agreement key" });
     expect(status(conflictedSource)).toEqual({ status: "conflict", because: "the source's authentication is in conflict: the resolution's snapshot is not its document's" });
     expect(evidence.localLinks).toEqual([]);
     expectSameOverEveryOrder(scene.events, checks, proofs);
@@ -521,6 +549,41 @@ describe("foldDecisions", () => {
     const entityConflict = await fold(scene, keys);
     expect(entityConflict.evidence.decisions.get(wrongPair.eventId)).toMatchObject({ channel: null, status: { status: "conflict", because: "the predecessor entity is in conflict: creations disagree" } });
     expect(entityConflict.evidence.sources.get(conflicted.eventId)).toMatchObject({ localDidId: a0.didId, channel: null, standing: { status: "conflict", because: "the local entity is in conflict: creations disagree" } });
+  });
+
+  it("refuses on what is here while the predecessor's creation is not: a successor that is the peer, a source from another peer, a source at the entity's signing key; only a decision nothing contradicts waits for the creation", async () => {
+    const { scene, keys, a0, a1, b0, b1 } = await vaults();
+    const created = scene.events.find((event) => event.type === "did.created" && (event.data as VaultData["did.created"]).didId === a0.didId)!;
+    const root = resolved(scene, a0.didId, b0);
+    const fromB0 = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1 });
+    const signingName = didKeyName(a0.didId, "authentication");
+    const atSigning = resolved(scene, a0.didId, b0, { localKeyName: signingName });
+    const atSigningKey = receipt(scene, { local: a0, peer: b0, resolution: atSigning, ordinal: 2, overrides: { localKeyName: signingName } });
+    scene.add("did.retired", { didId: a0.didId, because: "done" });
+    const successorIsPeer = await rotation(scene, keys, { from: a0, peer: { did: a1.did } as Peer, to: a1 });
+    const otherPeer = await rotation(scene, keys, { from: a0, peer: b1, to: a1, source: fromB0 });
+    const atSigningSource = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source: atSigningKey });
+    const sound = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source: fromB0 });
+
+    const partial = await foldVaultChecked(VaultEventSet.of(without(scene.events, created)), keys, noObjects);
+    expect(partial.routes.dids.get(a0.didId)).toMatchObject({ created: null, conflict: false });
+    expect(partial.checks.didKeys.get(a1.didId)).toBe("verified");
+    expect(partial.checks.proofChecks.get(sound.eventId)).toBe("verified");
+    const status = (folded: typeof partial, event: VaultEvent<"did.rotationSelected">) => folded.channels.decisions.get(event.eventId)!.status;
+    expect(status(partial, successorIsPeer)).toEqual({ status: "invalid", because: "the successor is the peer's DID" });
+    expect(status(partial, otherPeer)).toEqual({ status: "conflict", because: "the source is not from the peer the decision rotates away from" });
+    expect(partial.channels.sources.get(atSigningKey.eventId)).toMatchObject({ localDidId: a0.didId, channel: null, standing: { status: "conflict", because: "the local key is not the entity's key-agreement key" } });
+    expect(status(partial, atSigningSource)).toEqual({ status: "conflict", because: "the source is not at the predecessor's key-agreement key" });
+    expect(partial.channels.sources.get(fromB0.eventId)!.standing).toEqual({ status: "incomplete", because: "the local entity has no creation here" });
+    expect(status(partial, sound)).toEqual({ status: "pending", because: "the predecessor entity has no consistent creation here" });
+    expect(partial.channels.localLinks).toEqual([]);
+    expectOrderFree(without(scene.events, created), (set) => readable(foldVault(set, partial.checks).channels));
+
+    const restored = await foldVaultChecked(scene.set(), keys, noObjects);
+    expect(status(restored, successorIsPeer)).toEqual({ status: "invalid", because: "the successor is the peer's DID" });
+    expect(status(restored, otherPeer)).toEqual({ status: "conflict", because: "the source is not from the peer the decision rotates away from" });
+    expect(status(restored, atSigningSource)).toEqual({ status: "conflict", because: "the source is not at the predecessor's key-agreement key" });
+    expect(status(restored, sound)).toMatchObject({ status: "candidate", link: { from: channel(a0, b0), to: channel(a1, b0), source: fromB0.eventId } });
   });
 });
 

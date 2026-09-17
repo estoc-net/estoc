@@ -67,7 +67,7 @@ export {
   mediationKeyName,
 } from "./ids.js";
 
-export { canonicalPublicKey, parsePublicKey, decodePublicKey, type KeyType, type DecodedPublicKey, type Jwk } from "./public-key.js";
+export { canonicalPublicKey, parsePublicKey, decodePublicKey, agreementKey, type KeyType, type DecodedPublicKey, type Jwk } from "./public-key.js";
 
 export {
   type StoredAttachmentData,

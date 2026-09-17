@@ -25,7 +25,10 @@ set of channels is kept in, the reserved keystore names) and the canonical publi
 (`public-key.ts`: the did:key encoding of the complete type-tagged key
 as base58btc multibase, from a JWK or from its base58btc multibase form,
 Ed25519 and X25519 raw, the Weierstrass curves as compressed points that
-`@noble/curves` has verified lie on the curve; `@scure/base` does the
+`@noble/curves` has verified lie on the curve; `agreementKey` is the key
+as one that agrees keys, of a type DIDComm v2 runs ECDH over and, for
+X25519, not a low-order point, which `@noble/curves` refuses as every
+shared secret with it is zero; `@scure/base` does the
 base58btc and base64url, `multiformats` the multicodec prefix), the event
 schemas (`schema.ts`: `readVaultEvent` / `readVaultDraft` / `vaultDraft`
 accept an event of one of the 28 version-3 types — the closed member set
@@ -100,9 +103,10 @@ evidence (`fold/channels.ts`: `foldSources`, each `message.in` with the
 local entity its key belongs to, the channel its actual endpoints form
 and its standing — complete, incomplete while evidence is missing or
 the seed has not yet confirmed the local entity, conflict when evidence
-contradicts it, the entity is in conflict or the peer key selected is
-on another curve than the entity's own key-agreement key, a
-contradiction always reported over an absence; `foldReceipts`, the receipt
+contradicts it, the entity is in conflict or the peer key selected
+agrees no keys or is on another curve than the entity's own
+key-agreement key, each contradiction looked for as soon as what it
+needs is here and always reported over an absence; `foldReceipts`, the receipt
 ordinals' high-water mark and the messages one author's reused ordinal
 affects; `foldCarriers`, each source that brought a `from_prior`,
 its proof invalid on the carrier's own evidence, pending while the
@@ -110,7 +114,10 @@ issuer's document is not here, or verified, and the peer link a
 complete carrier's verified proof derives; `foldDecisions`, each
 `did.rotationSelected` checked against its own fields and source into a
 local-link candidate, pending while evidence may still arrive, in
-conflict when its source can never be positive; `foldChannelEvidence` runs the three and says
+conflict when its source can never be positive — anonymous, from
+another peer or at another key than the predecessor's, its
+authentication contradicted, its proof refused — each refusal made on
+the fields it needs, not held for the entities' creations; `foldChannelEvidence` runs the three and says
 which sources are `positive`, the ones the continuity graph may be
 built from; the signatures are `verifyProofs` beside the fold, each
 carried or frozen proof against the issuer's document its long form
