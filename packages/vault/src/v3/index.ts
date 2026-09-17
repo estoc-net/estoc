@@ -136,7 +136,7 @@ export {
   methodPublicKey,
 } from "./peer-document.js";
 
-export { FROM_PRIOR_ALG, type FromPriorClaims, type VerifiedFromPrior, type PinnedResolution, signFromPrior, fromPriorClaims, verifyFromPrior } from "./from-prior.js";
+export { FROM_PRIOR_ALG, type FromPriorClaims, type CarriedClaims, type VerifiedFromPrior, signFromPrior, fromPriorClaims, carriedClaims, issuerDocumentOf, verifyFromPrior, verifyLocalProof } from "./from-prior.js";
 
 export { VaultEventSet, type InvalidVaultEvent, type Resolved, type SourceKey, latest, groupBy, samePayload, keyOf, compareKeys } from "./fold/set.js";
 export { type AuthorActivity, foldAuthors, foldLabel } from "./fold/author.js";
