@@ -152,7 +152,7 @@ const contentRoots = (data: { bodyCid: Cid; attachmentCids: Cid[] }): Cid[] => m
 const idMembers = {
   mediationId: minted<MediationId>(),
   routeId: minted<RouteId>(),
-  didId: entity<DidId>(),
+  didId: minted<DidId>(),
   contactId: minted<ContactId>(),
   packageId: minted<PackageId>(),
 };
@@ -171,7 +171,6 @@ function expiryAfterCreation(data: { createdTime: number | null; expiresTime: nu
   }
 }
 
-/** A spelling is the short form itself or a long form of it. */
 function spellingOf(spelling: string, shortForm: string): boolean {
   return spelling === shortForm || spelling.startsWith(`${shortForm}:`);
 }
@@ -183,7 +182,6 @@ const distinctChannel: Check<Channel> = checked(channel, (data) => {
   if (data.localDid === data.peerDid) throw new Fault("localDid and peerDid are two DIDs");
 });
 
-/** A selected set of channels: no duplicate, in canonical order. */
 const channelSet: Check<Channel[]> = checked(arrayOf(distinctChannel), (channels) => {
   for (let i = 1; i < channels.length; i++) {
     const order = compareChannels(channels[i - 1] as Channel, channels[i] as Channel);

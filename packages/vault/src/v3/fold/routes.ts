@@ -270,14 +270,17 @@ export async function foldWithSeed(set: VaultEventSet, keys: Keys): Promise<{ me
 /**
  * The mediations the runtime must keep receiving on: every usable one
  * that is preferred, or that a usable route depends on while some DID
- * bound to that route may still receive, retired or not. Disclosure
- * policy plays no part.
+ * bound to that route may still receive, retired or not. A DID whose
+ * receipt only waits — for the seed's verdict on its keys — keeps the
+ * dependency: what is not yet decidable is not decided against, and
+ * what was addressed to it must not be left at the mediator meanwhile.
+ * Only a terminal entity releases it. Disclosure policy plays no part.
  */
 export function requiredReceivingSet(mediations: MediationFold, routes: RouteFold): Set<MediationId> {
   const required = new Set<MediationId>();
   if (mediations.preferred !== null) required.add(mediations.preferred);
   for (const did of routes.dids.values()) {
-    if (did.created === null || routes.receipt(did.didId) !== "eligible") continue;
+    if (did.created === null || routes.receipt(did.didId) === "terminal") continue;
     const route = routes.routes.get(did.created.boundRouteId);
     if (route?.configured?.kind !== "mediated" || !route.usable || !mediations.usable(route.configured.mediationId)) continue;
     required.add(route.configured.mediationId);

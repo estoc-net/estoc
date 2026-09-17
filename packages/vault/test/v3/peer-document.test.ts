@@ -313,7 +313,7 @@ describe("methodPublicKey", () => {
   });
 });
 
-describe("the retained peer DID as a birth address", () => {
+describe("the canonical DID of a retained peer resolution", () => {
   it("is the short form, whichever spelling was presented", () => {
     const presentedLong = peerResolution(LONG);
     expect(canonicalDidOf(presentedLong.presentedDid)).toBe(presentedLong.did);

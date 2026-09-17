@@ -157,6 +157,7 @@ describe("key names", () => {
     expect(didKeyName(d, "key-agreement")).toBe("did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement");
     expect(mediationKeyName("019b2a60-c68e-75bf-b6fb-ae1a41f8d716" as MediationId)).toBe("mediation/019b2a60-c68e-75bf-b6fb-ae1a41f8d716/me");
     expect(() => didKeyName("" as DidId, "authentication")).toThrow(InvalidIdentifier);
+    expect(() => didKeyName("019b0000-0000-5000-8000-00000000000c" as DidId, "authentication")).toThrow(InvalidIdentifier);
     expect(() => mediationKeyName("" as MediationId)).toThrow(InvalidIdentifier);
   });
 });

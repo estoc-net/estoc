@@ -2,8 +2,8 @@
  * What the vault must keep: every root an accepted event retains,
  * except what a message's erasure released from that message's events.
  * Erasure is the one release; a prepared envelope is held until its
- * message erases it, since nothing else here yet says the package is
- * done with.
+ * message erases it, since no delivery-completion evidence is verified
+ * here and a package must not be released on a guess.
  * An event of a type this version does not name, or one whose payload
  * does not read, holds every root it names, and so does every event
  * that is not a message's: a peer document stays as long as the

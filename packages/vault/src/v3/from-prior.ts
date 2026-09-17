@@ -2,10 +2,10 @@
  * The DIDComm `from_prior` proof that one DID continues another: a
  * compact JWT the predecessor's authentication key signs over the
  * successor. Signing is ours to do for a local rotation; verification
- * uses the exact predecessor document the relationship pinned, never a
- * fresher resolution, and compares DID spellings by validated
- * equivalence while every other part of the method ID matches byte for
- * byte.
+ * uses the exact immutable predecessor document the caller retained
+ * and verified, never a fresher resolution, and compares DID spellings
+ * by validated equivalence while every other part of the method ID
+ * matches byte for byte.
  */
 
 import { isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
@@ -29,7 +29,7 @@ export type FromPriorClaims = { iss: Did; sub: Did; iat: number; kid: DidUrl };
 /** A verified proof: its claims, the pinned method that verified it and that method's key. */
 export type VerifiedFromPrior = FromPriorClaims & { methodId: DidUrl; publicKey: PublicKey };
 
-/** The predecessor snapshot a relationship pinned: its canonical DID and the exact retained document. */
+/** The predecessor as retained: its canonical DID and the exact immutable document the proof is verified against. */
 export type PinnedResolution = { did: Did; document: JsonObject };
 
 /**

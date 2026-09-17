@@ -14,6 +14,7 @@ import { base64urlnopad } from "@scure/base";
 import { v5 as uuidv5 } from "uuid";
 
 import { InvalidIdentifier } from "./errors.js";
+import { isMintedId } from "./syntax.js";
 import type { Channel, Did, DidId, EffectKey, ExecutionId, KeyName, MediationId, MessageId, WireMessageId } from "./types.js";
 
 export const NAMESPACE_PURPOSES = ["inbound-message", "message-execution", "automatic-mid"] as const;
@@ -137,9 +138,10 @@ export const ANCHOR_KEY_NAME = "anchor" as KeyName;
 
 export type DidKeyRole = "authentication" | "key-agreement";
 
-/** The name of one of the two keys of a communication-DID entity. */
+/** The name of one of the two keys of a communication-DID entity; the entity ID is minted, a UUIDv7. */
 export function didKeyName(did: DidId, role: DidKeyRole): KeyName {
-  return `did/${nonEmpty(did, "DID entity ID")}/${role}` as KeyName;
+  if (!isMintedId(did)) throw new InvalidIdentifier("a DID entity ID is a canonical UUIDv7");
+  return `did/${did}/${role}` as KeyName;
 }
 
 /** The name of the DIDComm identity key of one mediation arrangement. */

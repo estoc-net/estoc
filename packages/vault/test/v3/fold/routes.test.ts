@@ -341,7 +341,7 @@ describe("receipt eligibility and the required receiving set", () => {
     expect((await checked(s)).receipt(DID_ID)).toBe("terminal");
   });
 
-  it("requires the preferred mediation and every mediation a live or retired DID's route depends on, once the seed confirms them", async () => {
+  it("requires the preferred mediation and every mediation a live or retired DID's route depends on", async () => {
     const { scene: s } = await scene();
     const bare = both(s.set(), { mediations: new Map(), dids: new Map() });
     expect(requiredReceivingSet(bare.mediations, bare.routes)).toEqual(new Set());
@@ -364,6 +364,25 @@ describe("receipt eligibility and the required receiving set", () => {
       const folded = both(set, checks);
       return [...requiredReceivingSet(folded.mediations, folded.routes)];
     });
+  });
+
+  it("keeps a dependency whose DID only waits for the seed's verdict, and drops it once the verdict is a mismatch", async () => {
+    const { scene: s } = await scene();
+    const { mediations } = await checksOf(s.events, keys);
+    const waiting = both(s.set(), { mediations, dids: new Map() });
+    expect(waiting.routes.receipt(DID_ID2)).toBe("pending");
+    expect(waiting.routes.desiredRecipients).toEqual([]);
+    expect(requiredReceivingSet(waiting.mediations, waiting.routes)).toEqual(new Set([MEDIATION, MEDIATION2]));
+    const verified = both(s.set(), { mediations, dids: new Map([[DID_ID2, "verified"]]) });
+    expect(verified.routes.receipt(DID_ID2)).toBe("eligible");
+    expect(requiredReceivingSet(verified.mediations, verified.routes)).toEqual(new Set([MEDIATION, MEDIATION2]));
+    const mismatch = both(s.set(), { mediations, dids: new Map([[DID_ID2, "mismatch"]]) });
+    expect(mismatch.routes.receipt(DID_ID2)).toBe("terminal");
+    expect(requiredReceivingSet(mismatch.mediations, mismatch.routes)).toEqual(new Set([MEDIATION]));
+    s.add("route.retired", { routeId: ROUTE2, because: "moved" });
+    const retired = both(s.set(), { mediations, dids: new Map() });
+    expect(retired.routes.receipt(DID_ID2)).toBe("terminal");
+    expect(requiredReceivingSet(retired.mediations, retired.routes)).toEqual(new Set([MEDIATION]));
   });
 
   it("drops a mediation from the required set once it is unusable, whatever depends on it", async () => {

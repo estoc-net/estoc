@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
-import { didcommServiceUris, scanVault, vaultDraft, type DidId, type RouteId } from "@estoc/vault/v3";
+import { InvalidIdentifier, didcommServiceUris, scanVault, vaultDraft, type DidId, type RouteId } from "@estoc/vault/v3";
 
 import { OOB_INVITATION, invitationUrl, parseInvitation } from "../../src/index.js";
 import { EntityConflict, Unregistered, Unusable, WrongMediator, configureRoute, createDid, disclose, ensureRoute, establish, mediatedRouteOf, retireDid, routeTargetOf } from "../../src/v3/index.js";
@@ -52,6 +52,16 @@ describe("communication DIDs", () => {
     await runtime.close();
   });
 
+  it("is minted under a UUIDv7 only: a UUIDv5 is refused and nothing written", async () => {
+    const { runtime, keys } = await freshVault();
+    await configureRoute(runtime, keys, { kind: "direct", endpoint: ENDPOINT }, ROUTE);
+    await expect(createDid(runtime, keys, ROUTE, "019b0000-0000-5000-8000-00000000000c" as DidId)).rejects.toBeInstanceOf(InvalidIdentifier);
+    const fold = await scanVault(runtime.vault, keys);
+    expect(fold.set.of("did.created")).toEqual([]);
+    expect(fold.routes.dids.size).toBe(0);
+    await runtime.close();
+  });
+
   it("cannot be recreated on another route, and is not minted on a route that is not usable", async () => {
     const { runtime, keys } = await freshVault();
     await configureRoute(runtime, keys, { kind: "direct", endpoint: ENDPOINT }, ROUTE);
@@ -92,6 +102,25 @@ describe("disclosure", () => {
     expect(direct.invitation).toBeNull();
     const fold = await scanVault(runtime.vault, keys);
     expect(fold.routes.dids.get(DID)?.disclosures).toHaveLength(2);
+    await runtime.close();
+  });
+
+  it("republishes an invitation under its oobId, in sequence or concurrently, and refuses the ID for anything else", async () => {
+    const { runtime, keys } = await freshVault();
+    await configureRoute(runtime, keys, { kind: "direct", endpoint: ENDPOINT }, ROUTE);
+    await createDid(runtime, keys, ROUTE, DID);
+    const other = await createDid(runtime, keys, ROUTE);
+    const invitation = { as: "oob", uses: "one", oobId: "invite-1", goal: "Write to Alice" } as const;
+    const first = await disclose(null, runtime, keys, DID, invitation);
+    const again = await disclose(null, runtime, keys, DID, invitation);
+    expect(again.disclosed.eventId).toBe(first.disclosed.eventId);
+    expect(again.invitation).toEqual(first.invitation);
+    const [x, y] = await Promise.all([disclose(null, runtime, keys, DID, { ...invitation, oobId: "invite-2" }), disclose(null, runtime, keys, DID, { ...invitation, oobId: "invite-2" })]);
+    expect(y.disclosed.eventId).toBe(x.disclosed.eventId);
+    await expect(disclose(null, runtime, keys, DID, { ...invitation, goal: "Write to Bob" })).rejects.toBeInstanceOf(EntityConflict);
+    await expect(disclose(null, runtime, keys, DID, { ...invitation, uses: "many" })).rejects.toBeInstanceOf(EntityConflict);
+    await expect(disclose(null, runtime, keys, other.created.data.didId, invitation)).rejects.toThrow(/another DID/);
+    expect((await scanVault(runtime.vault, keys)).set.of("did.disclosed").map((event) => event.data.oobId)).toEqual(["invite-1", "invite-2"]);
     await runtime.close();
   });
 

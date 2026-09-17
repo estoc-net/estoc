@@ -52,7 +52,7 @@ const UUID_BODY = "[0-9a-f]{8}-[0-9a-f]{4}-V[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const UUID_V7 = new RegExp(`^${UUID_BODY.replace("V", "7")}$`);
 const UUID_V5 = new RegExp(`^${UUID_BODY.replace("V", "5")}$`);
 const UUID_V5_OR_V7 = new RegExp(`^${UUID_BODY.replace("V", "[57]")}$`);
-const KEY_NAME = new RegExp(`^(?:did/${UUID_BODY.replace("V", "[57]")}/(?:authentication|key-agreement)|mediation/${UUID_BODY.replace("V", "7")}/me)$`);
+const KEY_NAME = new RegExp(`^(?:did/${UUID_BODY.replace("V", "7")}/(?:authentication|key-agreement)|mediation/${UUID_BODY.replace("V", "7")}/me)$`);
 const COMPACT_JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 /** 32 bytes as unpadded base64url: 43 characters, the last one carrying two zero bits. */
 const SHA256_BASE64URL = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
