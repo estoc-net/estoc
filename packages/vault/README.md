@@ -98,15 +98,17 @@ entity it is pending, never live, and until a snapshot has been checked
 what rests on it is deferred, never applied), the raw channel
 evidence (`fold/channels.ts`: `foldSources`, each `message.in` with the
 local entity its key belongs to, the channel its actual endpoints form
-and its standing — complete, incomplete while evidence is missing,
-conflict when evidence contradicts it; `foldReceipts`, the receipt
+and its standing — complete, incomplete while evidence is missing or
+the seed has not yet confirmed the local entity, conflict when evidence
+contradicts it or the entity is in conflict; `foldReceipts`, the receipt
 ordinals' high-water mark and the messages one author's reused ordinal
 affects; `foldCarriers`, each source that brought a `from_prior`,
 its proof invalid on the carrier's own evidence, pending while the
 issuer's document is not here, or verified, and the peer link a
 complete carrier's verified proof derives; `foldDecisions`, each
 `did.rotationSelected` checked against its own fields and source into a
-local-link candidate; `foldChannelEvidence` runs the three and says
+local-link candidate, pending while evidence may still arrive, in
+conflict when its source can never be positive; `foldChannelEvidence` runs the three and says
 which sources are `positive`, the ones the continuity graph may be
 built from; the signatures are `verifyProofs` beside the fold, each
 carried or frozen proof against the issuer's document its long form

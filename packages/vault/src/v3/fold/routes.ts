@@ -4,9 +4,10 @@
  * its record is consistent, its document reads and sends to that
  * route, the route and any mediation behind it are usable, and the seed
  * has been found to derive its keys. The fold keeps every entity, live
- * or not, so a key name or a DID spelling met later still finds the
- * entity it belongs to; liveness governs sending and recipient
- * registration, not history. The key check needs the seed and runs
+ * or not, so a key name met later still finds the entity it belongs
+ * to, in conflict or not, and a consistent DID spelling its one
+ * entity; liveness governs sending and recipient registration, not
+ * history. The key check needs the seed and runs
  * beside the fold; an entity the seed has not confirmed is pending,
  * never live.
  */
@@ -74,7 +75,7 @@ export interface RouteFold {
   readonly dids: ReadonlyMap<DidId, LocalDidEntity>;
   /** the live DIDs on mediated routes, by short form */
   readonly desiredRecipients: readonly DesiredRecipient[];
-  /** the entity a key name belongs to, retired or not; null for a name no consistent entity derives */
+  /** the entity a key name derives from, whatever its state, since one entity ID names each key; null for a name no entity here records */
   entityOfKey(name: KeyName): DidId | null;
   /** the entity a spelling belongs to, short or long form; null for a spelling no consistent entity records */
   entityOfDid(did: string): DidId | null;
@@ -101,9 +102,9 @@ export function foldRoutes(set: VaultEventSet, mediations: MediationFold, option
   const byKey = new Map<KeyName, DidId>();
   const byDid = new Map<string, DidId>();
   for (const did of dids.values()) {
-    if (did.conflict || did.created === null) continue;
     byKey.set(did.keyNames.authentication, did.didId);
     byKey.set(did.keyNames.keyAgreement, did.didId);
+    if (did.conflict || did.created === null) continue;
     byDid.set(did.created.did, did.didId);
     byDid.set(did.created.longFormDid, did.didId);
   }

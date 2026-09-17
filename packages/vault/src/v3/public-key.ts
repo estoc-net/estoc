@@ -17,6 +17,9 @@ import type { PublicKey } from "./types.js";
 
 export type KeyType = "Ed25519" | "X25519" | "secp256k1" | "P-256" | "P-384" | "P-521";
 
+/** The key types DIDComm v2 agrees keys over (ECDH-ES and ECDH-1PU): what a key-agreement key can be. */
+export const KEY_AGREEMENT_TYPES: ReadonlySet<KeyType> = new Set<KeyType>(["X25519", "P-256", "P-384", "P-521"]);
+
 type Curve = typeof p256;
 
 interface Codec {

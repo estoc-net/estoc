@@ -3,17 +3,18 @@
  * on its own, before any graph is built over it. A source is one
  * `message.in` with the local entity its key belongs to and the channel
  * its actual endpoints form; its standing says whether the receipt's
- * own authentication evidence is complete, missing or contradicted. A
- * carrier is a source that brought a `from_prior` proof, whose
- * signature the checks beside the fold verified against the issuer's
- * document; a verified proof with legal endpoints is one peer link. A decision
- * is a `did.rotationSelected` checked as far as its own fields and
- * source allow; what passes is one local-link candidate. The
- * continuity fold owns everything that needs the whole graph:
- * confirmation of a decision's predecessor, joins, contexts, conflicts
- * and the final status of each carrier. Alongside, the receipt
- * ordinals give the allocator's high-water mark and the integrity
- * conflicts of one author reusing an ordinal.
+ * own authentication evidence is complete, missing or contradicted,
+ * and the local side of that evidence is the seed's word that the
+ * entity is ours. A carrier is a source that brought a `from_prior`
+ * proof, whose signature the checks beside the fold verified against
+ * the issuer's document; a verified proof with legal endpoints is one
+ * peer link. A decision is a `did.rotationSelected` checked as far as
+ * its own fields and source allow; what passes is one local-link
+ * candidate. The continuity fold owns everything that needs the whole
+ * graph: confirmation of a decision's predecessor, joins, contexts,
+ * conflicts and the final status of each carrier. Alongside, the
+ * receipt ordinals give the allocator's high-water mark and the
+ * integrity conflicts of one author reusing an ordinal.
  */
 
 import { isLongForm } from "@estoc/did-peer";
@@ -36,7 +37,7 @@ export type Standing = { status: "complete" } | { status: "incomplete"; because:
 
 export interface Source {
   readonly event: VaultEvent<"message.in">;
-  /** the entity whose key-agreement key received it; null while no consistent entity derives the key */
+  /** the entity the local key name derives from, whatever its state; null while no entity here records that name */
   readonly localDidId: DidId | null;
   /** the resolution the observation names, once it is here and is one */
   readonly resolution: VaultEvent<"peer.resolved"> | null;
@@ -66,9 +67,10 @@ export interface PeerLink {
 
 /**
  * What a carrier's proof establishes on its own. Invalid is for good:
- * a form or claim the carrier itself contradicts, a signature its
- * issuer's document refuses, or a predecessor that is our own DID.
- * Pending while the issuer's document is not here or not yet checked.
+ * a form or claim the carrier itself contradicts, a predecessor that
+ * is the carrier's own local DID, or a signature its issuer's document
+ * refuses. Pending while the issuer's document is not here or not yet
+ * checked; a proof refused without the document stays refused.
  */
 export type Proof = { status: "invalid"; because: string } | { status: "pending-proof" } | { status: "verified"; claims: CarriedClaims };
 
@@ -138,7 +140,7 @@ export function foldChannelEvidence(set: VaultEventSet, routes: RouteFold, check
     if (source === undefined || source.channel === null || source.standing.status !== "complete") return false;
     return source.event.data.fromPrior === null || carriers.get(id)?.link != null;
   };
-  const decisions = foldDecisions(set, routes, sources, positive, checks.proofChecks ?? none);
+  const decisions = foldDecisions(set, routes, sources, carriers, checks.proofChecks ?? none);
   return {
     sources,
     receipts: foldReceipts(set),
@@ -152,41 +154,58 @@ export function foldChannelEvidence(set: VaultEventSet, routes: RouteFold, check
 
 /**
  * Each observation with the entity and channel it belongs to. An
- * authenticated one is complete when a consistent entity's
- * key-agreement key received it, the resolution it names is here, is
- * its own — same key, same sender under the same spelling — and is
- * verified against its document, and its message ID is the one its
- * endpoints and wire ID derive. An anonymous one has nothing to
- * authenticate and no channel.
+ * authenticated one is complete when the entity its key name derives
+ * from is consistent, the seed has confirmed the entity's keys, the
+ * key is the entity's key-agreement key, the resolution it names is
+ * here, is its own — same key, same sender under the same spelling —
+ * and is verified against its document, and its message ID is the one
+ * its endpoints and wire ID derive. A conflicted entity, or one the
+ * seed found not to be ours, contradicts the observation for good; an
+ * entity the seed has not yet been asked about leaves it incomplete.
+ * An anonymous one has nothing to authenticate and no channel.
  */
 export function foldSources(set: VaultEventSet, routes: RouteFold, resolutionChecks: ReadonlyMap<EventId, EvidenceCheck>): Map<EventId, Source> {
   const sources = new Map<EventId, Source>();
   for (const event of set.of("message.in")) {
     const { data } = event;
     const localDidId = routes.entityOfKey(data.localKeyName);
-    const local = localDidId === null ? null : routes.dids.get(localDidId) ?? null;
+    const local = localDidId === null ? null : routes.dids.get(localDidId)!;
     if (data.peerResolutionEventId === null || data.did === null) {
       sources.set(event.eventId, { event, localDidId, resolution: null, channel: null, standing: { status: "complete" } });
       continue;
     }
-    const incomplete = (because: string): Source => ({ event, localDidId, resolution: null, channel: null, standing: { status: "incomplete", because } });
-    const conflict = (resolution: VaultEvent<"peer.resolved"> | null, because: string): Source => ({ event, localDidId, resolution, channel: null, standing: { status: "conflict", because } });
-    if (local?.created == null) {
-      sources.set(event.eventId, incomplete("no consistent communication DID derives the local key"));
+    let channel: Channel | null = null;
+    let resolution: VaultEvent<"peer.resolved"> | null = null;
+    const incomplete = (because: string): Source => ({ event, localDidId, resolution, channel, standing: { status: "incomplete", because } });
+    const conflict = (because: string): Source => ({ event, localDidId, resolution, channel: null, standing: { status: "conflict", because } });
+    if (local === null) {
+      sources.set(event.eventId, incomplete("no communication DID here derives the local key"));
+      continue;
+    }
+    if (local.conflict) {
+      sources.set(event.eventId, conflict(`the local entity is in conflict: ${local.faults[0]}`));
+      continue;
+    }
+    if (local.created === null) {
+      sources.set(event.eventId, incomplete("the local entity has no creation here"));
       continue;
     }
     if (local.keyNames.keyAgreement !== data.localKeyName) {
-      sources.set(event.eventId, conflict(null, "the local key is not the entity's key-agreement key"));
+      sources.set(event.eventId, conflict("the local key is not the entity's key-agreement key"));
       continue;
     }
     if (local.created.did === data.did) {
-      sources.set(event.eventId, conflict(null, "the sender is the recipient"));
+      sources.set(event.eventId, conflict("the sender is the recipient"));
       continue;
     }
-    const channel = channelOf(local.created.did, data.did);
+    channel = channelOf(local.created.did, data.did);
     const expected = inboundMessageId(data.did, local.created.did, data.wireMessageId);
     if (data.messageId !== expected) {
-      sources.set(event.eventId, conflict(null, `the message ID is not the one the endpoints and wire ID derive, ${expected}`));
+      sources.set(event.eventId, conflict(`the message ID is not the one the endpoints and wire ID derive, ${expected}`));
+      continue;
+    }
+    if (local.identity === "unchecked") {
+      sources.set(event.eventId, incomplete("the local entity's keys are not yet checked against the seed"));
       continue;
     }
     const resolved = set.resolve(data.peerResolutionEventId, "peer.resolved");
@@ -195,39 +214,31 @@ export function foldSources(set: VaultEventSet, routes: RouteFold, resolutionChe
       continue;
     }
     if (resolved.status === "mismatched") {
-      sources.set(event.eventId, conflict(null, `the resolution it names is a ${resolved.event.type}`));
+      sources.set(event.eventId, conflict(`the resolution it names is a ${resolved.event.type}`));
       continue;
     }
-    const resolution = resolved.event;
+    resolution = resolved.event;
     if (resolution.data.localKeyName !== data.localKeyName || resolution.data.did !== data.did || resolution.data.presentedDid !== data.presentedDid) {
-      sources.set(event.eventId, conflict(resolution, "the resolution it names is not of this sender at this key"));
+      sources.set(event.eventId, conflict("the resolution it names is not of this sender at this key"));
       continue;
     }
     const check = resolutionChecks.get(resolution.eventId);
     if (check === "invalid") {
-      sources.set(event.eventId, conflict(resolution, "the resolution's snapshot is not its document's"));
+      sources.set(event.eventId, conflict("the resolution's snapshot is not its document's"));
       continue;
     }
-    sources.set(event.eventId, {
-      event,
-      localDidId,
-      resolution,
-      channel,
-      standing: check === undefined ? { status: "incomplete", because: "the resolution's document is not here" } : { status: "complete" },
-    });
+    sources.set(event.eventId, check === undefined ? incomplete("the resolution's document is not here") : { event, localDidId, resolution, channel, standing: { status: "complete" } });
   }
   return sources;
 }
 
 export const receiptOrderKey = (event: VaultEvent<"message.in">): ReceiptKey => ({ ordinal: BigInt(event.data.receiptOrdinal), author: event.author });
 
-/** First-receipt order: by exact ordinal, then by author. */
 export function compareReceiptKeys(a: ReceiptKey, b: ReceiptKey): number {
   if (a.ordinal !== b.ordinal) return a.ordinal < b.ordinal ? -1 : 1;
   return a.author < b.author ? -1 : a.author > b.author ? 1 : 0;
 }
 
-/** The allocator's high-water mark over every observation ever committed, and the ordinals one author gave twice. */
 export function foldReceipts(set: VaultEventSet): ReceiptIntegrity {
   let max = 0n;
   const byKey = groupBy(set.of("message.in"), (event) => `${event.author} ${event.data.receiptOrdinal}`);
@@ -247,19 +258,20 @@ export function foldReceipts(set: VaultEventSet): ReceiptIntegrity {
 /**
  * Each authenticated source that brought a proof, read on its own.
  * The claims are checked against the carrier first, which needs no
- * document; the signature's verdict comes from the checks beside the
- * fold. A verified proof names the peer's predecessor; with the
- * carrier's own endpoints it is a link, provided the predecessor is
- * not our own DID. One carrier's verdict says nothing about another's.
+ * document: their form, their fit with the carrier, and that the
+ * predecessor they name is not the carrier's own local DID, since no
+ * document makes a pair of one DID with itself. The signature's
+ * verdict comes from the checks beside the fold. A verified proof
+ * names the peer's predecessor; with the carrier's own endpoints it is
+ * a link. One carrier's verdict says nothing about another's.
  */
 export function foldCarriers(sources: ReadonlyMap<EventId, Source>, proofChecks: ReadonlyMap<EventId, EvidenceCheck>): Map<EventId, Carrier> {
   const carriers = new Map<EventId, Carrier>();
   for (const source of sources.values()) {
     const { eventId, data } = source.event;
     if (data.fromPrior === null || data.presentedDid === null) continue;
-    let proof = proofOf(data.fromPrior, data.presentedDid, proofChecks.get(eventId));
     const local = source.channel?.localDid ?? null;
-    if (proof.status === "verified" && proof.claims.predecessorDid === local) proof = { status: "invalid", because: "the predecessor is the local DID" };
+    const proof = proofOf(data.fromPrior, data.presentedDid, local, proofChecks.get(eventId));
     const link: PeerLink | null =
       proof.status === "verified" && source.channel !== null && local !== null && source.standing.status === "complete"
         ? { from: channelOf(local, proof.claims.predecessorDid), to: source.channel, carrier: eventId }
@@ -269,7 +281,7 @@ export function foldCarriers(sources: ReadonlyMap<EventId, Source>, proofChecks:
   return carriers;
 }
 
-function proofOf(jwt: string, presentedDid: Did, check: EvidenceCheck | undefined): Proof {
+function proofOf(jwt: string, presentedDid: Did, local: Did | null, check: EvidenceCheck | undefined): Proof {
   let claims: CarriedClaims;
   try {
     claims = carriedClaims(jwt, presentedDid);
@@ -277,6 +289,7 @@ function proofOf(jwt: string, presentedDid: Did, check: EvidenceCheck | undefine
     if (!(err instanceof InvalidFromPrior)) throw err;
     return { status: "invalid", because: err.message };
   }
+  if (local !== null && claims.predecessorDid === local) return { status: "invalid", because: "the predecessor is the local DID" };
   if (check === undefined) return { status: "pending-proof" };
   if (check === "invalid") return { status: "invalid", because: "the proof does not verify under the issuer's document" };
   return { status: "verified", claims };
@@ -284,18 +297,21 @@ function proofOf(jwt: string, presentedDid: Did, check: EvidenceCheck | undefine
 
 /**
  * Each rotation decision checked against its own fields: both entities
- * consistent and created, the successor another DID than both old
- * endpoints, the frozen proof spelled over the two entities' exact
- * long forms and verified under the predecessor's document, and the
- * source, when named, a positive observation in the very pair the
- * decision rotates away from. What the predecessor was confirmed by is
- * the graph's question, not asked here.
+ * consistent, created and confirmed by the seed, the successor another
+ * DID than both old endpoints, the frozen proof spelled over the two
+ * entities' exact long forms and verified under the predecessor's
+ * document, and the source, when named, a positive observation in the
+ * very pair the decision rotates away from. A source that can never be
+ * positive — anonymous, its authentication contradicted, its proof
+ * refused — is a conflict; one whose evidence may still arrive leaves
+ * the decision pending. What the predecessor was confirmed by is the
+ * graph's question, not asked here.
  */
 export function foldDecisions(
   set: VaultEventSet,
   routes: RouteFold,
   sources: ReadonlyMap<EventId, Source>,
-  positive: (sourceEventId: EventId) => boolean,
+  carriers: ReadonlyMap<EventId, Carrier>,
   proofChecks: ReadonlyMap<EventId, EvidenceCheck>
 ): Map<EventId, Decision> {
   const decisions = new Map<EventId, Decision>();
@@ -304,7 +320,7 @@ export function foldDecisions(
     const from = routes.dids.get(data.fromDidId);
     const to = routes.dids.get(data.toDidId);
     const channel = from?.created == null || from.conflict || from.created.did === data.peerDid ? null : channelOf(from.created.did, data.peerDid);
-    const status = decisionStatus(event, from, to, channel, set, sources, positive, proofChecks.get(event.eventId));
+    const status = decisionStatus(event, from, to, channel, set, sources, carriers, proofChecks.get(event.eventId));
     decisions.set(event.eventId, { event, channel, status });
   }
   return decisions;
@@ -317,7 +333,7 @@ function decisionStatus(
   channel: Channel | null,
   set: VaultEventSet,
   sources: ReadonlyMap<EventId, Source>,
-  positive: (sourceEventId: EventId) => boolean,
+  carriers: ReadonlyMap<EventId, Carrier>,
   check: EvidenceCheck | undefined
 ): DecisionStatus {
   const { data } = event;
@@ -348,15 +364,21 @@ function decisionStatus(
   if (resolved.status === "missing") return pending("the source it names is not here");
   if (resolved.status === "mismatched") return conflict(`the source it names is a ${resolved.event.type}`);
   const source = sources.get(data.sourceEventId)!;
+  if (source.event.data.peerResolutionEventId === null) return conflict("the source is anonymous, in no pair");
   if (source.channel !== null && channelKey(source.channel) !== channelKey(channel)) return conflict("the source is not in the pair the decision rotates away from");
   if (source.standing.status === "conflict") return conflict(`the source's authentication is in conflict: ${source.standing.because}`);
-  if (!positive(data.sourceEventId)) return pending("the source is not yet positive");
+  if (source.standing.status === "incomplete") return pending(`the source's authentication is incomplete: ${source.standing.because}`);
+  const carrier = carriers.get(data.sourceEventId);
+  if (carrier?.proof.status === "invalid") return conflict(`the source's proof is invalid: ${carrier.proof.because}`);
+  if (carrier?.proof.status === "pending-proof") return pending("the source's proof is not yet verified");
   return { status: "candidate", link };
 }
 
+/** The entity's consistent creation once the seed has confirmed its keys; otherwise why the decision cannot pass yet, or ever. */
 function creationOf(entity: LocalDidEntity | undefined, role: string): VaultData["did.created"] | DecisionStatus {
-  if (entity?.conflict === true) return { status: "conflict", because: `the ${role} entity is in conflict` };
+  if (entity?.conflict === true) return { status: "conflict", because: `the ${role} entity is in conflict: ${entity.faults[0]}` };
   if (entity?.created == null) return { status: "pending", because: `the ${role} entity has no consistent creation here` };
+  if (entity.identity === "unchecked") return { status: "pending", because: `the ${role} entity's keys are not yet checked against the seed` };
   return entity.created;
 }
 
@@ -365,8 +387,11 @@ function creationOf(entity: LocalDidEntity | undefined, role: string): VaultData
  * `from_prior` against the document its issuer's long form derives or
  * a verified retained resolution of its short form retains, each
  * decision's frozen proof against the document its own long-form
- * issuer derives. No verdict while the issuer's document is not here;
- * a claim the fold can refuse without the document is left to it.
+ * issuer derives. A proof whose form or carrier claims fail, or a
+ * decision's whose issuer is not a long form, is invalid before any
+ * document is asked for; otherwise there is no verdict while the
+ * issuer's document is not here. What depends on the local endpoint,
+ * the entities' creations or the source is the fold's to refuse.
  */
 export async function verifyProofs(set: VaultEventSet, resolutionChecks: ReadonlyMap<EventId, EvidenceCheck>, readObject: ReadObject): Promise<Map<EventId, EvidenceCheck>> {
   const retained: VaultData["peer.resolved"][] = [];

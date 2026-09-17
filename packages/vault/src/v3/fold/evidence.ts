@@ -12,6 +12,7 @@ import { canonicalize, isJsonObject, parseStrict, type JsonObject } from "@estoc
 import { rawCidOfBytes } from "../document.js";
 import { InvalidDidDocument, InvalidPublicKey } from "../errors.js";
 import { authorizedMethodIds, canonicalDidOf, methodPublicKey, peerResolution } from "../peer-document.js";
+import { KEY_AGREEMENT_TYPES, decodePublicKey } from "../public-key.js";
 import type { Cid, EventId, VaultData } from "../types.js";
 import type { VaultEventSet } from "./set.js";
 
@@ -70,8 +71,11 @@ const sameIds = (a: readonly string[], b: readonly string[]) => a.length === b.l
  * Every `peer.resolved` event's snapshot checked against its own
  * document: the method IDs it enumerates are exactly the ones the
  * document authorizes, in document order, and the key it
- * authenticates is one of them. No verdict while the object is not
- * here.
+ * authenticates is one the document authorizes for key agreement, of
+ * a type that agrees keys. A receipt is decrypted and a package
+ * encrypted to a key-agreement key alone; the authentication methods
+ * sign proofs and never stand in for one. No verdict while the object
+ * is not here.
  */
 export async function verifyResolutions(set: VaultEventSet, readObject: ReadObject): Promise<Map<EventId, EvidenceCheck>> {
   const checks = new Map<EventId, EvidenceCheck>();
@@ -84,7 +88,7 @@ export async function verifyResolutions(set: VaultEventSet, readObject: ReadObje
       const keyAgreement = authorizedMethodIds(document, "keyAgreement");
       if (!sameIds(authentication, data.authenticationMethodIds)) throw new InvalidDidDocument("the authentication methods are not the document's");
       if (!sameIds(keyAgreement, data.keyAgreementMethodIds)) throw new InvalidDidDocument("the key-agreement methods are not the document's");
-      const keys = [...authentication, ...keyAgreement].flatMap((id) => {
+      const keys = keyAgreement.flatMap((id) => {
         try {
           return [methodPublicKey(document, id)];
         } catch (err) {
@@ -92,7 +96,9 @@ export async function verifyResolutions(set: VaultEventSet, readObject: ReadObje
           throw err;
         }
       });
-      if (!keys.includes(data.peerPublicKey)) throw new InvalidDidDocument(`${data.peerPublicKey} is not a key the document authorizes`);
+      if (!keys.includes(data.peerPublicKey)) throw new InvalidDidDocument(`${data.peerPublicKey} is not a key the document authorizes for key agreement`);
+      const { type } = decodePublicKey(data.peerPublicKey);
+      if (!KEY_AGREEMENT_TYPES.has(type)) throw new InvalidDidDocument(`${data.peerPublicKey} is a ${type} key, which agrees no keys`);
       checks.set(event.eventId, "verified");
     } catch (err) {
       if (!(err instanceof InvalidDidDocument || err instanceof InvalidPublicKey)) throw err;
