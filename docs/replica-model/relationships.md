@@ -6,7 +6,6 @@
 
 Status: **draft, phase 1** — ordinary DIDComm channels, discovery and
 early private-address allocation for one active writable vault runtime.
-Multi-replica mediation, vault synchronization and [mutable channel DIDs](did-web-channels.md) are deferred.
 Phase-1 channel endpoints support only `did:peer:4`; mediator DID resolution
 is independent of that restriction.
 
@@ -41,7 +40,7 @@ and **MAY** as described in BCP 14 when they appear in all capitals.
 - [12. Peer address changes](#peer-address-changes)
 - [13. Remote errors and integrity failures](#remote-errors-and-integrity-failures)
 - [14. Retry, manual resend and address rollover](#retry-replacement-and-address-rollover)
-- [15. Phase-1 execution and deferred replication](#phase-1-execution-and-deferred-replication)
+- [15. Execution and recovery](#execution-and-recovery)
 - [16. Privacy, abuse, interoperability and security](#privacy-abuse-interoperability-and-security)
 - [17. Required conformance cases](#required-conformance-cases)
 
@@ -81,8 +80,7 @@ A conforming implementation uses:
 - [vault-events.md](vault-events.md).
 
 Phase 1 uses ordinary Coordinate Mediation and account-scoped Message Pickup
-when a mediator is used. `replica-mediation/1.0` and `vault-sync/1.0` are
-informative deferred extensions, not dependencies of this profile.
+when a mediator is used.
 
 Every instruction to append an event in this document means
 `Vault.commit(objects, drafts)`, with an empty object list when none are new;
@@ -444,20 +442,6 @@ authorized key IDs rather than local key-name conventions. A mediator lookup
 failure grants no application dispatch authority and does not prove that a
 channel peer's immutable key changed. Live prerequisite retries follow section 14.
 
-<a id="resolution-failure-classification"></a>
-<a id="inbound-sender-resolution-budget"></a>
-<a id="active-time-retention-limits"></a>
-<a id="shared-accounting-and-lost-wait-state"></a>
-<a id="exhaustion-and-non-resolution-deferral"></a>
-<a id="key-changes-without-did-continuation"></a>
-
-#### Deferred mutable channel resolution
-
-Mutable channel document revisions, network failure classification and inbound
-sender-resolution accounting belong only to the
-[deferred channel extension](did-web-channels.md#candidate-network-resolution-rules).
-They are not phase-1 channel requirements.
-
 <a id="evidence-change-retries"></a>
 
 #### Evidence-change retries
@@ -664,7 +648,7 @@ network prerequisite attempt budget per active sequence = 32
 
 These network bounds apply to mediation and transport prerequisites, not
 phase-1 channel DID or predecessor-proof resolution, which is local. Pickup,
-recipient reconciliation and sync may retry normally;
+recipient reconciliation may retry normally;
 they are not replay of a user message.
 
 Message retries and new sends follow [dispatch authority](channels.md#fixed-outbound-channel):
@@ -673,16 +657,12 @@ requires a new message ID. Neither missing history nor a new send proves that
 the original was undelivered. Business idempotency requires a protocol-defined
 authenticated operation identity.
 
-<a id="phase-1-execution-and-deferred-replication"></a>
+<a id="execution-and-recovery"></a>
 
-## 15. Phase-1 execution and deferred replication
+## 15. Execution and recovery
 
 Phase 1 permits one active executor. Import/restore reconstructs state but
 grants no dispatch action for historical intents or automatic responses.
-Replicas may later synchronize receipts, proof evidence, local decisions and
-contact selections, rebuilding links without
-automatically taking over another replica's pending outbox. Multi-executor
-automatic reactions require a separately specified coordination policy.
 
 <a id="privacy-abuse-interoperability-and-security"></a>
 
@@ -704,153 +684,133 @@ roll back; explicit new communication is a new channel and new message.
 
 ## 17. Required conformance cases
 
-Entries marked Deferred preserve their case IDs but are not phase-1 requirements.
-
 
 <a id="did-identity-and-relationship-birth-rz-1-rz-12"></a>
 
 ### DID identity and operation evidence (RZ-1–RZ-12)
 
-1. <a id="rz-1"></a> Peer-DID first disclosure validates its long form, canonical short form, fixed keys and bound route without DNS.
-2. <a id="rz-2"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-2).
+- <a id="rz-1"></a> **RZ-1.** Peer-DID first disclosure validates its long form, canonical short form, fixed keys and bound route without DNS.
+- <a id="rz-3"></a> **RZ-3.** No emitted message uses an Estoc rendezvous request, accept or decline type, or a wire contact ID.
+- <a id="rz-4"></a> **RZ-4.** Public/public, public/pairwise and pairwise/pairwise pairs use the same channel receipt and operation-evidence rules.
 
-3. <a id="rz-3"></a> No emitted message uses an Estoc rendezvous request, accept or decline type, or a wire contact ID.
-4. <a id="rz-4"></a> Public/public, public/pairwise and pairwise/pairwise pairs use the same channel receipt and operation-evidence rules.
+- <a id="rz-5"></a> **RZ-5.** Channel identity preserves canonical local/peer roles: C(A,B) differs from C(B,A), and changing either endpoint changes the channel. Contacts and document references do not enter this pair.
 
-5. <a id="rz-5"></a> Channel identity preserves canonical local/peer roles: C(A,B) differs from C(B,A), and changing either endpoint changes the channel. Contacts and document references do not enter this pair.
+- <a id="rz-6"></a> **RZ-6.** Validated Peer long/short spellings name one channel endpoint; shared keys, endpoints and labels do not alias distinct DIDs.
 
-6. <a id="rz-6"></a> Validated Peer long/short spellings name one channel endpoint; shared keys, endpoints and labels do not alias distinct DIDs.
+- <a id="rz-7"></a> **RZ-7.** Opposite first sends use one local/peer pair in each vault and distinct sender/recipient message directions; unsolicited receipt neither consumes an invitation nor creates a contact.
 
-7. <a id="rz-7"></a> Opposite first sends use one local/peer pair in each vault and distinct sender/recipient message directions; unsolicited receipt neither consumes an invitation nor creates a contact.
+- <a id="rz-8"></a> **RZ-8.** Another independently authorized key in the same immutable document preserves sender/recipient/wire-ID identity without creating a contact.
 
-8. <a id="rz-8"></a> Another independently authorized key in the same immutable document preserves sender/recipient/wire-ID identity without creating a contact.
+- <a id="rz-9"></a> **RZ-9.** A live public channel can carry ordinary content before a reply or private allocation.
 
-9. <a id="rz-9"></a> A live public channel can carry ordinary content before a reply or private allocation.
+- <a id="rz-10"></a> **RZ-10.** Offline intent commits its fixed sender/recipient pair without DNS; first preparation resolves, validates and commits the exact peer evidence.
 
-10. <a id="rz-10"></a> Offline intent commits its fixed sender/recipient pair without DNS; first preparation resolves, validates and commits the exact peer evidence.
+- <a id="rz-11"></a> **RZ-11.** Preparation validates the fixed-channel intent and exact immutable recipient document. Long/short spelling cannot create a second document or a union of authorized keys.
 
-11. <a id="rz-11"></a> Preparation validates the fixed-channel intent and exact immutable recipient document. Long/short spelling cannot create a second document or a union of authorized keys.
-
-12. <a id="rz-12"></a> One local DID with two different peer DIDs has two independent channels without exclusive local-DID ownership.
+- <a id="rz-12"></a> **RZ-12.** One local DID with two different peer DIDs has two independent channels without exclusive local-DID ownership.
 
 <a id="address-changes-and-ordinary-replies-rz-13-rz-25"></a>
 
 ### Address changes and ordinary replies (RZ-13–RZ-25)
 
-13. <a id="rz-13"></a> A local rotation in C(A0,B0) leaves C(A0,C0) and public disclosure of A0 unchanged.
+- <a id="rz-13"></a> **RZ-13.** A local rotation in C(A0,B0) leaves C(A0,C0) and public disclosure of A0 unchanged.
 
-14. <a id="rz-14"></a> Either endpoint rotation creates another channel; old message and execution identities remain unchanged and graph discovery never merges them.
+- <a id="rz-14"></a> **RZ-14.** Either endpoint rotation creates another channel; old message and execution identities remain unchanged and graph discovery never merges them.
 
-15. <a id="rz-15"></a> Early privacy uses a normal local channel link, fresh UUIDv7 successor and frozen trigger/proof.
+- <a id="rz-15"></a> **RZ-15.** Early privacy uses a normal local channel link, fresh UUIDv7 successor and frozen trigger/proof.
 
-16. <a id="rz-16"></a> A committed successor/local rotation decision survives crash with exact route, keys, JWT, iat and source; its link rebuilds and no notification dispatches automatically on reopen.
+- <a id="rz-16"></a> **RZ-16.** A committed successor/local rotation decision survives crash with exact route, keys, JWT, iat and source; its link rebuilds and no notification dispatches automatically on reopen.
 
-17. <a id="rz-17"></a> Missing optional private allocation does not prevent an ordinary public-address reply or a separately eligible invitation consumption.
+- <a id="rz-17"></a> **RZ-17.** Missing optional private allocation does not prevent an ordinary public-address reply or a separately eligible invitation consumption.
 
-18. <a id="rz-18"></a> Normal Trust Ping selects ping-response; response_requested false is still received and may get an independent Empty rotation notification.
-19. <a id="rz-19"></a> Content-first Basic Message remains its own application message without a rendezvous wrapper.
-20. <a id="rz-20"></a> A complete control source may supply authenticated ACK evidence, but creates no contact or recursive privacy notification. Invitation consumption remains a separate decision.
+- <a id="rz-18"></a> **RZ-18.** Normal Trust Ping selects ping-response; response_requested false is still received and may get an independent Empty rotation notification.
+- <a id="rz-19"></a> **RZ-19.** Content-first Basic Message remains its own application message without a rendezvous wrapper.
+- <a id="rz-20"></a> **RZ-20.** A complete control source may supply authenticated ACK evidence, but creates no contact or recursive privacy notification. Invitation consumption remains a separate decision.
 
-21. <a id="rz-21"></a> Generic pure ACK has no ACK request. ACK, Ping reply and privacy notification use independent intents; the latter two have empty ack arrays.
-22. <a id="rz-22"></a> New successor messages carry frozen proof/long form until confirmation; committed packages remain exact after confirmation, including before their first send.
+- <a id="rz-21"></a> **RZ-21.** Generic pure ACK has no ACK request. ACK, Ping reply and privacy notification use independent intents; the latter two have empty ack arrays.
+- <a id="rz-22"></a> **RZ-22.** New successor messages carry frozen proof/long form until confirmation; committed packages remain exact after confirmation, including before their first send.
 
-23. <a id="rz-23"></a> Input at the exact successor confirms rotation; input at a predecessor does not. Explicit ACK naming a message remains separate.
-24. <a id="rz-24"></a> A local link needs exact predecessor confirmation; no second same-side link is authorized before its predecessor is known by the peer.
+- <a id="rz-23"></a> **RZ-23.** Input at the exact successor confirms rotation; input at a predecessor does not. Explicit ACK naming a message remains separate.
+- <a id="rz-24"></a> **RZ-24.** A local link needs exact predecessor confirmation; no second same-side link is authorized before its predecessor is known by the peer.
 
-25. <a id="rz-25"></a> Both live recipient routes remain during rotation overlap. Shared routes/addresses survive until unrelated users no longer need them.
+- <a id="rz-25"></a> **RZ-25.** Both live recipient routes remain during rotation overlap. Shared routes/addresses survive until unrelated users no longer need them.
 
 <a id="peer-continuation-and-integrity-rz-26-rz-35"></a>
 
 ### Peer continuation and integrity (RZ-26–RZ-35)
 
-26. <a id="rz-26"></a> Successor proof at different local addresses needs the corresponding complete source/endpoint evidence or a verified join; no contact lookup is required.
+- <a id="rz-26"></a> **RZ-26.** Successor proof at different local addresses needs the corresponding complete source/endpoint evidence or a verified join; no contact lookup is required.
 
-27. <a id="rz-27"></a> Complete opposite-side links with one exact predecessor pair justify the diagonal channel in either import order without synthetic observations.
+- <a id="rz-27"></a> **RZ-27.** Complete opposite-side links with one exact predecessor pair justify the diagonal channel in either import order without synthetic observations.
 
-28. <a id="rz-28"></a> Forged proof, wrong sub, unrelated channel context, unauthorized signing key or mismatched predecessor resolution cannot authorize a link.
+- <a id="rz-28"></a> **RZ-28.** Forged proof, wrong sub, unrelated channel context, unauthorized signing key or mismatched predecessor resolution cannot authorize a link.
 
-29. <a id="rz-29"></a> Repeated proof can reuse a complete witness in the same permitted context; its new carrier independently authenticates against the successor's immutable document.
+- <a id="rz-29"></a> **RZ-29.** Repeated proof can reuse a complete witness in the same permitted context; its new carrier independently authenticates against the successor's immutable document.
 
-30. <a id="rz-30"></a> Competing same-side successors, authorization cycles and contradictory identity evidence expose conflict without arrival-order winners; equivalent DID spellings do not split that context.
+- <a id="rz-30"></a> **RZ-30.** Competing same-side successors, authorization cycles and contradictory identity evidence expose conflict without arrival-order winners; equivalent DID spellings do not split that context.
 
-31. <a id="rz-31"></a> Missing required source/endpoint/proof records defer derived continuity while authenticated receipt still commits and pickup-ACKs; UI distinguishes missing proof from missing history. Invitation state is separate and cannot defer an otherwise complete link.
+- <a id="rz-31"></a> **RZ-31.** Missing required source/endpoint/proof records defer derived continuity while authenticated receipt still commits and pickup-ACKs; UI distinguishes missing proof from missing history. Invitation state is separate and cannot defer an otherwise complete link.
 
-32. <a id="rz-32"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-32).
+- <a id="rz-33"></a> **RZ-33.** Verified peer supersession refuses new old-peer work through its local-only context, preserves prior receipts and decisions, and leaves unrelated public-DID channels unaffected.
 
-33. <a id="rz-33"></a> Verified peer supersession refuses new old-peer work through its local-only context, preserves prior receipts and decisions, and leaves unrelated public-DID channels unaffected.
+- <a id="rz-34"></a> **RZ-34.** A matching invitation.consumed assigns a one-use disclosure to its proof-free source's canonical peer; plain receipt, continuation and pthid alone do not.
 
-34. <a id="rz-34"></a> A matching invitation.consumed assigns a one-use disclosure to its proof-free source's canonical peer; plain receipt, continuation and pthid alone do not.
-
-35. <a id="rz-35"></a> Same-channel consumption is idempotent; unavailable invitations refuse another consumer and imported incompatible consumers conflict. Crash/erasure never reopen consumption.
+- <a id="rz-35"></a> **RZ-35.** Same-channel consumption is idempotent; unavailable invitations refuse another consumer and imported incompatible consumers conflict. Crash/erasure never reopen consumption.
 
 <a id="recipient-lifecycle-rz-36-rz-38"></a>
 
 ### Recipient lifecycle (RZ-36–RZ-38)
 
-36. <a id="rz-36"></a> A retired local DID permits no new invitation consumption or sending, but retained keys may receive on eligible routes without continuity history.
+- <a id="rz-36"></a> **RZ-36.** A retired local DID permits no new invitation consumption or sending, but retained keys may receive on eligible routes without continuity history.
 
-37. <a id="rz-37"></a> A terminal route or mediation rejects input; temporary missing key/route/recovery prerequisites defer without pickup ACK.
-38. <a id="rz-38"></a> Wrong recipient DID or method fragment, authentication-purpose kid and unknown Peer short form are terminal before application state.
+- <a id="rz-37"></a> **RZ-37.** A terminal route or mediation rejects input; temporary missing key/route/recovery prerequisites defer without pickup ACK.
+- <a id="rz-38"></a> **RZ-38.** Wrong recipient DID or method fragment, authentication-purpose kid and unknown Peer short form are terminal before application state.
 
 <a id="resolution-freshness-and-budgets-rz-39-rz-45"></a>
 
 ### Resolution freshness and budgets (RZ-39–RZ-45)
 
-39. <a id="rz-39"></a> Every new delivery, including a duplicate, authenticates its current sender. Recovery of already committed channel evidence does not re-resolve the sender to admit scope.
+- <a id="rz-39"></a> **RZ-39.** Every new delivery, including a duplicate, authenticates its current sender. Recovery of already committed channel evidence does not re-resolve the sender to admit scope.
 
-40. <a id="rz-40"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-40).
-
-41. <a id="rz-41"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-41).
-
-42. <a id="rz-42"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-42).
-
-43. <a id="rz-43"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-43).
-
-44. <a id="rz-44"></a> Recipient preparation uses locally validated long-form evidence; a committed package never replaces its snapshot or channel, even if it has never been sent.
-
-45. <a id="rz-45"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-45).
+- <a id="rz-44"></a> **RZ-44.** Recipient preparation uses locally validated long-form evidence; a committed package never replaces its snapshot or channel, even if it has never been sent.
 
 <a id="completion-contact-policy-and-phase-boundary-rz-46-rz-54"></a>
 
 ### Completion, contact policy and phase boundary (RZ-46–RZ-54)
 
-46. <a id="rz-46"></a> Queued, prepared and submitted messages retain their fixed channel after either endpoint rotates; a successor send has a new ID.
+- <a id="rz-46"></a> **RZ-46.** Queued, prepared and submitted messages retain their fixed channel after either endpoint rotates; a successor send has a new ID.
 
-47. <a id="rz-47"></a> Submission stops further preparation and retry; missing ACK and duplicate receipt never reopen it.
+- <a id="rz-47"></a> **RZ-47.** Submission stops further preparation and retry; missing ACK and duplicate receipt never reopen it.
 
-48. <a id="rz-48"></a> Expiry and bounded prerequisite retries are independent of incoming age and rotation iat; transport retries require manual action.
+- <a id="rz-48"></a> **RZ-48.** Expiry and bounded prerequisite retries are independent of incoming age and rotation iat; transport retries require manual action.
 
-49. <a id="rz-49"></a> Contact channel selection is independent of invitation consumption; control-only channels need no invented contact.
+- <a id="rz-49"></a> **RZ-49.** Contact channel selection is independent of invitation consumption; control-only channels need no invented contact.
 
-50. <a id="rz-50"></a> Contact membership changes no invitation consumer, verification evidence, continuation, message identity or ACK authorization.
+- <a id="rz-50"></a> **RZ-50.** Contact membership changes no invitation consumer, verification evidence, continuation, message identity or ACK authorization.
 
-51. <a id="rz-51"></a> Deleting a contact changes display only; an explicit delete-and-block action writes channel denials without retiring shared resources.
+- <a id="rz-51"></a> **RZ-51.** Deleting a contact changes display only; an explicit delete-and-block action writes channel denials without retiring shared resources.
 
-52. <a id="rz-52"></a> A remote problem report needs exact channel/path correlation and readable body; it changes no submission or continuity state.
+- <a id="rz-52"></a> **RZ-52.** A remote problem report needs exact channel/path correlation and readable body; it changes no submission or continuity state.
 
-53. <a id="rz-53"></a> An unconfirmed successor with a terminal route cannot branch or roll back; temporary outage does not invoke this terminal limitation.
-54. <a id="rz-54"></a> Phase-1 operation needs no replica-mediation or vault-sync implementation and discloses no replica ID to peers.
+- <a id="rz-53"></a> **RZ-53.** An unconfirmed successor with a terminal route cannot branch or roll back; temporary outage does not invoke this terminal limitation.
+- <a id="rz-54"></a> **RZ-54.** Recovery reconstructs state for one active executor, grants no dispatch action for historical work and discloses no replica ID to peers.
 
 <a id="receipt-recovery-and-evidence-fixtures-rz-55-rz-61"></a>
 
 ### Receipt recovery, method boundaries and evidence fixtures (RZ-55–RZ-64)
 
-55. <a id="rz-55"></a> Receipt precedes invitation consumption and other concrete source-derived work. Crash retains each committed prefix; only a complete consumption records a consumer, and no prefix dispatches automatically on reopen.
+- <a id="rz-55"></a> **RZ-55.** Receipt precedes invitation consumption and other concrete source-derived work. Crash retains each committed prefix; only a complete consumption records a consumer, and no prefix dispatches automatically on reopen.
 
-56. <a id="rz-56"></a> Confirmation in an unrelated channel does not permit short-form disclosure or proof omission; validated equivalent predecessor spellings verify against the exact retained method evidence.
+- <a id="rz-56"></a> **RZ-56.** Confirmation in an unrelated channel does not permit short-form disclosure or proof omission; validated equivalent predecessor spellings verify against the exact retained method evidence.
 
-57. <a id="rz-57"></a> The phase-1 adapter saves authenticated carriers with the unchanged proof while predecessor evidence is pending or the proof is invalid. Proof verification never delays pickup ACK. Definitive envelope/authentication failures are terminal pre-vault input; recoverable local receive prerequisites still wait. Restore validates local links, and proof-free input alone consumes no invitation.
+- <a id="rz-57"></a> **RZ-57.** The phase-1 adapter saves authenticated carriers with the unchanged proof while predecessor evidence is pending or the proof is invalid. Proof verification never delays pickup ACK. Definitive envelope/authentication failures are terminal pre-vault input; recoverable local receive prerequisites still wait. Restore validates local links, and proof-free input alone consumes no invitation.
 
-58. <a id="rz-58"></a> Long/short Peer spellings retain the same canonical document CID and cannot create another document revision by resolver transformation.
+- <a id="rz-58"></a> **RZ-58.** Long/short Peer spellings retain the same canonical document CID and cannot create another document revision by resolver transformation.
 
-59. <a id="rz-59"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-59).
+- <a id="rz-60"></a> **RZ-60.** Protocol-derived display data retains its exact source channel. A displayed peer name creates no contact and changes no petname; a contact can show several chains but transfers no authority or permission to share information. Body-dependent values disappear when their sources are erased; contact petnames remain independent.
 
-60. <a id="rz-60"></a> Protocol-derived display data retains its exact source channel. A displayed peer name creates no contact and changes no petname; a contact can show several chains but transfers no authority or permission to share information. Body-dependent values disappear when their sources are erased; contact petnames remain independent.
+- <a id="rz-62"></a> **RZ-62.** Both channel endpoints and every continuity predecessor use numalgo 4. An unsupported current sender fails the receive gate; an unsupported proof issuer grants no continuity and causes no network fetch while preserving otherwise authenticated receipt. Mediator Web resolution remains available independently.
 
-61. <a id="rz-61"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#rz-61).
+- <a id="rz-63"></a> **RZ-63.** A well-formed short-form proof issuer with no local long form stays pending-proof after durable receipt and pickup ACK. No timer or reopen starts network resolution or turns it invalid. Matching validated material later triggers verification of the saved JWT without another receipt or automatic output. Wrong sub, malformed claims or an inconsistent kid are invalid even when issuer material is missing; an unknown current-sender short form still cannot authenticate receipt.
 
-62. <a id="rz-62"></a> Both channel endpoints and every continuity predecessor use numalgo 4. An unsupported current sender fails the receive gate; an unsupported proof issuer grants no continuity and causes no network fetch while preserving otherwise authenticated receipt. Mediator Web resolution remains available independently.
-
-63. <a id="rz-63"></a> A well-formed short-form proof issuer with no local long form stays pending-proof after durable receipt and pickup ACK. No timer or reopen starts network resolution or turns it invalid. Matching validated material later triggers verification of the saved JWT without another receipt or automatic output. Wrong sub, malformed claims or an inconsistent kid are invalid even when issuer material is missing; an unknown current-sender short form still cannot authenticate receipt.
-
-64. <a id="rz-64"></a> After a local decision (A0,B0) to A1, a valid B0-to-B1 carrier received at A0 reuses that decision through the verified peer-only context. It selects neither A2 nor another notification; new user sends default to C(A1,B1). A local producer uses long-form issuer and kid in its frozen proof; a received short-form issuer can verify with matching local material without rewriting signed bytes.
+- <a id="rz-64"></a> **RZ-64.** After a local decision (A0,B0) to A1, a valid B0-to-B1 carrier received at A0 reuses that decision through the verified peer-only context. It selects neither A2 nor another notification; new user sends default to C(A1,B1). A local producer uses long-form issuer and kid in its frozen proof; a received short-form issuer can verify with matching local material without rewriting signed bytes.

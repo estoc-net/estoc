@@ -5,8 +5,7 @@
 <!-- suite-navigation:end -->
 
 Status: **draft, phase 1** — phase-1 delivery profile for one active full vault
-runtime. The identifiers and folds are future-safe for replication, but
-`replica-mediation/1.0` and multi-writer execution are deferred.
+runtime.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHOULD**, **SHOULD NOT**, and **MAY** as described in BCP 14 when they
@@ -104,8 +103,7 @@ among authorized routes does not change the application recipient. A direct
 endpoint MUST NOT expose a replica ID as the peer-visible recipient.
 
 The phase-1 mediator uses ordinary account-scoped Message Pickup with one
-active pickup client. The deferred `replica-mediation/1.0` extension may later
-fan out an already encrypted package without changing the innermost recipient.
+active pickup client.
 
 A valid `from_prior` justifies one endpoint replacement in its exact channel context.
 Unrelated channels using that address retain their own endpoint decisions.
@@ -114,9 +112,7 @@ Unrelated channels using that address retain their own endpoint decisions.
 
 ### 3.1 Phase-1 mediator envelope and storage profile
 
-The no-plaintext mediator boundary is a phase-1 requirement and is independent
-of replica fan-out. Before storing a Routing 2.0 `forward`, the mediator MUST
-require:
+Before storing a Routing 2.0 `forward`, the mediator MUST require:
 
 1. an outer DIDComm encrypted message addressed to the mediator;
 2. a valid `body.next` that maps to the mediation account itself or a recipient
@@ -155,10 +151,10 @@ The mediator applies one recipient profile to all communication DIDs.
 Public/private allocation is not sent to it. HTTP or
 mediator acceptance means only `submitted`; ultimate acknowledgment still
 requires an authenticated application plaintext whose explicit `ack` names the
-wire ID. Phase-1 transports define no permanent-rejection result. HTTP errors,
-including 400 and 413, timeouts, disconnects and remote Problem Reports supply
-only local failure diagnostics, not `delivery.failed(code="rejected")`. An
-unsuccessful or uncertain call leaves manual work and grants no automatic retry.
+wire ID. HTTP errors, including 400 and 413, timeouts, disconnects and remote
+Problem Reports supply only local failure diagnostics. They MUST NOT append
+`delivery.failed`. An unsuccessful or uncertain call leaves manual work and
+grants no automatic retry.
 
 The mediator MUST bound normalized envelope size, retained ciphertext bytes,
 retained message count, registered recipients, recipient-update rate, pickup
@@ -241,8 +237,8 @@ this message's work and performs these steps:
    action. Release the lock, consume that action's one invocation locally and
    call transport with the exact envelope and package ID.
 5. Record transport acceptance as `delivery.submitted` naming the message/package.
-   Other phase-1 transport outcomes stay in local trace and MUST NOT produce
-   `delivery.failed(code="rejected")`. Failure/uncertainty grants no next call;
+   Other transport outcomes stay in local trace and MUST NOT produce
+   `delivery.failed`. Failure/uncertainty grants no next call;
    explicit cancellation and expiry follow [termination](vault-events.md#delivery-failed).
 
 Keep per-message dispatch serialized across this procedure, without holding
@@ -452,12 +448,8 @@ submission. Later ACK evidence can report receipt without reopening anything.
 Explicit cancellation commits message-scoped `delivery.failed` with code
 `cancelled` under [the termination rules](vault-events.md#delivery-failed),
 stopping pending work without claiming nondelivery.
-Every complete valid `delivery.failed` terminates the message. Its closed code
-set and nullable package reference follow the same termination schema; no
-separate package termination can permit replacement. A failure missing its
-required preparation remains pending evidence under that schema: it blocks
-preparation/dispatch but does not yet contribute a terminal displayed outcome
-or release envelope retention. Complete submission still takes precedence.
+Valid expiry or cancellation terminates the entire intent without depending
+on preparation evidence. Complete submission still takes precedence.
 Erasure, security denial, key/route retirement and missing exact bytes separately
 govern manual retry. Ordinary address rotation selects new messages only.
 
@@ -707,7 +699,7 @@ The unpadded base64url key determines the outbound message and wire ID under
 stores the tuple and intent and defines their validation; conflicts follow
 [the delivery fold](vault-events.md#outbound-message-and-delivery-fold).
 
-Under the operation lock in [event-store.md section 10](event-store.md#vault-interface),
+Under the operation lock in [event-store.md section 9](event-store.md#vault-interface),
 check the specific operation's source, current policy and usable authorized
 sender. Derive its tuple and look up its message ID before freezing targets,
 timing, channel or other fields. Reuse an existing non-conflicted intent; do not
@@ -732,9 +724,7 @@ Other external effects MUST commit their protocol-defined portable intent
 before execution and use that protocol's idempotency or explicit at-least-once
 contract. The message fold does not validate those payloads.
 
-Phase 1 has one active writer but still makes no process-level exactly-once
-claim. A future multi-writer profile must coordinate automatic execution before
-claiming stronger behavior.
+One active writer does not provide process-level exactly-once execution.
 
 <a id="built-in-independent-operations"></a>
 
@@ -846,95 +836,91 @@ independent of this transport profile.
 Wire IDs, message types and content are visible only inside end-to-end
 encrypted application messages. Package IDs and recipient routing DIDs are
 visible to the mediator. Delivery IDs are visible to the recipient mediator.
-A future replica-mediation profile
-would additionally expose opaque replica IDs to that mediator.
 
 A disclosed rendezvous DID is intentionally correlatable within its audience.
 Pairwise DIDs SHOULD be disclosed only in encrypted messages and use
 Peer DID long form on first disclosure.
 
-Pure ACKs reveal durable receipt timing to the ultimate peer, not which
-replica received first. Implementations SHOULD NOT encode contact names,
-replica labels, event IDs or content in peer- or mediator-visible IDs.
+Pure ACKs reveal durable receipt timing to the ultimate peer. Implementations
+SHOULD NOT encode contact names, replica labels, event IDs or content in peer-
+or mediator-visible IDs.
 
 <a id="required-conformance-cases"></a>
 
 ## 15. Required conformance cases
-
-Entries marked Deferred preserve their case IDs but are not phase-1 requirements.
 
 
 <a id="intent-and-immutable-packaging-dd-1-dd-12"></a>
 
 ### Intent and immutable packaging (DD-1–DD-12)
 
-1. <a id="dd-1"></a> `message.out` commits with all networking disabled.
-2. <a id="dd-2"></a> A peer addresses a communication DID, never a replica or contact ID.
+- <a id="dd-1"></a> **DD-1.** `message.out` commits with all networking disabled.
+- <a id="dd-2"></a> **DD-2.** A peer addresses a communication DID, never a replica or contact ID.
 
-3. <a id="dd-3"></a> `pleaseAck == null` omits the wire header; an array is preserved exactly on
+- <a id="dd-3"></a> **DD-3.** `pleaseAck == null` omits the wire header; an array is preserved exactly on
    the wire.
-4. <a id="dd-4"></a> `pleaseAck == []` requests no explicit acknowledgment.
-5. <a id="dd-5"></a> `pleaseAck` containing `""` or the current wire ID requests its receipt;
+- <a id="dd-4"></a> **DD-4.** `pleaseAck == []` requests no explicit acknowledgment.
+- <a id="dd-5"></a> **DD-5.** `pleaseAck` containing `""` or the current wire ID requests its receipt;
    an array naming only older IDs does not. Neither changes submission work.
-6. <a id="dd-6"></a> A receiver accepts the standard empty-string sentinel and current-message
+- <a id="dd-6"></a> **DD-6.** A receiver accepts the standard empty-string sentinel and current-message
    ID form and expands them to the current wire ID for processing.
-7. <a id="dd-7"></a> Intent freezes `createdTime`, `expiresTime`, exact `pleaseAck`, exact `ack`
+- <a id="dd-7"></a> **DD-7.** Intent freezes `createdTime`, `expiresTime`, exact `pleaseAck`, exact `ack`
    and every supported additional header.
-8. <a id="dd-8"></a> `return_route` in vault application headers or innermost plaintext is
+- <a id="dd-8"></a> **DD-8.** `return_route` in vault application headers or innermost plaintext is
    rejected.
-9. <a id="dd-9"></a> Repeated identical preparation payloads reuse one package; a different package ID, envelope or evidence reference for the same message conflicts, even when its intent hash agrees.
-10. <a id="dd-10"></a> Retrying one package uses identical plaintext, ciphertext and package ID.
-11. <a id="dd-11"></a> Rotation cannot change an existing message's channel or committed package. Cancellation or terminal failure permits no replacement, even before its first send; changing the package requires a new message ID.
+- <a id="dd-9"></a> **DD-9.** Repeated identical preparation payloads reuse one package; a different package ID, envelope or evidence reference for the same message conflicts, even when its intent hash agrees.
+- <a id="dd-10"></a> **DD-10.** Retrying one package uses identical plaintext, ciphertext and package ID.
+- <a id="dd-11"></a> **DD-11.** Rotation cannot change an existing message's channel or committed package. Cancellation or terminal failure permits no replacement, even before its first send; changing the package requires a new message ID.
 
-12. <a id="dd-12"></a> Body, type, thread, attachment, timing, ACK policy or additional-header
+- <a id="dd-12"></a> **DD-12.** Body, type, thread, attachment, timing, ACK policy or additional-header
     changes under one wire ID produce an intent conflict.
 
 <a id="submission-and-acknowledgment-dd-13-dd-22"></a>
 
 ### Submission and acknowledgment (DD-13–DD-22)
 
-13. <a id="dd-13"></a> Transport acceptance records submitted for the exact committed message/package pair, never ultimate acknowledgment.
+- <a id="dd-13"></a> **DD-13.** Transport acceptance records submitted for the exact committed message/package pair, never ultimate acknowledgment.
 
-14. <a id="dd-14"></a> Every outbound stops all preparation/submission after committed
+- <a id="dd-14"></a> **DD-14.** Every outbound stops all preparation/submission after committed
     `delivery.submitted`, including when its `pleaseAck` requests the current
     wire ID and no ACK arrives. A later transport failure or expiry does not
     replace the submitted outcome.
-15. <a id="dd-15"></a> A deterministic response acknowledges a message only when explicit `ack`
+- <a id="dd-15"></a> **DD-15.** A deterministic response acknowledges a message only when explicit `ack`
     names its wire ID.
-16. <a id="dd-16"></a> ACK is emitted only after durable inbound commit.
-17. <a id="dd-17"></a> Pure ACK uses `pleaseAck == null`, creates no ACK loop and completes
+- <a id="dd-16"></a> **DD-16.** ACK is emitted only after durable inbound commit.
+- <a id="dd-17"></a> **DD-17.** Pure ACK uses `pleaseAck == null`, creates no ACK loop and completes
     submission at the same committed boundary as other outbounds.
-18. <a id="dd-18"></a> A pure ACK whose carrier omitted `created_time` commits
+- <a id="dd-18"></a> **DD-18.** A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
-19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution ccee59f0-8c79-5011-8822-dbb14de9cf7d, effect Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20 and wire ID 3543ac01-4ac6-5c14-b160-4f8f4e2e6811.
+- <a id="dd-19"></a> **DD-19.** The channel pure-ACK fixture derives execution ccee59f0-8c79-5011-8822-dbb14de9cf7d, effect Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20 and wire ID 3543ac01-4ac6-5c14-b160-4f8f4e2e6811.
 
-20. <a id="dd-20"></a> One carrier that requests current and older known IDs freezes one ordered
+- <a id="dd-20"></a> **DD-20.** One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
     the response effect.
-21. <a id="dd-21"></a> A valid ACK before submitted adds receipt information only; another transport call still requires manual action and the exact package.
+- <a id="dd-21"></a> **DD-21.** A valid ACK before submitted adds receipt information only; another transport call still requires manual action and the exact package.
 
-22. <a id="dd-22"></a> Duplicate input reuses its frozen response state but never dispatches it; submitted/collected responses cannot be recreated.
+- <a id="dd-22"></a> **DD-22.** Duplicate input reuses its frozen response state but never dispatches it; submitted/collected responses cannot be recreated.
 
 <a id="scope-aliases-and-conflicts-dd-23-dd-30"></a>
 <a id="scope-observations-and-conflicts-dd-23-dd-30"></a>
 
 ### Channel observations and conflicts (DD-23–DD-30)
 
-23. <a id="dd-23"></a> Authorized key variants within one sender/recipient/wire-ID input converge; inconsistent authenticated intent conflicts.
+- <a id="dd-23"></a> **DD-23.** Authorized key variants within one sender/recipient/wire-ID input converge; inconsistent authenticated intent conflicts.
 
-24. <a id="dd-24"></a> Equal wire IDs in different channels do not merge, even through verified links. Same-channel authorized variants share one execution.
+- <a id="dd-24"></a> **DD-24.** Equal wire IDs in different channels do not merge, even through verified links. Same-channel authorized variants share one execution.
 
-25. <a id="dd-25"></a> Missing source authentication, endpoint or required link evidence defers the affected automatic operation; invitation state alone does not. Later evidence validates only its channel-local execution and grants no recovery dispatch.
+- <a id="dd-25"></a> **DD-25.** Missing source authentication, endpoint or required link evidence defers the affected automatic operation; invitation state alone does not. Later evidence validates only its channel-local execution and grants no recovery dispatch.
 
-26. <a id="dd-26"></a> Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and equivalent long/short DID spellings do not cause them.
+- <a id="dd-26"></a> **DD-26.** Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and equivalent long/short DID spellings do not cause them.
 
-27. <a id="dd-27"></a> Control input with a complete source witness may supply authorized ACK evidence. It creates no contacts or recursive privacy notifications, and its type alone consumes no invitation.
+- <a id="dd-27"></a> **DD-27.** Control input with a complete source witness may supply authorized ACK evidence. It creates no contacts or recursive privacy notifications, and its type alone consumes no invitation.
 
-28. <a id="dd-28"></a> Invalid carried proof prevents link/ACK effects and cannot supply a proof-free invitation source; independently authenticated receipt is retained. Failed envelope authentication creates no receipt and follows the gate's wait or terminal rules.
+- <a id="dd-28"></a> **DD-28.** Invalid carried proof prevents link/ACK effects and cannot supply a proof-free invitation source; independently authenticated receipt is retained. Failed envelope authentication creates no receipt and follows the gate's wait or terminal rules.
 
-29. <a id="dd-29"></a> Duplicate explicit ACKs are harmless and affect only peer receipt
+- <a id="dd-29"></a> **DD-29.** Duplicate explicit ACKs are harmless and affect only peer receipt
     information, never submission completion or envelope retention.
-30. <a id="dd-30"></a> Expiry stops unsubmitted work permanently. Receipt `late` follows
+- <a id="dd-30"></a> **DD-30.** Expiry stops unsubmitted work permanently. Receipt `late` follows
     [vault-events.md section 9.7](vault-events.md#outbound-message-and-delivery-fold)'s committed observation-time rule for both
     submitted and expired messages, without changing submission outcome or
     restarting work. Already-submitted messages acquire no new expired failure.
@@ -943,53 +929,53 @@ Entries marked Deferred preserve their case IDs but are not phase-1 requirements
 
 ### First contact, rotation and transport (DD-31–DD-39)
 
-31. <a id="dd-31"></a> The default initial rendezvous message may be Trust Ping; a received
+- <a id="dd-31"></a> **DD-31.** The default initial rendezvous message may be Trust Ping; a received
     application message may be first without a custom wrapper.
-32. <a id="dd-32"></a> No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
-33. <a id="dd-33"></a> Every unconfirmed local successor uses the same long-form sender and
+- <a id="dd-32"></a> **DD-32.** No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
+- <a id="dd-33"></a> **DD-33.** Every unconfirmed local successor uses the same long-form sender and
     frozen from_prior rules, including the first public-to-private rotation.
-34. <a id="dd-34"></a> `from_prior.sub` equals plaintext `from` byte-for-byte; the protected JWT
+- <a id="dd-34"></a> **DD-34.** `from_prior.sub` equals plaintext `from` byte-for-byte; the protected JWT
     `kid` has the exact `iss` DID portion. Predecessor method authorization uses
     [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned)'s validated spelling comparison against the
     exact predecessor verification document, without requiring byte equality with presentedDid.
-35. <a id="dd-35"></a> New unconfirmed successor packages include frozen proof/long form; committed packages never change after confirmation.
+- <a id="dd-35"></a> **DD-35.** New unconfirmed successor packages include frozen proof/long form; committed packages never change after confirmation.
 
-36. <a id="dd-36"></a> Direct and mediated traffic use the same channel receipt and operation folds; only mediated traffic has pickup ACK.
+- <a id="dd-36"></a> **DD-36.** Direct and mediated traffic use the same channel receipt and operation folds; only mediated traffic has pickup ACK.
 
-37. <a id="dd-37"></a> Crashes before/after a transport call or before submission commit reopen without automatic sending; manual retry preserves the exact committed package.
+- <a id="dd-37"></a> **DD-37.** Crashes before/after a transport call or before submission commit reopen without automatic sending; manual retry preserves the exact committed package.
 
-38. <a id="dd-38"></a> Phase 1 works with one active full runtime and ordinary account-scoped
-    Message Pickup; replica fan-out is not required.
-39. <a id="dd-39"></a> Preparation requires a valid fixed-channel intent and exact local-key/peer-resolution evidence. Complete source and required carried-proof evidence precede dependent automatic intents; each operation checks its own current policy.
+- <a id="dd-38"></a> **DD-38.** Phase 1 works with one active full runtime and ordinary account-scoped
+    Message Pickup.
+- <a id="dd-39"></a> **DD-39.** Preparation requires a valid fixed-channel intent and exact local-key/peer-resolution evidence. Complete source and required carried-proof evidence precede dependent automatic intents; each operation checks its own current policy.
 
 <a id="normalization-ack-and-retention-regressions-dd-40-dd-49"></a>
 
 ### Normalization, ACK and retention regressions (DD-40–DD-49)
 
-40. <a id="dd-40"></a> A reader preserves duplicate `please_ack` or `ack` wire targets exactly,
+- <a id="dd-40"></a> **DD-40.** A reader preserves duplicate `please_ack` or `ack` wire targets exactly,
     expands the current-message sentinel only for processing, and ignores
     later duplicate targets without changing the stored array.
-41. <a id="dd-41"></a> Two implementations normalize every accepted attachment carrier, missing
+- <a id="dd-41"></a> **DD-41.** Two implementations normalize every accepted attachment carrier, missing
     value, null, empty string and closed metadata field to the same semantic
     projection used by `intentHash`.
-42. <a id="dd-42"></a> Conforming mediator operation persists and logs no application plaintext;
+- <a id="dd-42"></a> **DD-42.** Conforming mediator operation persists and logs no application plaintext;
     any explicitly enabled bounded diagnostic mode is visibly outside the
     no-plaintext profile.
-43. <a id="dd-43"></a> ACK targets require exact same-channel or verified role-preserving successor authorization; shared contacts and wire IDs alone supply none.
+- <a id="dd-43"></a> **DD-43.** ACK targets require exact same-channel or verified role-preserving successor authorization; shared contacts and wire IDs alone supply none.
 
-44. <a id="dd-44"></a> ACK target order uses the minimum complete receipt key, not canonical event
+- <a id="dd-44"></a> **DD-44.** ACK target order uses the minimum complete receipt key, not canonical event
     order or EventStore change order; a clock rollback between two receives
     does not reverse their ACK order in a linear history.
-45. <a id="dd-45"></a> Submitted completion survives restart, loss of local state, clock rollback,
+- <a id="dd-45"></a> **DD-45.** Submitted completion survives restart, loss of local state, clock rollback,
     later termination and envelope collection. Later duplicate input cannot
     reopen submission or require the collected envelope.
-46. <a id="dd-46"></a> A complete submission witness completes the message even if import later
+- <a id="dd-46"></a> **DD-46.** A complete submission witness completes the message even if import later
     adds a competing preparation. The conflict remains visible; another package,
     route or handler cannot bypass completion.
-47. <a id="dd-47"></a> Generic pure ACK copies carrier pthid and nullable creation time. An Empty rotation notification uses a distinct fixed tuple, empty ack array and its own ACK request; one input may produce both intents.
-48. <a id="dd-48"></a> Reopen reconstructs channel-local execution IDs independently of contacts and grants no dispatch permission.
+- <a id="dd-47"></a> **DD-47.** Generic pure ACK copies carrier pthid and nullable creation time. An Empty rotation notification uses a distinct fixed tuple, empty ack array and its own ACK request; one input may produce both intents.
+- <a id="dd-48"></a> **DD-48.** Reopen reconstructs channel-local execution IDs independently of contacts and grants no dispatch permission.
 
-49. <a id="dd-49"></a> An unsubmitted package survives route unavailability and GC with its exact
+- <a id="dd-49"></a> **DD-49.** An unsubmitted package survives route unavailability and GC with its exact
     envelope. Committed submission, terminal failure or cancellation releases its contribution
     under the retention fold; route recovery cannot reopen submitted work.
 
@@ -997,72 +983,66 @@ Entries marked Deferred preserve their case IDs but are not phase-1 requirements
 
 ### Recovery and automatic effects (DD-50–DD-56)
 
-50. <a id="dd-50"></a> Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. A new proof verification may resolve its predecessor; existing receipt/link verification uses saved evidence.
+- <a id="dd-50"></a> **DD-50.** Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. A new proof verification may resolve its predecessor; existing receipt/link verification uses saved evidence.
 
-51. <a id="dd-51"></a> A crash before transport and a crash after acceptance but before submission commit expose the same prepared state. Neither proves delivery or nondelivery; manual retry preserves wire ID, package, channel and expiry.
+- <a id="dd-51"></a> **DD-51.** A crash before transport and a crash after acceptance but before submission commit expose the same prepared state. Neither proves delivery or nondelivery; manual retry preserves wire ID, package, channel and expiry.
 
-52. <a id="dd-52"></a> Saved `(executionId, effectType)` tuples and intents remain immutable across restore and handler refactoring; neither changes their effect keys or message IDs. Historical input creates no new dispatch action or replacement response channel.
+- <a id="dd-52"></a> **DD-52.** Saved `(executionId, effectType)` tuples and intents remain immutable across restore and handler refactoring; neither changes their effect keys or message IDs. Historical input creates no new dispatch action or replacement response channel.
 
-53. <a id="dd-53"></a> Ordinary content, errors and pure ACKs use channel-local identity and their protocol-specific response rules; continuity authorizes exact paths only.
+- <a id="dd-53"></a> **DD-53.** Ordinary content, errors and pure ACKs use channel-local identity and their protocol-specific response rules; continuity authorizes exact paths only.
 
-54. <a id="dd-54"></a> Equal-intent observations at different local DIDs have different channels and execution IDs; later links never merge or replay them.
+- <a id="dd-54"></a> **DD-54.** Equal-intent observations at different local DIDs have different channels and execution IDs; later links never merge or replay them.
 
-55. <a id="dd-55"></a> A batch cannot authorize its response by proposing new source/endpoint/proof evidence in the same call; prerequisites commit first and links are derived. Invitation consumption is independent of the response.
+- <a id="dd-55"></a> **DD-55.** A batch cannot authorize its response by proposing new source/endpoint/proof evidence in the same call; prerequisites commit first and links are derived. Invitation consumption is independent of the response.
 
-56. <a id="dd-56"></a> Serialize each message dispatch, require its committed package and consume one live initial/manual action per transport call. Record observed acceptance afterward. Scanning saved events or restarting supplies no action, and one action cannot invoke transport twice.
+- <a id="dd-56"></a> **DD-56.** Serialize each message dispatch, require its committed package and consume one live initial/manual action per transport call. Record observed acceptance afterward. Scanning saved events or restarting supplies no action, and one action cannot invoke transport twice.
 
 <a id="binding-resolution-and-sender-eligibility-dd-57-dd-62"></a>
 
 ### Binding, resolution and sender eligibility (DD-57–DD-62)
 
-57. <a id="dd-57"></a> Offline intent freezes the actual sender/recipient pair. Even a message with no prepared package is not readdressed after rotation.
+- <a id="dd-57"></a> **DD-57.** Offline intent freezes the actual sender/recipient pair. Even a message with no prepared package is not readdressed after rotation.
 
-58. <a id="dd-58"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#dd-58).
+- <a id="dd-61"></a> **DD-61.** A reply needs a usable authorized channel before intent commit. Missing sender leaves manual work; later recovery never dispatches it or retargets an existing response.
 
-59. <a id="dd-59"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#dd-59).
-
-60. <a id="dd-60"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#dd-60).
-
-61. <a id="dd-61"></a> A reply needs a usable authorized channel before intent commit. Missing sender leaves manual work; later recovery never dispatches it or retargets an existing response.
-
-62. <a id="dd-62"></a> Different local recipient DIDs produce different message/execution IDs. A verified role-preserving successor path may authorize an ACK for an old outbound without merging executions.
+- <a id="dd-62"></a> **DD-62.** Different local recipient DIDs produce different message/execution IDs. A verified role-preserving successor path may authorize an ACK for an old outbound without merging executions.
 
 <a id="rotation-membership-and-receipt-recovery-dd-63-dd-69"></a>
 
 ### Rotation membership and receipt recovery (DD-63–DD-69)
 
-63. <a id="dd-63"></a> A complete proof witness establishes an exact channel link. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own evidence and policy requirements.
+- <a id="dd-63"></a> **DD-63.** A complete proof witness establishes an exact channel link. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own evidence and policy requirements.
 
-64. <a id="dd-64"></a> Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
+- <a id="dd-64"></a> **DD-64.** Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
 
-65. <a id="dd-65"></a> ACK authorization uses the outbound fixed oriented channel and exact package/path evidence; display preferences never reassign it.
+- <a id="dd-65"></a> **DD-65.** ACK authorization uses the outbound fixed oriented channel and exact package/path evidence; display preferences never reassign it.
 
-66. <a id="dd-66"></a> Opposite-side links justify their evidence-backed join. Existing queued, prepared and submitted messages all keep their original channels.
+- <a id="dd-66"></a> **DD-66.** Opposite-side links justify their evidence-backed join. Existing queued, prepared and submitted messages all keep their original channels.
 
-67. <a id="dd-67"></a> Superseded peer input remains receivable but creates no new automatic work. Existing intents and results remain historical and duplicates never dispatch old effects.
+- <a id="dd-67"></a> **DD-67.** Superseded peer input remains receivable but creates no new automatic work. Existing intents and results remain historical and duplicates never dispatch old effects.
 
-68. <a id="dd-68"></a> Receipt precedes invitation.consumed and other concrete source-derived work. Only a complete consumption assigns an invitation consumer; all crash prefixes reopen without automatic replies.
+- <a id="dd-68"></a> **DD-68.** Receipt precedes invitation.consumed and other concrete source-derived work. Only a complete consumption assigns an invitation consumer; all crash prefixes reopen without automatic replies.
 
-69. <a id="dd-69"></a> Missing required verification snapshots or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt and pickup ACK; invitation state does not. Saved authentication is reusable. Failed envelope authentication creates no receipt; recoverable local prerequisites wait and definitive rejection follows the terminal pickup-ACK path.
+- <a id="dd-69"></a> **DD-69.** Missing required verification snapshots or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt and pickup ACK; invitation state does not. Saved authentication is reusable. Failed envelope authentication creates no receipt; recoverable local prerequisites wait and definitive rejection follows the terminal pickup-ACK path.
 
 ### Group waits and transition validity (DD-70–DD-71)
 
-70. <a id="dd-70"></a> Incomplete consistent same-channel siblings do not erase a complete witness. A complete observation may witness continuity/confirmation without any handler decision or output intent.
+- <a id="dd-70"></a> **DD-70.** Incomplete consistent same-channel siblings do not erase a complete witness. A complete observation may witness continuity/confirmation without any handler decision or output intent.
 
-71. <a id="dd-71"></a> Complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution for every effect type; submission remains complete and different channels are never execution aliases.
+- <a id="dd-71"></a> **DD-71.** Complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution for every effect type; submission remains complete and different channels are never execution aliases.
 
 ### Independent operation recovery (DD-72–DD-75)
 
-72. <a id="dd-72"></a> One Ping requesting ACK may produce three separate intents with distinct effect types: pure ACK, Ping reply and rotation notification. Each type permits at most one compatible intent for that execution. Handler order changes none of their keys; a saved Ping reply does not occupy either other operation's slot, and the two Empty outputs remain independent.
+- <a id="dd-72"></a> **DD-72.** One Ping requesting ACK may produce three separate intents with distinct effect types: pure ACK, Ping reply and rotation notification. Each type permits at most one compatible intent for that execution. Handler order changes none of their keys; a saved Ping reply does not occupy either other operation's slot, and the two Empty outputs remain independent.
 
-73. <a id="dd-73"></a> Missing optional successor registration or notification preparation does not block an eligible ACK or Ping reply on an authorized usable channel. Their committed channels remain fixed when notification work later completes.
+- <a id="dd-73"></a> **DD-73.** Missing optional successor registration or notification preparation does not block an eligible ACK or Ping reply on an authorized usable channel. Their committed channels remain fixed when notification work later completes.
 
-74. <a id="dd-74"></a> Crash after a rotation decision but before notification intent leaves manual work. Completion reuses the original trigger, successor and proof; a later input cannot change the notification tuple or allocate another successor.
+- <a id="dd-74"></a> **DD-74.** Crash after a rotation decision but before notification intent leaves manual work. Completion reuses the original trigger, successor and proof; a later input cannot change the notification tuple or allocate another successor.
 
-75. <a id="dd-75"></a> Notification submission does not confirm successor knowledge. Other new successor messages still carry the same proof until exact-address confirmation; committed packages never change afterward.
+- <a id="dd-75"></a> **DD-75.** Notification submission does not confirm successor knowledge. Other new successor messages still carry the same proof until exact-address confirmation; committed packages never change afterward.
 
 ### Built-in response address selection (DD-76–DD-77)
 
-76. <a id="dd-76"></a> With an eligible carrier local DID, an ACK or Ping reply uses the carrier channel even when a privacy successor already exists. A no-longer-eligible local DID selects only its unique eligible verified local-only successor head; ambiguous or unusable successors create no automatic intent. All equivalent long/short source spellings produce the canonical recipientDid. Handler order, pending registration and temporary network outage do not choose different addresses; existing intents are reused after lifecycle changes.
+- <a id="dd-76"></a> **DD-76.** With an eligible carrier local DID, an ACK or Ping reply uses the carrier channel even when a privacy successor already exists. A no-longer-eligible local DID selects only its unique eligible verified local-only successor head; ambiguous or unusable successors create no automatic intent. All equivalent long/short source spellings produce the canonical recipientDid. Handler order, pending registration and temporary network outage do not choose different addresses; existing intents are reused after lifecycle changes.
 
-77. <a id="dd-77"></a> Body erasure leaves complete retained receipt/header evidence eligible for ACK source and target selection. It cannot justify a new Ping reply whose response_requested field is unavailable. Manual completion still requires an explicit action and current policy; erasure or recovery alone dispatches neither output.
+- <a id="dd-77"></a> **DD-77.** Body erasure leaves complete retained receipt/header evidence eligible for ACK source and target selection. It cannot justify a new Ping reply whose response_requested field is unavailable. Manual completion still requires an explicit action and current policy; erasure or recovery alone dispatches neither output.

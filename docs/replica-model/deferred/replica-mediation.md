@@ -1,7 +1,11 @@
 # replica-mediation/1.0
 
+> Deferred design notes only; the [phase-1 contract](../README.md) takes
+> precedence. These candidates require redesign and integration before any
+> implementation; they reserve no current schema, code or API.
+
 <!-- suite-navigation:start -->
-[Suite guide](README.md) · Deferred extension · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
+[Suite guide](../README.md) · Deferred extension · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
 Status: **deferred draft** — future multi-replica extension for DIDComm
@@ -59,7 +63,7 @@ This deferred extension distributes receipt data; it does not authorize multiple
 automatic executors or cross-replica outbox takeover. Import/replay/fan-out cannot
 dispatch old ACKs, replies, notifications or pending messages. The active
 executor and live initial/manual action rules in
-[channels.md](channels.md#fixed-outbound-channel) still apply. A manual action
+[channels.md](../channels.md#fixed-outbound-channel) still apply. A manual action
 cannot change an existing message's channel or committed package.
 
 One Estoc vault may have several independently writable full replicas. Every
@@ -83,7 +87,7 @@ The protocol adds two things to ordinary DIDComm mediation:
 The mediator stores one encrypted inner DIDComm envelope, creates one delivery
 per active replica, and never treats one replica's acknowledgment as another's.
 This protocol does not synchronize the vault event set; that is `vault-sync/1.0`.
-Invitation and address-rotation policy belong to [relationships.md](relationships.md).
+Invitation and address-rotation policy belong to [relationships.md](../relationships.md).
 It does not make one full replica less trusted than another or make a lost
 copy of the shared seed revocable.
 
@@ -99,7 +103,7 @@ A conforming implementation uses:
   (`https://didcomm.org/coordinate-mediation/3.0`);
 - Message Pickup 3.0 (`https://didcomm.org/messagepickup/3.0`);
 - Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`);
-- the channel/address-policy profile in [relationships.md](relationships.md); and
+- the channel/address-policy profile in [relationships.md](../relationships.md); and
 - this protocol family:
   `https://estoc.dev/replica-mediation/1.0`.
 
@@ -466,7 +470,7 @@ A terminal response from one required mediator rotates the local replica ID
 for all mediators. A runtime MUST NOT split event authorship and ACK identity
 by keeping the old ID on another arrangement.
 
-Local restore and exact-move rules are defined by [vault-sqlite.md section 12](vault-sqlite.md#restore-and-import).
+Local restore and exact-move rules are defined by [vault-sqlite.md section 12](../vault-sqlite.md#restore-and-import).
 
 <a id="portable-replica-events"></a>
 
@@ -888,37 +892,37 @@ belonging to another replica have no effect. Processing the same list
 again is idempotent.
 
 A client may acknowledge a delivery through exactly one of two terminal
-paths, using [distributed-delivery.md section 4.1](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table)'s
+paths, using [distributed-delivery.md section 4.1](../distributed-delivery.md#cross-layer-commit-and-acknowledgment-table)'s
 commit boundaries:
 
-1. **durable channel receipt** — follow [section 4.3](distributed-delivery.md#receive-a-message)'s
+1. **durable channel receipt** — follow [section 4.3](../distributed-delivery.md#receive-a-message)'s
    authentication and dependent object/evidence/inbound commits before pickup ACK; or
 2. **terminal pre-vault rejection** — safely classify the delivery under a
-   [relationships.md section 9.2](relationships.md#hard-pre-vault-gate),
+   [relationships.md section 9.2](../relationships.md#hard-pre-vault-gate),
    then pickup-ACK without `message.in`, ultimate peer ACK, contact, application
    effect or portable message content; only a bounded local diagnostic may remain.
 
-Recipient classification follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate),
+Recipient classification follows [relationships.md sections 9.1](../relationships.md#deferred-delivery)–[9.2](../relationships.md#hard-pre-vault-gate),
 including eligible retired historical addresses. For an otherwise eligible
 recipient, apply that profile's local
-[sender authentication](relationships.md#sender-authentication-freshness). A future
+[sender authentication](../relationships.md#sender-authentication-freshness). A future
 Web channel additionally needs the [mutable-channel extension](did-web-channels.md),
 including its failure classification and bounded sender-resolution accounting;
 retained chain membership cannot bypass authentication.
 
 A delivery awaiting recoverable decryption, local DID/route/sync state,
-or other local receive prerequisites under [channels.md](channels.md#receipt)
+or other local receive prerequisites under [channels.md](../channels.md#receipt)
 MUST NOT be acknowledged while it remains deferred under
-[relationships.md section 9.1](relationships.md#deferred-delivery). A delivery that is otherwise
+[relationships.md section 9.1](../relationships.md#deferred-delivery). A delivery that is otherwise
 not safely classifiable MUST NOT be acknowledged either. That profile's
-[wait definition](relationships.md#deferred-delivery) and
-[evidence-change rules](relationships.md#evidence-change-retries) govern redelivery,
+[wait definition](../relationships.md#deferred-delivery) and
+[evidence-change rules](../relationships.md#evidence-change-retries) govern redelivery,
 evidence recovery and loss of local wait state. When the deferred mutable-channel
 profile requires network accounting, its key additionally includes the named replica; its pickup ACK scope
 and idempotency remain as defined above.
 
 Authenticated channel receipt suffices for normal pickup acknowledgment;
-later processing is independent under [operation eligibility](channels.md#operation-eligibility).
+later processing is independent under [operation eligibility](../channels.md#operation-eligibility).
 Pickup acknowledgment itself authorizes no ultimate ACK or effect.
 
 <a id="live-delivery"></a>
@@ -966,7 +970,7 @@ At or after `expires_at`, the mediator MAY delete the message and every
 associated delivery. An inactive but unretired replica MUST NOT prevent
 expiry.
 
-Under [distributed-delivery.md section 7](distributed-delivery.md#submission-completion-and-expiration), the sender's durable outbox stops
+Under [distributed-delivery.md section 7](../distributed-delivery.md#submission-completion-and-expiration), the sender's durable outbox stops
 submission when `delivery.submitted` commits, independently of the ultimate
 recipient's ACK. Mediator expiry can therefore discard an already submitted
 message before the recipient receives it; it does not trigger sender retry.

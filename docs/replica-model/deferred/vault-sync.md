@@ -1,7 +1,11 @@
 # vault-sync/1.0
 
+> Deferred design notes only; the [phase-1 contract](../README.md) takes
+> precedence. These candidates require redesign and integration before any
+> implementation; they reserve no current schema, code or API.
+
 <!-- suite-navigation:start -->
-[Suite guide](README.md) · Deferred extension · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
+[Suite guide](../README.md) · Deferred extension · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
 Status: **deferred draft** — future encrypted synchronization of an Estoc
@@ -12,7 +16,7 @@ This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHOULD**, **SHOULD NOT**, and **MAY** as described in BCP 14 when they
 appear in all capitals.
 
-[event-store.md](event-store.md) defines events and local stores. [dasl-objects.md](dasl-objects.md) defines
+[event-store.md](../event-store.md) defines events and local stores. [dasl-objects.md](../dasl-objects.md) defines
 portable object identity and verification. This protocol encrypts and moves
 those exact bytes; it does not redefine either layer.
 
@@ -116,7 +120,7 @@ retention rules, key derivation domains and APIs.
 
 In this document, **sync object** means one server record containing an
 encrypted root, event or DASL-object frame. **DASL object** means the portable
-content-addressed object defined by [dasl-objects.md](dasl-objects.md). The two terms are not
+content-addressed object defined by [dasl-objects.md](../dasl-objects.md). The two terms are not
 interchangeable.
 
 <a id="shared-account-and-keys"></a>
@@ -271,7 +275,7 @@ Header:
 ```
 
 Payload is the exact complete portable object bytes defined by
-[dasl-objects.md](dasl-objects.md). The CID MUST be canonical. The client MUST call the local
+[dasl-objects.md](../dasl-objects.md). The CID MUST be canonical. The client MUST call the local
 object verifier before acceptance. It requires a raw CID and verifies SHA-256
 over all payload bytes; non-raw CIDs are rejected.
 
@@ -1075,7 +1079,7 @@ Before requesting reset, the initiating full replica MUST:
 1. fully reconcile the current `ready` store or explicitly obtain user
    confirmation that remote-only objects will be abandoned;
 2. ingest all locally available events and run the erasure-closure procedure
-   in [vault-events.md](vault-events.md);
+   in [vault-events.md](../vault-events.md);
 3. compute the current held-root set from the converged fold; and
 4. be able to supply the immutable root object, every accepted event object
    and every currently held object it intends to preserve.
@@ -1359,7 +1363,7 @@ across replicas is forbidden because arrival order differs.
 Recovered domain events are historical data, not a dispatch queue. Bootstrap,
 import and replica change do not send pending outbounds or regenerate old
 automatic replies/ACKs/notifications for sending. Show pending work for manual
-action under [the dispatch contract](channels.md#fixed-outbound-channel),
+action under [the dispatch contract](../channels.md#fixed-outbound-channel),
 preserving each intent's fixed channel and committed package. Missing submission
 in a snapshot never proves that a call did not occur.
 This does not stop automatic retry of sync transfers or mailbox pickup.

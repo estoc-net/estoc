@@ -43,7 +43,7 @@ seed wrapper, not message history or attachments. Applications MUST explain
 this boundary. A full runtime, including a hosted one, MUST offer complete
 portable export and documented recovery independent of the running service.
 A thin client's cache is not a full backup. Plaintext database files are not
-mediator messages or the deferred sync protocol's wire format.
+mediator messages.
 
 <a id="format-and-versions"></a>
 
@@ -59,7 +59,7 @@ PRAGMA user_version = 1;
 `user_version` identifies the SQLite schema; `vault_meta.vault_version = 3`
 identifies event, object, key and fold semantics. Reject unsupported versions
 before application writes or payload interpretation. Published schema changes
-require a new schema version; semantic changes follow [ES §14](event-store.md#versioning).
+require a new schema version; semantic changes follow [ES §12](event-store.md#versioning).
 Each published schema revision must separately define the portable source
 versions accepted for restore and import; runtime migration support alone does
 not imply portable compatibility.
@@ -163,7 +163,6 @@ or a complete snapshot plus a separately retained credential that unlocks that
 snapshot's seed wrapper. Verification unlocks that material in isolation and
 derives the exact anchor. Seed-only recovery restores identity, not history;
 phase-1 history recovery needs a snapshot. Onboarding exposes recovery status.
-A sync store is not a seed backup.
 
 When event damage stops runtime writes, the application MUST explain the stopped
 state and the need to restore a validated snapshot into a new runtime. Only the
@@ -212,9 +211,9 @@ the vault, local generation and complete delta frontier. Their encoding and the
 query/pagination strategy are implementation details. Reject malformed,
 wrong-vault/generation and future tokens. An empty filtered delta still advances
 the frontier; a consumer checkpoints only after consuming the complete result.
-Positions/tokens never travel in portable state or become sync cursors.
+Positions/tokens never travel in portable state.
 
-Portable inspection exposes [ES §10](event-store.md#vault-interface)'s read-only
+Portable inspection exposes [ES §9](event-store.md#vault-interface)'s read-only
 `Vault` and scans the immutable event set in canonical order without local
 control tables. It has no change frontier; `changes` is rejected under
 [ES §5.5](event-store.md#changes). Its `conflicting()` result is always empty
@@ -510,8 +509,7 @@ positions, and updates/invalidates any caches. No visible sub-batches. Preflight
 failure changes no accepted state; crash recovery yields the complete old or
 new union. Preserve target metadata, wrapper and local IDs. Repeated import is
 idempotent and cannot revive an erased relation just because the source has old
-bytes. Partial sync ingestion is a separate facility, not a complete portable
-import.
+bytes.
 
 <a id="exact-local-move"></a>
 
@@ -523,18 +521,9 @@ Destination ownership excludes old handles. A stale recovery copy restored after
 later source writes must refresh both IDs and invalidate checkpoints. Portable
 restore always uses fresh IDs; two writable clones are not an exact move.
 
-<a id="transfer-and-deferred-synchronization"></a>
-
-## 13. Deferred synchronization
-
-Phase 1 uses portable export/import/restore or an exact move. Deferred
-`vault-sync/1.0` exchanges encrypted immutable configuration, events and whole
-DASL objects, not SQLite pages, chunks, positions, local state or `seedJwe`.
-Seed-and-locator bootstrap builds a fresh runtime and seed wrapper.
-
 <a id="required-conformance-cases"></a>
 
-## 14. Required conformance cases
+## 13. Required conformance cases
 
 Test observable correctness across the implementation's supported ownership,
 read and maintenance strategies.

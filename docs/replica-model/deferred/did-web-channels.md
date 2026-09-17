@@ -1,5 +1,9 @@
 # Mutable channel DIDs
 
+> Deferred design notes only; the [phase-1 contract](../README.md) takes
+> precedence. These candidates require redesign and integration before any
+> implementation; they reserve no current schema, code or API.
+
 Status: **deferred draft**. This document contains candidate rules for a future
 channel profile supporting `did:web` and mutable DID documents. It is not a
 phase-1 dependency or an implementation-ready extension. Requirement words
@@ -7,9 +11,9 @@ below apply only to that candidate profile, whose post-receipt retry policy
 remains unresolved.
 
 Phase-1 channel endpoints, including continuity predecessors, support only
-`did:peer:4` under [the channel DID profile](relationships.md#peer-did-numalgo-4-profile).
+`did:peer:4` under [the channel DID profile](../relationships.md#peer-did-numalgo-4-profile).
 Mediator and routing DID resolution remains separate under
-[mediator resolution](relationships.md#mediator-resolution).
+[mediator resolution](../relationships.md#mediator-resolution).
 
 ## 1. Future endpoint identity and document updates
 
@@ -36,7 +40,7 @@ The [did:web method](https://w3c-ccg.github.io/did-method-web/#update) permits
 updating keys and services while keeping the DID. These are ordinary method
 updates, not `from_prior` transitions; [DIDComm rotation](https://identity.foundation/didcomm-messaging/spec/v2.1/#did-rotation)
 handles replacement of the DID itself. Successful resolution with a newly
-authorized usable key is not a `peer-key-changed` failure.
+authorized usable key is not a resolution failure.
 
 For a new message's package, use currently authorized keys and service
 from its fresh resolution. For new incoming delivery, authenticate with its
@@ -59,7 +63,7 @@ DID; this rule does not allow replacing their encoded keys or route in place.
 ## 2. Candidate network resolution rules
 
 These rules require the constrained network resolver used for
-[mediator resolution](relationships.md#mediator-resolution). They extend
+[mediator resolution](../relationships.md#mediator-resolution). They extend
 channel authentication and preparation; they do not change mediator identity
 or grant any new transport invocation. The candidate defaults are a 30-second
 minimum retry interval, exponential backoff capped at 21600 seconds and
@@ -96,7 +100,7 @@ current preparation, never authority to add a continuity link.
 This section also owns sender-authentication freshness. A `did:peer:4` sender
 authenticates against its validated long-form document, retained or supplied
 with this disclosure. For every other supported method, whenever a delivery
-enters or resumes authentication under [the local receive wait rules](relationships.md#deferred-delivery), the receiver MUST resolve
+enters or resumes authentication under [the local receive wait rules](../relationships.md#deferred-delivery), the receiver MUST resolve
 the presented sender DID and authenticate its authcrypt key against that
 current document. Unopened-delivery waits follow the suspension rule below. Post-receipt
 operation recovery uses saved authentication evidence. Online conditional revalidation is sufficient; a local
@@ -104,7 +108,7 @@ TTL or stale/offline cache is not. A retained
 `peer.resolved` may be reused only when that freshly validated document's raw
 CID equals its `documentCid` and its `localKeyName`, `peerPublicKey`, `did` and `presentedDid`
 match the observation; otherwise commit new evidence before `message.in`.
-A key absent from the current document fails [the receive gate](relationships.md#hard-pre-vault-gate) even when a historical
+A key absent from the current document fails [the receive gate](../relationships.md#hard-pre-vault-gate) even when a historical
 snapshot authorized it. Saved evidence validates historical operations; it
 does not authenticate new deliveries. Unavailable resolution defers without
 pickup ACK only within the budget below; it cannot fall back to a stale snapshot.
@@ -134,22 +138,19 @@ document, and resolution forbidden by the SSRF/resource policy above. These
 categories include the corresponding
 [DID Resolution errors](https://www.w3.org/TR/did-resolution/#errors), whatever
 the resolver API's spelling. For inbound sender authentication they are
-terminal [receive-gate](relationships.md#hard-pre-vault-gate) failures: pickup-ACK when mediated and create no
+terminal [receive-gate](../relationships.md#hard-pre-vault-gate) failures: pickup-ACK when mediated and create no
 `message.in`. Only unavailable answers defer, within the inbound budget below.
-For recipient resolution before preparation, definitive failure records
-message-scoped terminal
-`delivery.failed(code="peer-key-changed", packageId=null)` without preparation
-or evidence purporting successful resolution, including for a first send;
-unavailable answers keep the outbound retryable. Missing historical evidence follows
+For recipient resolution before preparation, the future profile must decide
+whether definitive resolution failure terminates the intent and, if so, define
+a corresponding event schema. The current `delivery.failed` schema covers only
+expiry and explicit cancellation; these candidates reserve no additional code.
+Unavailable answers keep the outbound retryable. Missing historical evidence follows
 the separate recovery rule and is not a definitive new-resolution result.
 Other completed unsuccessful resolution results are definitive for that
 attempt; a policy refusal MUST NOT be disguised as transient unavailability.
 
-The `peer-key-changed` code also covers definitive recipient-resolution
-failure when no earlier peer key exists. User-facing text MUST NOT describe
-every such result as an observed key replacement; use the bounded local
-resolution diagnostic, or a neutral peer-resolution failure label when that
-diagnostic is absent. This does not add a portable diagnostic payload.
+Failure when no earlier peer key exists must not be described as an observed
+key replacement. The diagnostic and any portable failure model remain open.
 
 <a id="inbound-sender-resolution-budget"></a>
 
@@ -158,7 +159,7 @@ diagnostic is absent. This does not add a portable diagnostic payload.
 Once local receive prerequisites are
 satisfied, the runtime MUST use finite per-attempt timeouts, a finite attempt
 budget and local backoff with a finite cap for each delivery. It SHOULD use
-[the prerequisite retry policy](relationships.md#retry-replacement-and-address-rollover)'s retry-interval, backoff-cap and attempt-count defaults, applied
+[the prerequisite retry policy](../relationships.md#retry-replacement-and-address-rollover)'s retry-interval, backoff-cap and attempt-count defaults, applied
 to resolution calls rather than transport submissions; the outbound wire
 expiry rule does not apply. Count an attempt before invoking the resolver,
 including failure and unknown outcomes. While receive-ready, schedule retries
@@ -174,7 +175,7 @@ the future, the interval from that attempt to the deadline caps active elapsed
 time; a past or unknown deadline supplies no such cap. An advertised
 retention duration also caps active elapsed time, measured from the first
 attempt. Active elapsed time includes resolver calls and backoff, but excludes
-all non-resolution deferral waits under [the local receive wait rules](relationships.md#deferred-delivery), including interruptions
+all non-resolution deferral waits under [the local receive wait rules](../relationships.md#deferred-delivery), including interruptions
 after the first attempt. Time before the first attempt never counts. A past
 deadline alone never makes a delivery the mediator still delivers terminal;
 unknown retention or lost local state still requires a finite attempt budget.
@@ -210,7 +211,7 @@ current-sender rule before it can add another observation.
 #### Exhaustion and non-resolution deferral
 
 When the budget or retention stop is reached without a definitive answer,
-classify that delivery as terminal input under [the receive gate](relationships.md#hard-pre-vault-gate): pickup-ACK when
+classify that delivery as terminal input under [the receive gate](../relationships.md#hard-pre-vault-gate): pickup-ACK when
 mediated, no `message.in`, contact or response effect, and at most a bounded
 local diagnostic. Exhaustion does not prove a key change or permanently reject
 the DID; the sender may make a new explicit attempt under ordinary sending
@@ -218,7 +219,7 @@ rules. It never authorizes automatic retry of a submitted message ID. A successf
 resolution within budget instead proceeds through normal authentication and
 durable receipt. Locked-vault, incomplete-recovery, recoverable local
 key/document/route deferrals under
-[the local receive wait rules](relationships.md#deferred-delivery) suspend this
+[the local receive wait rules](../relationships.md#deferred-delivery) suspend this
 accounting: do not schedule resolution calls or apply this
 terminal path while the delivery remains in such a wait. This bounds an
 unresolved authentication attempt, not the age, expiry or acceptance time of a
@@ -335,7 +336,7 @@ Document updates across local-only links do not split peer supersession/conflict
 
 ### VE-105
 
-Successful same-DID resolution with a newly authorized usable key permits preparation and receipt using their own exact evidence. Definitive resolution failure retains the scoped failure path; revoked keys cannot authenticate new delivery.
+Successful same-DID resolution with a newly authorized usable key permits preparation and receipt using their own exact evidence. Revoked keys cannot authenticate new delivery. Whether definitive recipient-resolution failure terminates the intent remains an open design decision.
 
 <a id="ve-106"></a>
 
@@ -383,7 +384,9 @@ Independently authorized keys across document revisions share channel-local inpu
 
 A new non-numalgo-4 message ID resolves and commits current recipient evidence
 before first preparation. Transient unavailability leaves it retryable;
-definitive resolution failure is terminal under [candidate resolution rules](#candidate-network-resolution-rules). An unchanged online-revalidated document still creates new evidence.
+definitive resolution failure needs the future failure model discussed in
+[candidate resolution rules](#candidate-network-resolution-rules).
+An unchanged online-revalidated document still creates new evidence.
 Committed packages retry manually with exact bytes and retained snapshots. Whenever
 an inbound delivery enters or resumes authentication, including duplicates,
 it uses current sender resolution; unavailability defers without pickup ACK

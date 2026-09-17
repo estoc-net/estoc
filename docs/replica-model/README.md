@@ -1,9 +1,8 @@
 # Estoc version 3 specification suite
 
 Status: **draft**. Phase 1 has one active writable full vault runtime, seven
-specifications and three deferred extensions. SQLite is the sole persistent vault
-and portable interchange format. This guide is informative; linked specification
-sections define requirements.
+specifications. SQLite is the sole persistent vault and portable interchange
+format. This guide is informative; linked specification sections define requirements.
 
 <a id="model-overview"></a>
 
@@ -41,7 +40,6 @@ permits at most one compatible intent per execution.
 | Domain facts | [Vault events](vault-events.md) | Message, delivery, contact and local policy payloads/folds |
 | Communication authority | [Channels](channels.md), [Address/contact policy](relationships.md) | Fixed DID pairs, operation evidence, directed continuity, contact selections |
 | Runtime | [Delivery](distributed-delivery.md) | Channel-local identity, ACK paths, fixed packaging and live dispatch actions |
-| Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md), [Mutable channel DIDs](did-web-channels.md) | Receipt fan-out, encrypted synchronization and future Web channel resolution |
 
 Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 
@@ -57,7 +55,6 @@ Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 | Implement sending | [Send](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
 | Implement receiving | [Receive](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) → [receipt gates](relationships.md#uniform-receipt) → [evidence](vault-events.md#receipt-and-relationship-evidence) → [source evidence](distributed-delivery.md#address-chains-and-observation-membership) → [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
 | Back up or recover | [Recovery material](vault-sqlite.md#recovery-material-and-product-requirement) → [export](vault-sqlite.md#snapshot-and-export) → [restore/import](vault-sqlite.md#restore-and-import) → [unfinished receive work](distributed-delivery.md#receive-recovery) |
-| Explore future replication | Phase-1 documents first, then [replica mediation](replica-mediation.md#reading-guide) and [vault sync](vault-sync.md#reading-guide) |
 
 <a id="rule-ownership"></a>
 
@@ -87,11 +84,11 @@ RZ owns DID resolution and address/display policy.
 | Content/intent/plaintext normalization | [DD hashes](distributed-delivery.md#canonical-projections-and-hashes), [VE stored content](vault-events.md#stored-message-document) | [VE package](vault-events.md#message-prepared) |
 | ACK selection and authorization | [DD ACKs](distributed-delivery.md#durable-end-to-end-acknowledgment) | [VE ACK witness](vault-events.md#delivery-acknowledged) |
 | Complete witnesses | [VE witnesses](vault-events.md#complete-observation-witnesses) | [CH links](channels.md#channel-linked), [DD ACKs](distributed-delivery.md#applying-ack) |
-| Channel method boundary, local resolution and mediator resolution | [RZ resolution](relationships.md#did-resolution-requirements), [gate](relationships.md#hard-pre-vault-gate) | [CH receipt](channels.md#receipt), [RM pickup](replica-mediation.md#messages-received) |
+| Channel method boundary, local resolution and mediator resolution | [RZ resolution](relationships.md#did-resolution-requirements), [gate](relationships.md#hard-pre-vault-gate) | [CH receipt](channels.md#receipt), [DD receipt](distributed-delivery.md#receive-a-message) |
 | Invitations | [CH consumption](channels.md#invitation-consumed), [VE invitation fold](vault-events.md#invitation-fold) | [VE disclosure](vault-events.md#did-disclosed) |
 | Denial and contact views | [CH policy/display](channels.md#effects-and-recovery) | [VE contact selection](vault-events.md#contact-channelsset), [deletion](vault-events.md#delete-a-contact), [application views](vault-events.md#application-message-views) |
 | Submission/receipt state | [VE delivery fold](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration) |
-| Restore and import | [SQ interchange](vault-sqlite.md#restore-and-import) | [DD recovery](distributed-delivery.md#receive-recovery), [VS recovery](vault-sync.md#bootstrap-and-recovery) |
+| Restore and import | [SQ interchange](vault-sqlite.md#restore-and-import) | [DD recovery](distributed-delivery.md#receive-recovery) |
 
 <a id="conformance-and-references"></a>
 
@@ -106,14 +103,16 @@ RZ owns DID resolution and address/display policy.
 | DD | [Distributed delivery](distributed-delivery.md#required-conformance-cases) | Phase 1 |
 | CH | [Channels and continuity](channels.md#required-conformance-cases) | Phase 1 |
 | RZ | [Channel address and contact policy](relationships.md#required-conformance-cases) | Phase 1 |
-| RM | [Replica mediation](replica-mediation.md#required-conformance-cases) | Deferred |
-| VS | [Vault sync](vault-sync.md#required-conformance-cases) | Deferred |
 
-Individual CH/DD/VE/RZ cases marked Deferred are reserved in their original
-lists and belong only to [mutable channel DIDs](did-web-channels.md#deferred-conformance-cases).
+The seven documents above are the complete phase-1 contract. Multi-replica
+mediation, network vault synchronization and mutable channel DIDs have only
+[deferred design notes](deferred/README.md). Those notes reserve no phase-1
+fields, error codes, key names, extension APIs or conformance requirements.
+Future features will define their schemas and conformance requirements when adopted.
 
 Named anchors support direct links independently of displayed section numbers.
 Conformance case IDs identify the requirements each implementation must verify.
+Removed cases leave gaps; remaining IDs are stable and are not renumbered or reused.
 
 <a id="editing-conventions"></a>
 
