@@ -1,15 +1,11 @@
 /**
- * The contacts: what each contact ID decides on its own. A contact is
- * a display grouping over channels it selects and nothing more — no
- * authority, no identity — so the fold is a table of latest-wins
- * values under one ID: a permanent tombstone, the latest petname, each
- * flag's latest value, the latest local-DID preference, the latest
- * whole channel selection, and the merges that hint at grouping it
- * with others. A selection replaces the whole set, an empty one clears
- * it, and no selection is an empty set; a set for an ID no creation
- * names is kept as it is, presentation being all it affects. What a
- * contact shows through its channels is a view over the other folds,
- * built elsewhere.
+ * The contacts: a display grouping over the channels each selects,
+ * with no authority over them, so the fold is a latest-wins table
+ * under one ID. A selection replaces the whole set, an empty one
+ * clears it, and no selection is an empty set. A selection for an ID
+ * no creation names is kept as it is: the creation may be elsewhere,
+ * and only presentation is affected. What a contact shows through its
+ * channels is a view over the other folds, built elsewhere.
  */
 
 import { channelKey } from "../ids.js";
@@ -37,7 +33,7 @@ export interface Contact {
 export interface ContactFold {
   /** every contact any contact event names, by ID */
   readonly contacts: ReadonlyMap<ContactId, Contact>;
-  /** the undeleted contacts whose selection holds the channel, in ID order */
+  /** the undeleted contacts whose selection holds the channel, in ID order, whether or not a creation names them: `origin` tells */
   selecting(channel: Channel): readonly Contact[];
 }
 

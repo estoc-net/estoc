@@ -3,8 +3,8 @@ import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it } from "vitest";
 
 import { VaultEventSet, anonymousMessageId, didKeyName, foldVault, foldVaultChecked, inboundMessageId, type EventReference, type Keys, type ReadObject, type VaultChecks, type VaultFold, type WireMessageId } from "../../../src/v3/index.js";
-import { expectOrderFree, type Scene } from "./helpers.js";
-import { blocked, consumed, invitation, noObjects, proof, receipt, resolved, vaults, type Local, type Peer } from "./scene.js";
+import { ENDPOINT, MEDIATION, ROUTE, expectOrderFree, type Scene } from "./helpers.js";
+import { blocked, consumed, invitation, noObjects, proof, receipt, resolved, rotation, vaults, type Local, type Peer } from "./scene.js";
 
 const fold = (scene: Scene, keys: Keys | null, readObject: ReadObject = noObjects) => foldVaultChecked(scene.set(), keys, readObject);
 
@@ -101,33 +101,68 @@ describe("an invitation", () => {
     expect(one.consumer).toBe(b0.did);
   });
 
-  it("cannot acquire a consumer on a retired or unknown DID, and is unavailable rather than pending while a record waits on a retired one", async () => {
+  it("cannot acquire a consumer on a retired or unknown DID, its candidates refused, while a record that waits keeps it pending", async () => {
     const { scene, keys, a0, a1, b0 } = await vaults();
     const retired = invitation(scene, a0);
     scene.add("did.retired", { didId: a0.didId, because: "done" });
     const candidate = follower(scene, a0, b0, retired.data.oobId!, 1);
     const unknown = invitation(scene, { didId: "019b7000-0000-7000-8000-00000000ffff" as Local["didId"], did: a1.did, longFormDid: a1.longFormDid });
-    const vault = await fold(scene, keys);
+    let vault = await fold(scene, keys);
     expect(vault.invitations.invitations.get(retired.eventId)!.status).toEqual({ status: "unavailable", because: "the disclosed DID is retired" });
+    expect(vault.invitations.invitations.get(retired.eventId)!.candidates.map(({ eligibility }) => eligibility)).toEqual([{ status: "refused", because: "the disclosed DID is retired" }]);
     expect(eligibilities(vault, retired)).toEqual([[candidate.eventId, "refused"]]);
     expect(vault.invitations.invitations.get(unknown.eventId)).toMatchObject({ localDid: null, status: { status: "unavailable", because: "the disclosed DID has no consistent creation here" } });
     expectSameOverEveryOrder(scene, vault.checks);
+
+    scene.add("invitation.consumed", { disclosureEventId: retired.eventId as EventReference<"did.disclosed">, sourceEventId: uuidv7() as EventReference<"message.in"> });
+    vault = await fold(scene, keys);
+    expect(vault.invitations.invitations.get(retired.eventId)!.status).toEqual({ status: "pending", because: "the source it names is not here" });
+    expectSameOverEveryOrder(scene, vault.checks);
   });
 
-  it("is in conflict when its ID is disclosed twice, whatever else the records say", async () => {
-    const { scene, keys, a0, a1, b0 } = await vaults();
-    const oobId = uuidv7();
-    const one = invitation(scene, a0, oobId);
-    const two = invitation(scene, a1, oobId);
-    consumed(scene, one, follower(scene, a0, b0, oobId, 1));
-    const many = invitation(scene, a0, oobId, { uses: "many" });
+  it("cannot acquire a consumer once its DID's route is retired, misconfigured or on a retired mediation, and waits while the mediation's grant is missing", async () => {
+    const { scene, keys, a0, b0 } = await vaults();
+    const disclosure = invitation(scene, a0);
+    const oobId = disclosure.data.oobId!;
+    const source = follower(scene, a0, b0, oobId, 1);
     const vault = await fold(scene, keys);
-    for (const disclosure of [one, two]) {
+    const over = (events: readonly Event[]) => foldVault(vaultSet(events), vault.checks).invitations.invitations.get(disclosure.eventId)!;
+    const ended = (because: string) => ({ status: { status: "unavailable", because }, candidates: [{ eligibility: { status: "refused", because } }] });
+
+    const retired = scene.add("route.retired", { routeId: ROUTE, because: "moved" });
+    expect(over(scene.events)).toMatchObject(ended("the bound route is retired"));
+    expect(over([...scene.events, consumed(scene, disclosure, source)])).toMatchObject({ status: { status: "consumed", consumer: b0.did } });
+    const settled = scene.events.filter((event) => event !== retired && event.type !== "invitation.consumed");
+
+    expect(over([...settled, scene.add("route.configured", { routeId: ROUTE, kind: "direct", mediationId: null, endpoint: ENDPOINT })])).toMatchObject(ended("the bound route's configurations disagree"));
+    expect(over([...settled, scene.add("mediation.retired", { mediationId: MEDIATION, because: "gone" })])).toMatchObject(ended("the bound route's mediation is terminal"));
+
+    const ungranted = settled.filter((event) => event.type !== "mediation.granted");
+    expect(over(ungranted)).toMatchObject({ status: { status: "pending", because: `mediation ${MEDIATION} is pending` }, candidates: [{ eligibility: { status: "deferred", because: `mediation ${MEDIATION} is pending` } }] });
+    expect(over(settled)).toMatchObject({ status: { status: "available" }, candidates: [{ eligibility: { status: "eligible" } }] });
+    expectOrderFree(ungranted, (set) => picture(foldVault(set, vault.checks)));
+  });
+
+  it("is in conflict when its ID is disclosed twice, by one-use or many-use disclosures at any DID, whatever else the records say", async () => {
+    const { scene, keys, a0, a1, b0, b1 } = await vaults();
+    const twice = uuidv7();
+    const one = invitation(scene, a0, twice);
+    const two = invitation(scene, a1, twice);
+    consumed(scene, one, follower(scene, a0, b0, twice, 1));
+    const shadowed = invitation(scene, a0);
+    const shadow = invitation(scene, a0, shadowed.data.oobId!, { uses: "many" });
+    const elsewhere = invitation(scene, a0);
+    invitation(scene, a1, elsewhere.data.oobId!, { uses: "many" });
+    const candidate = follower(scene, a0, b1, elsewhere.data.oobId!, 2);
+    const vault = await fold(scene, keys);
+    for (const disclosure of [one, two, shadowed, elsewhere]) {
       expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "conflict", because: "the invitation's ID is disclosed more than once" });
     }
     expect(vault.invitations.invitations.get(one.eventId)!.consumer).toBe(b0.did);
-    expect(vault.invitations.invitations.has(many.eventId)).toBe(false);
-    expect(vault.invitations.under(oobId).map((invitation) => invitation.disclosure)).toEqual([one, two]);
+    expect(vault.invitations.invitations.has(shadow.eventId)).toBe(false);
+    expect(eligibilities(vault, elsewhere)).toEqual([[candidate.eventId, "eligible"]]);
+    expect(vault.invitations.under(twice).map((invitation) => invitation.disclosure)).toEqual([one, two]);
+    expect(vault.invitations.under(shadowed.data.oobId!).map((invitation) => invitation.disclosure)).toEqual([shadowed]);
     expectSameOverEveryOrder(scene, vault.checks);
   });
 });
@@ -217,26 +252,59 @@ describe("the candidates", () => {
     const { scene, keys, peerKeys, a0, b0, b1, b2, b3 } = await vaults();
     const disclosure = invitation(scene, a0);
     const oobId = disclosure.data.oobId!;
+    const undocumented = (peer: Peer, ordinal: number) => receipt(scene, { local: a0, peer, resolution: resolved(scene, a0.didId, peer, { short: true }), ordinal, presentedDid: peer.did, overrides: { pthid: oobId } });
     blocked(scene, a0, b0);
-    const denied = follower(scene, a0, b0, oobId, 2);
-    receipt(scene, { local: a0, peer: b2, resolution: resolved(scene, a0.didId, b2), ordinal: 3, fromPrior: await proof(peerKeys, b1, b2) });
-    const superseded = follower(scene, a0, b1, oobId, 4);
-    const eligible = follower(scene, a0, b3, oobId, 5);
+    const deniedEarly = undocumented(b0, 10);
+    const supersededEarly = undocumented(b1, 20);
+    const denied = follower(scene, a0, b0, oobId, 30);
+    receipt(scene, { local: a0, peer: b2, resolution: resolved(scene, a0.didId, b2), ordinal: 40, fromPrior: await proof(peerKeys, b1, b2) });
+    const superseded = follower(scene, a0, b1, oobId, 50);
+    const eligible = follower(scene, a0, b3, oobId, 60);
     let vault = await fold(scene, keys);
     expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "available" });
     expect(vault.invitations.invitations.get(disclosure.eventId)!.candidates.map(({ eligibility }) => eligibility)).toEqual([
       { status: "refused", because: "the channel is denied" },
       { status: "refused", because: "the peer has replaced its DID" },
+      { status: "refused", because: "the channel is denied" },
+      { status: "refused", because: "the peer has replaced its DID" },
       { status: "eligible" },
     ]);
-    expect(eligibilities(vault, disclosure).map(([id]) => id)).toEqual([denied.eventId, superseded.eventId, eligible.eventId]);
+    expect(eligibilities(vault, disclosure).map(([id]) => id)).toEqual([deniedEarly.eventId, supersededEarly.eventId, denied.eventId, superseded.eventId, eligible.eventId]);
     expectSameOverEveryOrder(scene, vault.checks);
 
-    const undocumented = receipt(scene, { local: a0, peer: b2, resolution: resolved(scene, a0.didId, b2, { short: true }), ordinal: 1, presentedDid: b2.did, overrides: { pthid: oobId } });
+    const unknown = undocumented(b2, 55);
     vault = await fold(scene, keys);
     expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "pending", because: "the resolution's document is not here" });
-    expect(eligibilities(vault, disclosure)[0]).toEqual([undocumented.eventId, "deferred"]);
+    expect(eligibilities(vault, disclosure)[4]).toEqual([unknown.eventId, "deferred"]);
     expectSameOverEveryOrder(scene, vault.checks);
+  });
+
+  it("are refused on a channel in a continuity conflict, whether our end or the peer's forked, and untouched on a channel outside it", async () => {
+    const { scene, keys, peerKeys, a0, a1, a2, b0, b1, b2, b3 } = await vaults();
+    const disclosure = invitation(scene, a0);
+    const oobId = disclosure.data.oobId!;
+    const other = invitation(scene, a1);
+    await rotation(scene, keys, { from: a0, peer: b0, to: a1 });
+    await rotation(scene, keys, { from: a0, peer: b0, to: a2 });
+    const localFork = follower(scene, a0, b0, oobId, 1);
+    receipt(scene, { local: a0, peer: b2, resolution: resolved(scene, a0.didId, b2), ordinal: 2, fromPrior: await proof(peerKeys, b1, b2) });
+    receipt(scene, { local: a0, peer: b3, resolution: resolved(scene, a0.didId, b3), ordinal: 3, fromPrior: await proof(peerKeys, b1, b3) });
+    const peerFork = follower(scene, a0, b1, oobId, 4);
+    const outside = follower(scene, a1, b1, other.data.oobId!, 5);
+    const vault = await fold(scene, keys);
+    expect(vault.continuity.conflicts.map(({ kind }) => kind).sort()).toEqual(["competing-local-successors", "competing-peer-successors"]);
+    expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "available" });
+    expect(vault.invitations.invitations.get(disclosure.eventId)!.candidates).toMatchObject([
+      { source: { event: localFork }, eligibility: { status: "refused", because: "the channel is in a continuity conflict" } },
+      { source: { event: peerFork }, eligibility: { status: "refused", because: "the channel is in a continuity conflict" } },
+    ]);
+    expect(eligibilities(vault, other)).toEqual([[outside.eventId, "eligible"]]);
+    expectSameOverEveryOrder(scene, vault.checks);
+
+    const record = consumed(scene, disclosure, localFork);
+    const recorded = foldVault(vaultSet(scene.events), vault.checks).invitations.invitations.get(disclosure.eventId)!;
+    expect(recorded.consumptions.map(({ event, status }) => [event, status])).toEqual([[record, { status: "complete", consumer: b0.did }]]);
+    expect(recorded.status).toEqual({ status: "consumed", consumer: b0.did });
   });
 
   it("wait for the seed's word on the disclosed DID, and a receipt-integrity conflict among them leaves the invitation in conflict", async () => {

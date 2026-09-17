@@ -44,11 +44,12 @@ export interface Consumption {
  * Whether a receipt may be recorded as the invitation's consumption
  * now. Eligible may. Deferred waits for evidence, and stops the walk
  * behind it: nothing later is selected past it. Refused is current
- * policy — the disclosed DID no longer live, the channel denied or the
- * peer superseded — and invalid is evidence that refuses the receipt
- * for good; both are skipped. An integrity conflict is an ordinal one
- * author gave to two observations; it leaves the invitation
- * conflicted and selects nothing.
+ * policy — the disclosed DID or its route ended, the channel denied,
+ * the peer superseded or the channel in a continuity conflict — and
+ * invalid is evidence that refuses the receipt for good; both are
+ * skipped. An integrity conflict is an ordinal one author gave to two
+ * observations; reached before an eligible receipt, it leaves the
+ * invitation conflicted and selects nothing.
  */
 export type Eligibility = { status: "eligible" } | { status: "deferred"; because: string } | { status: "refused"; because: string } | { status: "invalid"; because: string } | { status: "integrity-conflict" };
 
@@ -63,7 +64,7 @@ export interface Candidate {
  * while a record that could establish a consumer is incomplete;
  * unavailable while the disclosed DID cannot acquire a consumer;
  * conflict when the records disagree, the invitation's ID is disclosed
- * twice, or a candidate is caught in a receipt-integrity conflict.
+ * twice, or the walk reaches a receipt-integrity conflict.
  */
 export type InvitationStatus = { status: "available" } | { status: "consumed"; consumer: Did } | { status: "pending"; because: string } | { status: "unavailable"; because: string } | { status: "conflict"; because: string };
 
@@ -87,13 +88,16 @@ export interface InvitationFold {
   readonly invitations: ReadonlyMap<EventId, Invitation>;
   /** every consumption record, by its event, whatever it names */
   readonly consumptions: ReadonlyMap<EventId, Consumption>;
-  /** the invitations disclosed under one ID, in canonical order: more than one is a conflict */
+  /** the one-use invitations disclosed under one ID, in canonical order; any other OOB disclosure of the ID conflicts them too */
   under(oobId: string): readonly Invitation[];
 }
 
 export function foldInvitations(set: VaultEventSet, routes: RouteFold, evidence: ChannelEvidence, continuity: Continuity, erasures: Erasures): InvitationFold {
+  const byOobId = groupBy(
+    set.of("did.disclosed").filter((event) => event.data.as === "oob"),
+    (event) => event.data.oobId!
+  );
   const disclosures = set.of("did.disclosed").filter(isOneUseInvitation);
-  const byOobId = groupBy(disclosures, (event) => event.data.oobId!);
   const records = groupBy(set.of("invitation.consumed"), (event) => event.data.disclosureEventId as EventId);
   const receipts = groupBy(
     set.of("message.in").filter((event) => event.data.fromPrior === null && event.data.pthid !== null && !erasures.has(event.data.messageId)),
@@ -107,10 +111,11 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold, evidence:
   for (const disclosure of disclosures) {
     const oobId = disclosure.data.oobId!;
     const entity = routes.dids.get(disclosure.data.didId);
+    const lifecycle = lifecycleOf(entity, routes);
     const own = (records.get(disclosure.eventId) ?? []).map((event) => consumptions.get(event.eventId)!);
     const candidates = (receipts.get(`${didKeyName(disclosure.data.didId, "key-agreement")} ${oobId}`) ?? [])
       .sort((a, b) => compareReceiptKeys(receiptOrderKey(a), receiptOrderKey(b)))
-      .map((event) => candidateOf(evidence.sources.get(event.eventId)!, entity, evidence, continuity));
+      .map((event) => candidateOf(evidence.sources.get(event.eventId)!, lifecycle, evidence, continuity));
     const consumer = consumerOf(own);
     invitations.set(disclosure.eventId, {
       disclosure,
@@ -119,14 +124,14 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold, evidence:
       localDid: entity?.created?.did ?? null,
       consumptions: own,
       consumer,
-      status: invitationStatus(own, consumer, byOobId.get(oobId)!.length, entity, candidates),
+      status: invitationStatus(own, consumer, byOobId.get(oobId)!.length, lifecycle, candidates),
       candidates,
     });
   }
   return {
     invitations,
     consumptions,
-    under: (oobId) => (byOobId.get(oobId) ?? []).map((event) => invitations.get(event.eventId)!),
+    under: (oobId) => (byOobId.get(oobId) ?? []).filter(isOneUseInvitation).map((event) => invitations.get(event.eventId)!),
   };
 }
 
@@ -164,14 +169,36 @@ function consumptionStatus(event: VaultEvent<"invitation.consumed">, set: VaultE
   return { status: "pending", because: missing[0]! };
 }
 
-/** The one consumer the complete records name, null while they name none or more than one. */
 function consumerOf(consumptions: readonly Consumption[]): Did | null {
   const consumers = new Set<Did>();
   for (const { status } of consumptions) if (status.status === "complete") consumers.add(status.consumer);
   return consumers.size === 1 ? [...consumers][0]! : null;
 }
 
-function invitationStatus(consumptions: readonly Consumption[], consumer: Did | null, disclosed: number, entity: LocalDidEntity | undefined, candidates: readonly Candidate[]): InvitationStatus {
+/**
+ * What the disclosed DID's lifecycle says about acquiring a consumer:
+ * ended for good — no consistent entity, retired, or bound to a route
+ * that is retired, misconfigured or on a terminal mediation — or
+ * waiting on something that may recover: the route's configuration,
+ * the mediation's grant, the seed's check of the keys.
+ */
+type Lifecycle = { readonly ended: string | null; readonly waiting: string | null };
+
+function lifecycleOf(entity: LocalDidEntity | undefined, routes: RouteFold): Lifecycle {
+  const ended = (because: string): Lifecycle => ({ ended: because, waiting: null });
+  if (entity === undefined || entity.created === null) return ended("the disclosed DID has no consistent creation here");
+  if (entity.conflict) return ended(`the disclosed DID is in conflict: ${entity.faults[0]}`);
+  if (entity.retired !== null) return ended("the disclosed DID is retired");
+  const route = routes.routes.get(entity.created.boundRouteId);
+  if (route?.terminal === true) {
+    if (route.retired !== null) return ended("the bound route is retired");
+    if (route.conflict) return ended("the bound route's configurations disagree");
+    return ended("the bound route's mediation is terminal");
+  }
+  return { ended: null, waiting: entity.live ? null : entity.faults[0]! };
+}
+
+function invitationStatus(consumptions: readonly Consumption[], consumer: Did | null, disclosed: number, lifecycle: Lifecycle, candidates: readonly Candidate[]): InvitationStatus {
   const conflict = (because: string): InvitationStatus => ({ status: "conflict", because });
   if (disclosed > 1) return conflict("the invitation's ID is disclosed more than once");
   const complete = consumptions.filter(({ status }) => status.status === "complete");
@@ -179,9 +206,7 @@ function invitationStatus(consumptions: readonly Consumption[], consumer: Did | 
   for (const { status } of consumptions) if (status.status === "conflict") return conflict(status.because);
   if (consumer !== null) return { status: "consumed", consumer };
   for (const { status } of consumptions) if (status.status === "pending") return { status: "pending", because: status.because };
-  if (entity === undefined || entity.created === null) return { status: "unavailable", because: "the disclosed DID has no consistent creation here" };
-  if (entity.conflict) return { status: "unavailable", because: `the disclosed DID is in conflict: ${entity.faults[0]}` };
-  if (entity.retired !== null) return { status: "unavailable", because: "the disclosed DID is retired" };
+  if (lifecycle.ended !== null) return { status: "unavailable", because: lifecycle.ended };
   for (const { eligibility } of candidates) {
     if (eligibility.status === "integrity-conflict") return conflict("a candidate receipt is caught in a receipt-integrity conflict");
     if (eligibility.status === "deferred") return { status: "pending", because: eligibility.because };
@@ -193,21 +218,26 @@ function invitationStatus(consumptions: readonly Consumption[], consumer: Did | 
 /**
  * A receipt's eligibility to be recorded now, in the order the verdicts
  * are final: what refuses the receipt for good, then what current
- * policy refuses, then what only waits. A complete witness at the
- * disclosed DID has that DID's entity consistent and confirmed; what
- * can still keep the entity from being live is its route or mediation,
- * which may recover.
+ * policy refuses — known from the lifecycle and from the channel's
+ * ends, which a receipt names even while its witness is incomplete —
+ * and only then what waits: the witness, or a route or mediation that
+ * may recover. A refusal that is already certain is not deferred, so a
+ * missing document behind a denied or superseded channel holds up
+ * nothing behind it.
  */
-function candidateOf(source: Source, entity: LocalDidEntity | undefined, evidence: ChannelEvidence, continuity: Continuity): Candidate {
+function candidateOf(source: Source, lifecycle: Lifecycle, evidence: ChannelEvidence, continuity: Continuity): Candidate {
   const candidate = (eligibility: Eligibility): Candidate => ({ source, eligibility });
   if (evidence.receipts.affected.has(source.event.data.messageId)) return candidate({ status: "integrity-conflict" });
   const witness = continuity.witness(source.event.eventId);
   if (witness.status === "invalid" || witness.status === "conflict") return candidate({ status: "invalid", because: witness.because });
-  if (entity?.retired != null) return candidate({ status: "refused", because: "the disclosed DID is retired" });
+  if (lifecycle.ended !== null) return candidate({ status: "refused", because: lifecycle.ended });
+  const channel = source.channel;
+  if (channel !== null) {
+    if (continuity.blocked(channel).length > 0) return candidate({ status: "refused", because: "the channel is denied" });
+    if (continuity.conflicted(channel)) return candidate({ status: "refused", because: "the channel is in a continuity conflict" });
+    if (continuity.superseded(channel)) return candidate({ status: "refused", because: "the peer has replaced its DID" });
+  }
   if (witness.status === "pending") return candidate({ status: "deferred", because: witness.because });
-  const channel = source.channel!;
-  if (continuity.blocked(channel).length > 0) return candidate({ status: "refused", because: "the channel is denied" });
-  if (continuity.superseded(channel)) return candidate({ status: "refused", because: "the peer has replaced its DID" });
-  if (!entity!.live) return candidate({ status: "deferred", because: entity!.faults[0]! });
+  if (lifecycle.waiting !== null) return candidate({ status: "deferred", because: lifecycle.waiting });
   return candidate({ status: "eligible" });
 }
