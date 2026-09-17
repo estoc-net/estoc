@@ -543,7 +543,8 @@ The mediation account remains the one `recipient` in Coordinate Mediation
 registered once per mediation arrangement, not once per replica.
 
 Registration is method-neutral. Local vault rendezvous and pairwise DIDs
-register their canonical Peer short forms. An externally managed `did:web`
+register their canonical Peer short forms. Web application recipients additionally
+require the [deferred mutable-channel profile](did-web-channels.md). An externally managed `did:web`
 recipient may also be registered when its control proof and constrained
 resolution validate. The recipient-control proof is verified against an
 authentication method of the exact recipient DID.
@@ -899,23 +900,21 @@ commit boundaries:
 
 Recipient classification follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate),
 including eligible retired historical addresses. For an otherwise eligible
-recipient, apply that profile's
-[sender authentication](relationships.md#sender-authentication-freshness),
-[failure classification](relationships.md#resolution-failure-classification),
-[bounded resolution](relationships.md#inbound-sender-resolution-budget) and
-[exhaustion](relationships.md#exhaustion-and-non-resolution-deferral) rules;
-retained chain membership cannot bypass current authentication.
+recipient, apply that profile's local
+[sender authentication](relationships.md#sender-authentication-freshness). A future
+Web channel additionally needs the [mutable-channel extension](did-web-channels.md),
+including its failure classification and bounded sender-resolution accounting;
+retained chain membership cannot bypass authentication.
 
 A delivery awaiting recoverable decryption, local DID/route/sync state,
-required sender resolution, or cryptographic material needed to open the
-envelope under [channels.md](channels.md#receipt)
+or other local receive prerequisites under [channels.md](channels.md#receipt)
 MUST NOT be acknowledged while it remains deferred under
 [relationships.md section 9.1](relationships.md#deferred-delivery). A delivery that is otherwise
 not safely classifiable MUST NOT be acknowledged either. That profile's
 [wait definition](relationships.md#deferred-delivery) and
-[resolution-accounting rules](relationships.md#shared-accounting-and-lost-wait-state)
-govern redelivery, evidence-change retries and loss of local wait state.
-This profile's accounting key includes the named replica; its pickup ACK scope
+[evidence-change rules](relationships.md#evidence-change-retries) govern redelivery,
+evidence recovery and loss of local wait state. When the deferred mutable-channel
+profile requires network accounting, its key additionally includes the named replica; its pickup ACK scope
 and idempotency remain as defined above.
 
 Authenticated channel receipt suffices for normal pickup acknowledgment;
@@ -1099,8 +1098,8 @@ A conforming implementation demonstrates at least these cases:
 4. <a id="rm-4"></a> Crash before durable normal acceptance produces no pickup ACK; crash after
    commit may redeliver and converges logically.
 5. <a id="rm-5"></a> A safely classified terminal pre-vault rejection may be pickup-ACKed without
-   `message.in`, while recoverable local prerequisites and sender-resolution
-   unavailability within [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s budget remain pending.
+   `message.in`, while recoverable local receive prerequisites remain pending.
+   Future Web channels additionally use the [deferred resolution budget](did-web-channels.md#inbound-sender-resolution-budget).
 6. <a id="rm-6"></a> Repeating one `forward.id` with identical normalized bytes stores no second
    message; different bytes never overwrite the first.
 7. <a id="rm-7"></a> `recipient_did` actually filters status and delivery.
@@ -1151,10 +1150,9 @@ A conforming implementation demonstrates at least these cases:
     with recoverable missing prerequisites. Foreign DIDs, nonexistent or
     wrong-purpose methods and terminal routes use the pre-vault ACK path.
     Retained retired exact keys can receive on eligible routes without continuity lookup.
-    Unavailable sender resolution withholds ACK only within the bounded shared
-    sequence; definitive resolution failure or budget exhaustion is terminal.
-    Unopened local/cryptographic waits suspend active accounting without
-    resetting it, under [relationships.md](relationships.md#shared-accounting-and-lost-wait-state).
+    Channel sender authentication is local for numalgo 4. Future Web channels
+    use the [deferred budget](did-web-channels.md#shared-accounting-and-lost-wait-state);
+    local receive prerequisite waits suspend that accounting without resetting it.
     Once channel receipt commits, missing channel/continuity evidence cannot withhold
     pickup ACK; invitation/effect state recovers from saved evidence without another pickup
     or resolution sequence. A new network delivery authenticates afresh.

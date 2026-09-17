@@ -155,7 +155,10 @@ The mediator applies one recipient profile to all communication DIDs.
 Public/private allocation is not sent to it. HTTP or
 mediator acceptance means only `submitted`; ultimate acknowledgment still
 requires an authenticated application plaintext whose explicit `ack` names the
-wire ID.
+wire ID. Phase-1 transports define no permanent-rejection result. HTTP errors,
+including 400 and 413, timeouts, disconnects and remote Problem Reports supply
+only local failure diagnostics, not `delivery.failed(code="rejected")`. An
+unsuccessful or uncertain call leaves manual work and grants no automatic retry.
 
 The mediator MUST bound normalized envelope size, retained ciphertext bytes,
 retained message count, registered recipients, recipient-update rate, pickup
@@ -237,11 +240,10 @@ this message's work and performs these steps:
 4. Under the vault lock, recheck package commitment, eligibility and the live
    action. Release the lock, consume that action's one invocation locally and
    call transport with the exact envelope and package ID.
-5. Record transport acceptance as `delivery.submitted` naming the message/package,
-   or a proven permanent rejection as `delivery.failed(code="rejected")` with
-   the same message/package under [termination](vault-events.md#delivery-failed).
-   Retryable or uncertain outcomes stay in local trace. Failure/uncertainty
-   grants no next call.
+5. Record transport acceptance as `delivery.submitted` naming the message/package.
+   Other phase-1 transport outcomes stay in local trace and MUST NOT produce
+   `delivery.failed(code="rejected")`. Failure/uncertainty grants no next call;
+   explicit cancellation and expiry follow [termination](vault-events.md#delivery-failed).
 
 Keep per-message dispatch serialized across this procedure, without holding
 the vault lock across network I/O. Resolve an uncertain preparation commit
@@ -294,9 +296,11 @@ The active runtime automatically completes missing
 Expose pending/unconfirmed messages for manual action under
 [dispatch authority](channels.md#fixed-outbound-channel), preserving message,
 execution, package and submission identities. The same uninterrupted initial
-receive operation may continue after a prerequisite wait; reopen, import and
-separate evidence recovery have no such action. Erased input starts no new
-effects. Fresh unrelated live input remains independent.
+receive operation may continue after a local receive prerequisite wait.
+Post-receipt missing predecessor material instead ends automatic eligibility
+for that carrier under [the proof rule](relationships.md#predecessor-resolution).
+Reopen, import and separate evidence recovery have no such action. Erased input
+starts no new content-derived effects. Fresh unrelated live input remains independent.
 
 <a id="canonical-projections-and-hashes"></a>
 
@@ -416,9 +420,8 @@ Use `message.out.senderDidId`, the canonical selected recipient and its derived
 fixed channel. Resolve the peer under
 [the address profile](relationships.md#recipient-resolution-freshness); select
 keys authorized by that operation's document for the intent's fixed DID pair.
-A method-authorized update may change keys or service without changing the
-channel. Validate the intent's source/proof evidence, local key and exact peer
-resolution under [the package schema](vault-events.md#message-prepared).
+The immutable peer document fixes its authorized keys and service. Validate the
+intent's source/proof evidence, local key and exact peer resolution under [the package schema](vault-events.md#message-prepared).
 Preparation and dispatch require current policy and a live initial/manual action.
 
 Construct the complete plaintext from immutable intent: conditional nullable
@@ -449,9 +452,12 @@ submission. Later ACK evidence can report receipt without reopening anything.
 Explicit cancellation commits message-scoped `delivery.failed` with code
 `cancelled` under [the termination rules](vault-events.md#delivery-failed),
 stopping pending work without claiming nondelivery.
-All `delivery.failed` records terminate the message. Their closed code set and
-nullable package reference follow the same termination schema; no separate
-package termination can permit replacement or leave the message pending.
+Every complete valid `delivery.failed` terminates the message. Its closed code
+set and nullable package reference follow the same termination schema; no
+separate package termination can permit replacement. A failure missing its
+required preparation remains pending evidence under that schema: it blocks
+preparation/dispatch but does not yet contribute a terminal displayed outcome
+or release envelope retention. Complete submission still takes precedence.
 Erasure, security denial, key/route retirement and missing exact bytes separately
 govern manual retry. Ordinary address rotation selects new messages only.
 
@@ -526,13 +532,13 @@ targets follow section 8.1.
 
 The executable fixture uses recipient
 `did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd`,
-authenticated sender `did:web:bob.example` and wire ID
+authenticated sender `did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP` and wire ID
 `019b1b61-3444-7190-9db5-1cc9c215eb23`:
 
 ```text
-executionId = 460fb564-67a5-5f0f-9066-9cd18d7d6f73
-effectKey = mo6V1ecaBZJHkRKXI9iPTwGGykSWcuLK_Fnf4uN9zKo
-outbound message ID = wire ID = 0b5fef0c-66fb-5563-bea6-c7d3fdec982c
+executionId = ccee59f0-8c79-5011-8822-dbb14de9cf7d
+effectKey = Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20
+outbound message ID = wire ID = 3543ac01-4ac6-5c14-b160-4f8f4e2e6811
 ```
 
 These values follow the channel execution transcript and effect-key
@@ -551,8 +557,8 @@ connectivity, group membership, threads and ordinary responses are insufficient.
 
 All redundant witness fields must come from one complete source row. Missing
 path/authentication/package references defer the acknowledgment. The carrier's
-key need not equal the old package's recipient key: a same-DID document update
-is authorized by the carrier's own current authentication evidence. The
+key need not equal the old package's recipient key: validate it against the
+carrier's own immutable DID document and any required successor path. The
 observation records peer receipt only, not transport acceptance or permission
 to send again.
 
@@ -585,8 +591,8 @@ messageId = UUIDv5(
 ```
 
 Keys and source event IDs remain exact authentication evidence. Different
-authorized keys under different method-valid snapshots can represent the same
-channel input; document updates create no new deduplication scope.
+authorized keys in the same immutable DID document can represent the same
+channel input; selected key differences create no new deduplication scope.
 Opposite sender directions cannot collide merely by choosing the same wire ID.
 For truly anonymous input, retain the independent observation-only derivation:
 
@@ -598,12 +604,12 @@ messageId = UUIDv5(
 ```
 
 For recipient `did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd`
-and sender `did:web:bob.example`, the naming vectors are:
+and sender `did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP`, the naming vectors are:
 
 | wireMessageId | messageId | executionId |
 | --- | --- | --- |
-| `019b2a70-f225-721c-835f-67175be0667e` | `336032bf-0c6e-5ce7-a3ed-a50bbf993055` | `57da12f5-2d30-56b9-839f-1ae6f0db8156` |
-| `019b1b61-3444-7190-9db5-1cc9c215eb23` | `fb01c09c-f8c5-5c62-b5b4-a8017500a2d8` | `460fb564-67a5-5f0f-9066-9cd18d7d6f73` |
+| `019b2a70-f225-721c-835f-67175be0667e` | `d2192dcf-cc5c-5f7d-b4f1-46972b7b04de` | `a03249b8-5e3e-5d10-a2e7-46844b38f5ae` |
+| `019b1b61-3444-7190-9db5-1cc9c215eb23` | `9cfaed56-2cb3-5a84-bc56-f8e882784ac8` | `ccee59f0-8c79-5011-8822-dbb14de9cf7d` |
 
 These are identifier fixtures, not authentication/proof fixtures.
 
@@ -855,6 +861,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ## 15. Required conformance cases
 
+Entries marked Deferred preserve their case IDs but are not phase-1 requirements.
+
 
 <a id="intent-and-immutable-packaging-dd-1-dd-12"></a>
 
@@ -898,7 +906,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     submission at the same committed boundary as other outbounds.
 18. <a id="dd-18"></a> A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
-19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution 460fb564-67a5-5f0f-9066-9cd18d7d6f73, effect mo6V1ecaBZJHkRKXI9iPTwGGykSWcuLK_Fnf4uN9zKo and wire ID 0b5fef0c-66fb-5563-bea6-c7d3fdec982c.
+19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution ccee59f0-8c79-5011-8822-dbb14de9cf7d, effect Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20 and wire ID 3543ac01-4ac6-5c14-b160-4f8f4e2e6811.
 
 20. <a id="dd-20"></a> One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
@@ -918,7 +926,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 25. <a id="dd-25"></a> Missing source authentication, endpoint or required link evidence defers the affected automatic operation; invitation state alone does not. Later evidence validates only its channel-local execution and grants no recovery dispatch.
 
-26. <a id="dd-26"></a> Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and ordinary document updates do not cause them.
+26. <a id="dd-26"></a> Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and equivalent long/short DID spellings do not cause them.
 
 27. <a id="dd-27"></a> Control input with a complete source witness may supply authorized ACK evidence. It creates no contacts or recursive privacy notifications, and its type alone consumes no invitation.
 
@@ -1009,24 +1017,12 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 57. <a id="dd-57"></a> Offline intent freezes the actual sender/recipient pair. Even a message with no prepared package is not readdressed after rotation.
 
-58. <a id="dd-58"></a> A valid same-DID key/service update preserves the channel. An ACK carrier can authenticate with the new key and acknowledge an old-key package; exact historical package evidence is unchanged.
+58. <a id="dd-58"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#dd-58).
 
-59. <a id="dd-59"></a> Independently authorized keys across document revisions share channel-local input identity; an unauthorized key supplies neither source authority nor an authenticated intent conflict.
+59. <a id="dd-59"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#dd-59).
 
-60. <a id="dd-60"></a> A new non-numalgo-4 message ID resolves and commits current recipient evidence
-    before first preparation. Transient unavailability leaves it retryable;
-    definitive resolution failure is terminal under [relationships.md section 10.1](relationships.md#did-resolution-requirements). An unchanged online-revalidated document still creates new evidence.
-    Committed packages retry manually with exact bytes and retained snapshots. Whenever
-    an inbound delivery enters or resumes authentication, including duplicates,
-    it uses current sender resolution; unavailability defers without pickup ACK
-    only within that section's per-delivery budget. Definitive DNS failures
-    and exhausted retries take the terminal pre-vault ACK path; redelivery
-    cannot reset the active sequence. Recoverable local prerequisite waits
-    consume no budget. Unopened cryptographic waits use that section's
-    suspension and fresh-sequence rule. Post-receipt operation recovery
-    consumes no sender-resolution attempts.
-    Reusing matching evidence requires a fresh document check. Recovery of
-    committed input uses its retained snapshot without another network lookup.
+60. <a id="dd-60"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#dd-60).
+
 61. <a id="dd-61"></a> A reply needs a usable authorized channel before intent commit. Missing sender leaves manual work; later recovery never dispatches it or retargets an existing response.
 
 62. <a id="dd-62"></a> Different local recipient DIDs produce different message/execution IDs. A verified role-preserving successor path may authorize an ACK for an old outbound without merging executions.

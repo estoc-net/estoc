@@ -11,10 +11,11 @@ The capitalized requirement words have their BCP 14 meanings.
 ## 1. Model
 
 A **channel** is the fixed ordered pair `(localDid, peerDid)` of distinct
-canonical communication DIDs, viewed from one vault. Each message retains its
-sender, recipient, authenticated keys and method-authorized document snapshots.
-A document update preserves the pair; a historical snapshot does not constrain
-the keys that the DID may authorize for later operations.
+canonical `did:peer:4` communication DIDs, viewed from one vault. Each
+message retains its sender, recipient, authenticated keys and exact immutable
+document evidence. Mutable channel DIDs belong to a
+[deferred extension](did-web-channels.md); mediator DIDs follow a separate
+[resolution policy](relationships.md#mediator-resolution).
 
 A **continuity link** is a derived replacement of exactly one endpoint in the
 context of one channel. The fold computes it from received proofs, resolution
@@ -54,9 +55,9 @@ has exactly these two DID strings:
 type Channel = { localDid: Did; peerDid: Did };
 ```
 
-Peer DID numalgo-4 uses its canonical short form. Other methods use their
-method-defined canonical spelling. Compare each role byte-for-byte; equal
-endpoints are invalid. `(A, B)` and `(B, A)` are different vault-local views.
+Both endpoints use the canonical numalgo-4 short form. Compare each role
+byte-for-byte; equal endpoints are invalid. `(A, B)` and `(B, A)` are different
+vault-local views.
 Receiving from B at A and sending from A to B use the same `(A, B)` channel.
 The notation `C(A, B)` throughout this profile means `{localDid: A, peerDid: B}`.
 
@@ -75,10 +76,8 @@ Compare selectors by both roles. Sort sets by unsigned UTF-8 byte order of
 set, not the two endpoints within a pair.
 
 Replacing either DID creates another channel; document CIDs, keys and resolution
-event IDs are verification evidence. Under [DID resolution](relationships.md#did-resolution-requirements),
-`did:web` document updates require no `from_prior` or continuity link, while a
-changed `did:peer:4` document yields another DID. Shared keys or services never
-alias distinct DIDs.
+event IDs are verification evidence. Changing a numalgo-4 encoded document
+yields another DID. Shared keys or services never alias distinct DIDs.
 
 <a id="receipt"></a>
 
@@ -153,8 +152,8 @@ The UI MUST distinguish these derived states:
 | `conflict` | Complete evidence establishes competing successors or contradictory channel authority |
 
 Rebuild these states from retained evidence. Missing imported references remain
-pending, not invalid. Resolver failures may add a bounded diagnostic; a failed
-fetch without a document is not proof of a bad signature. Channel denial and
+pending, not invalid. Missing local issuer material may add a bounded
+diagnostic; its absence is not proof of a bad signature. Channel denial and
 invitation/operation status are shown separately. Invitation availability
 does not make continuity pending. If an imported receipt's
 own sender evidence is missing, show that pending authentication separately;
@@ -195,8 +194,8 @@ Both references are required, non-null and already committed:
   `pthid == disclosure.oobId`.
 
 The consumer is the source's canonical peer DID within the disclosure's fixed
-local DID. Equivalent DID spellings and valid document revisions identify the
-same consumer; continuity does not transfer consumption to a successor peer.
+local DID. Validated long and short DID spellings identify the same consumer;
+continuity does not transfer consumption to a successor peer.
 
 The active runtime MUST process consumption automatically under the operation
 lock, checking invitation policy, local DID/route lifecycle, denial, supersession,
@@ -288,7 +287,7 @@ A complete proof witness can serve another independently authenticated carrier
 with the same compact JWT, canonical sender and canonical local recipient.
 Each witness uses one exact source/document association; fields cannot be
 assembled from different incomplete rows. Retained valid witnesses remain
-valid after method updates; a later failed check or missing sibling does not
+usable after later rotation; a failed check or missing sibling does not
 erase them. Without a valid witness, missing known dependencies mean pending;
 otherwise complete failed checks mean invalid. Intrinsically invalid claims
 cannot be repaired by another document. Arbitrary historical documents with
@@ -307,7 +306,7 @@ that decision as `did.rotationSelected`, with `roots == []` and five closed fiel
   "roots": [],
   "data": {
     "fromDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
-    "peerDid": "did:web:bob.example",
+    "peerDid": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
     "toDidId": "019b4d12-22d3-7fd0-82fb-f33864a75dd5",
     "sourceEventId": null,
     "fromPrior": "<compact-jwt>"
@@ -328,21 +327,31 @@ each outgoing package retains its own peer resolution.
 
 `sourceEventId` is null for manual rotation; otherwise it MUST name the complete
 source witness in `C(A0,B)` selected by the live privacy policy.
-The producer rechecks local lifecycle, denial, supersession,
-conflicts and operation-specific policy under the operation lock. It requires
+The producer rechecks local lifecycle, denial, conflicts and operation-specific
+policy under the operation lock, including peer supersession for source-derived
+work. It requires
 exact-address confirmation of `A0` by a complete source witness in the same
 peer context. That confirmation needs no prior handler
 execution or reply and MUST NOT depend on the rotation being selected.
 
 Commit the decision before any dependent intent or disclosure.
-A producer MUST NOT commit a second decision for the same `fromDidId` and
-`peerDid`; after interruption it reuses the existing successor and frozen proof.
+The local rotation context of `C(A0,B)` contains all channels retaining local
+DID `A0` and connected through verified peer-only replacements under section 5.1.
+A producer MUST NOT commit a decision from `A0` when a decision from `A0`
+already exists anywhere in that context. Under the operation lock, fold all
+available evidence before checking this condition. Reuse the existing successor
+and frozen proof; verified joins carry that choice to the related peer pairs.
+Do not create another decision or notification selection, or retarget the
+original notification. Missing dependencies defer reuse instead of authorizing
+allocation. A missing original notification remains manual work under the
+ordinary recovery rules. Evidence verified only after decisions were committed
+can still reveal a conflict under section 5.1.
 A decision extending an earlier successor requires exact-address confirmation
 of that successor in the applicable peer context. Confirmation permits extension,
 not another branch from the earlier predecessor. The fold derives
 `C(A0,B) -> C(A1,B)` from this decision,
 with both pairs fixed by the decision's fields and referenced local entities.
-The same `A0` used with another peer defines a different rotation context.
+The same `A0` used with an unrelated peer defines a different rotation context.
 A prepared message carrying this local proof must match the selected decision;
 it cannot independently select another rotation. Recovery of the decision
 grants no dispatch action.
@@ -355,8 +364,8 @@ the same oriented predecessor DID pair with complete decision and proof
 evidence. Operations validate the decision and carrier, not graph rows.
 The joined channel's local DID is the local link's successor; its peer DID is
 the peer link's successor. Each operation in the joined channel retains its
-own required peer resolution evidence; document revisions need not match
-across links. This is a derived join, not a fabricated received message or
+own required peer resolution evidence for its exact immutable endpoint
+documents. This is a derived join, not a fabricated received message or
 fabricated wire proof.
 
 ```mermaid
@@ -378,7 +387,7 @@ competing peer successors across that context. For local replacements,
 apply the symmetric rule through
 peer-only replacements. A join transports the existing two replacements; it
 does not create another competing choice. Each derived link exposes its exact
-source witnesses; document updates neither split the context nor hide
+source witnesses; equivalent DID spellings neither split the context nor hide
 competing successors. These contexts are derived queries; message identifiers
 remain fixed by their actual channel and sender.
 
@@ -445,8 +454,11 @@ its own source authentication or continuity proof.
 Import/rebuild validates each saved action's evidence references and protocol
 rules, not the producer's past wall-clock policy. Ordinary later rotation
 or blocking does not erase an earlier intent, local result or recorded
-submission. Current denial, supersession, expiry and conflicts still govern
-new work and dispatch; retaining history is not permission to execute it.
+submission. Current denial, expiry and conflicts still govern new work and
+dispatch. Peer supersession governs new work derived from old-peer input; it
+does not by itself block an explicit user send to an eligible pre-rotation
+address or manual dispatch of a committed intent. Retaining history supplies
+no dispatch action.
 Incomplete consistent siblings do not erase a complete witness. Different
 incomplete rows cannot be assembled into one witness.
 
@@ -465,9 +477,9 @@ work and invalidates display data that requires the erased bytes under
 ## 7. Identity, local policy and display
 
 The logical inbound identity is `(canonical sender DID, canonical recipient DID, wire ID)`.
-Key variants independently authorized by their own method-valid snapshots can
-agree on that one input, including across `did:web` document revisions; intent
-differences conflict. Another channel always has another logical input and
+Key variants independently authorized by the same immutable DID document can
+agree on that one input; intent differences conflict. Another channel always
+has another logical input and
 execution ID, even if its wire ID/content is equal and continuity is proven.
 Neither later graph discovery nor grouping merges executions. The ID formulas
 and within-channel vectors are in [delivery](distributed-delivery.md#observation-ids-and-vectors).
@@ -489,7 +501,7 @@ historical input and mailbox fan-out follow section 8's dispatch rules.
   "roots": [],
   "data": {
     "localDid": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd",
-    "peerDid": "did:web:bob.example",
+    "peerDid": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
     "includeSuccessors": true
   }
 }
@@ -535,7 +547,7 @@ retain their source channels even when a contact displays data from several chai
 For a new user send, follow complete verified role-preserving links and joins
 from each selected channel to its unique non-conflicted **head**: a reachable
 channel with no further verified forward replacement. A predecessor of such a
-link or join is superseded for default selection. Fold the complete available
+link or join is replaced for default selection. Fold the complete available
 graph before selecting; opposite-side paths that join at the same head supply
 one choice. Competing same-end successors or a cycle leave no default in the
 affected context. An ineligible head supplies no default and MUST NOT silently
@@ -546,9 +558,12 @@ the selected contexts. A `contact.useDid` preference also matches verified local
 successors of its DID along forward paths in those contexts. It grants no path
 to an unrelated channel sharing that DID. After applying any saved preference,
 exactly one eligible head supplies the default; otherwise the user must select
-a concrete eligible channel. A superseded channel may be used only by an
+a concrete eligible channel. A replaced channel may be used only by an
 explicit choice labelled as a pre-rotation address, subject to all ordinary
-send restrictions. Automatic replies follow their protocol's selection rules
+send restrictions. Replacement for default selection does not itself prohibit
+that explicit send. Peer supersession under section 5.2 instead governs new
+work derived from old-peer input. Automatic replies follow their protocol's
+selection rules
 under [delivery](distributed-delivery.md#built-in-independent-operations).
 
 `message.out` freezes `senderDidId` and `recipientDid` before preparation or
@@ -563,7 +578,7 @@ automatic effect IDs and frozen ACK arrays are never rewritten to follow it.
 
 Before transport, commit `message.prepared` to freeze one package for the
 message. Every call uses that package's exact bytes and ID, including the first
-call and manual retries. Later key updates, confirmation or termination cannot
+call and manual retries. Later rotation, confirmation or termination cannot
 replace it. Missing package bytes/evidence defer sending; conflicting prepared
 packages suppress it without an event-order winner. An uncertain preparation
 commit must be resolved before dispatch or further preparation.
@@ -603,6 +618,8 @@ must define an authenticated application operation ID and its own rules.
 
 ## 9. Required conformance cases
 
+Entries marked Deferred preserve their case IDs but are not phase-1 requirements.
+
 1. <a id="ch-1"></a> A channel is an ordered local/peer canonical DID pair, independent of keys, routes and contacts. Local sending and peer receipt share that pair; reversing local/peer roles selects a different vault-local view.
 2. <a id="ch-2"></a> First authenticated receipt commits and pickup-ACKs without invitation consumption, continuity history or a contact.
 3. <a id="ch-3"></a> A valid retained proof with complete authenticated source and endpoints derives its link without an earlier predecessor-channel message. Invitation state cannot make it pending-history; recovering required evidence adds no receipt or stored graph event.
@@ -617,7 +634,7 @@ must define an authenticated application operation ID and its own rules.
 12. <a id="ch-12"></a> Missing recoverable local receive material waits without pickup ACK; current-sender resolution uses its bounded sequence. Definitive envelope/authentication rejection pickup-ACKs without an observation. Missing predecessor proof material is never a pre-receipt wait.
 13. <a id="ch-13"></a> One-use consumption is automatic and needs no additional user decision. Select the first eligible non-erased receipt in receiptOrderKey order; an earlier candidate with missing evidence defers selection. Timeout, control type and matching pthid alone establish no consumption.
 14. <a id="ch-14"></a> A peer link applies only in its validated channel/local-continuation context and does not replace the peer in unrelated public-DID channels.
-15. <a id="ch-15"></a> Earlier source evidence, intents and results survive ordinary document updates and later extensions; contradictory identity evidence or same-end successors suppress new work without rewriting identity.
+15. <a id="ch-15"></a> Earlier source evidence, intents and results survive ordinary rotation and later extensions; contradictory identity evidence or same-end successors suppress new work without rewriting identity.
 16. <a id="ch-16"></a> Retained retired recipient keys can drain eligible routes; new sending, disclosure and invitation consumption obey retirement.
 17. <a id="ch-17"></a> An incomplete consistent sibling cannot create another same-channel execution or erase a complete witness. Cross-channel observations never merge executions.
 18. <a id="ch-18"></a> Recovery uses retained authentication evidence without fresh resolution of a saved receipt; new network deliveries authenticate afresh.
@@ -632,15 +649,19 @@ must define an authenticated application operation ID and its own rules.
 27. <a id="ch-27"></a> Swapping sender and recipient with the same wire ID produces different inbound/execution identities; changing either endpoint also changes those identities.
 28. <a id="ch-28"></a> A cyclic proof/rotation-confirmation dependency grants no continuity authority. Invitation consumption cannot supply missing proof, endpoint or confirmation evidence.
 29. <a id="ch-29"></a> Learning a missing graph link after independent channel executions never merges or replays those executions.
-30. <a id="ch-30"></a> Same-DID service updates preserve channel and input identity; a redelivered wire ID with equal intent creates no second execution or automatic response.
-31. <a id="ch-31"></a> A method-authorized same-DID key update permits new receipt and new-message preparation without from_prior. Historical snapshots remain unchanged.
-32. <a id="ch-32"></a> A key absent from the currently resolved sender document cannot authenticate new delivery; previously committed receipt still validates with its own snapshot on import.
-33. <a id="ch-33"></a> After a Web key update, a received replacement proof can use a new authorized authentication key through its exact message.fromPriorResolved document association. Unassociated old snapshots cannot bypass removal; a retained valid witness still verifies offline.
-34. <a id="ch-34"></a> Repeated identical proof with an updated successor document remains the same DID replacement; each carrier authenticates independently and no document CID elects a competing link.
-35. <a id="ch-35"></a> Document updates across local-only links do not split peer supersession/conflict context or break an otherwise complete join and cross-channel ACK path.
+30. <a id="ch-30"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ch-30).
+31. <a id="ch-31"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ch-31).
+32. <a id="ch-32"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ch-32).
+33. <a id="ch-33"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ch-33).
+
+34. <a id="ch-34"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ch-34).
+
+35. <a id="ch-35"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ch-35).
+
 36. <a id="ch-36"></a> The phase-1 adapter authenticates a carrier without resolving its predecessor. Receipt commits and pickup-ACKs with the exact original from_prior; UI shows pending-proof and no verified peer continuity or application effect. Proof failure never changes the authenticated source used for ingress limits.
 37. <a id="ch-37"></a> Saving a method-valid proof document and deriving its link need no earlier predecessor-channel message. A valid signature with a missing required source/endpoint/rotation record shows pending-history for that path; restoring it completes the path without another proof lookup.
-38. <a id="ch-38"></a> A malformed string-valued carried JWT, wrong sub or complete failed signature check shows invalid while preserving authenticated receipt and pickup ACK; a failed fetch without a usable document remains pending with a resolution diagnostic. Tampered envelope integrity or mismatched current-sender/recipient evidence still fails the receive gate and creates no message.in.
+38. <a id="ch-38"></a> A malformed string-valued carried JWT, wrong sub or complete failed signature check shows invalid while preserving authenticated receipt and pickup ACK. A valid short-form issuer without local long-form material stays pending-proof. Tampered envelope integrity or mismatched current-sender/recipient evidence still fails the receive gate and creates no message.in.
+
 39. <a id="ch-39"></a> Importing missing proof/history updates verification status, links and eligible ACK projections without a new receipt ordinal, input identity or automatic reply/notification dispatch.
 40. <a id="ch-40"></a> Rebuilding from receipts, exact document associations and local decisions yields the same graph and verification statuses in any import order. No consumer references a link/status projection row as an event.
 41. <a id="ch-41"></a> A local rotation decision fixes fromDidId, canonical peerDid, toDidId, nullable sourceEventId and fromPrior, and survives a crash before any outbound exists. A manual decision still fixes its peer with a null source; another peer sharing the old local DID cannot inherit it. Later preparation reuses its exact successor and JWT; merely preparing a package cannot select a competing rotation.
@@ -649,7 +670,8 @@ must define an authenticated application operation ID and its own rules.
 44. <a id="ch-44"></a> Two channels sharing a peer DID but using different local DIDs can be selected independently for a contact. Selection does not globally associate that peer DID's channels.
 45. <a id="ch-45"></a> Newly verified continuity may extend a contact's derived history or eligible send choices without changing contact.channelsSet. Missing/conflicting evidence changes only the affected view or eligibility; no stable chain ID or automatic send is created.
 46. <a id="ch-46"></a> Contact and block selectors compare both canonical localDid and peerDid. The same peer at another local DID stays separate; successor blocking requires a verified directed path from the selected pair.
-47. <a id="ch-47"></a> One invitation fixes its local recipient. Consumption by the same canonical peer is idempotent across equivalent spelling and document revisions; another peer conflicts, while another disclosure with a distinct oobId at a different local DID has independent consumption. Verified peer rotation neither transfers nor reopens the recorded consumption.
+47. <a id="ch-47"></a> One invitation fixes its local recipient. Consumption by the same canonical peer is idempotent across validated long/short spelling; another peer conflicts, while another disclosure with a distinct oobId at a different local DID has independent consumption. Verified peer rotation neither transfers nor reopens the recorded consumption.
+
 48. <a id="ch-48"></a> Missing exact local-DID or peer-resolution evidence leaves a source-derived pair pending. Another event, contact selector or shared key cannot substitute for that evidence; restoring it derives the same pair without changing saved message identities.
 49. <a id="ch-49"></a> Without consuming an invitation, a complete live source may produce a policy-permitted automatic intent, its valid fixed-channel package and a local rotation with independent exact-address confirmation. Import validates their own source, endpoints and proof and never dispatches them.
 50. <a id="ch-50"></a> An invitation consumption with a missing exact disclosure or source remains pending even if another receipt could independently justify the same consumer. That wait cannot block complete links, joins, rotation notifications or another operation with complete evidence.
@@ -657,5 +679,6 @@ must define an authenticated application operation ID and its own rules.
 52. <a id="ch-52"></a> Without consuming an invitation, a complete authenticated ACK or Report Problem carrier can be attributed to its exact outbound through a valid same-channel or role-preserving successor path and the required ID/thread match. An unrelated peer knowing the ID cannot supply attribution. These observations neither establish submission nor authorize retry.
 53. <a id="ch-53"></a> Many-use and non-OOB disclosures cannot be consumed. Republishing an invitation reuses its disclosure; distinct imported OOB disclosures with the same non-null oobId conflict and cannot supply another use or reopen prior consumption.
 54. <a id="ch-54"></a> Consumption requires already committed disclosure and source references, not same-batch prerequisites. After a crash before consumption commit, recovery automatically records the first currently eligible retained source; after commit, recovery preserves that consumer even if an earlier receipt is imported. Erased or currently refused input starts no consumption. Neither crash prefix dispatches a reply or disables the disclosed DID.
-55. <a id="ch-55"></a> A selected C(A0,B0) with verified local and peer replacements defaults to the unique joined head C(A1,B1), including when contact.useDid still names A0. A local-only or peer-only replacement changes only its respective endpoint. An unusable head, competing same-end successors or a cycle never defaults back to C(A0,B0); explicit pre-rotation selection grants no exemption from denial or conflict checks. Existing intents keep their original channel in every import order.
-56. <a id="ch-56"></a> Repeated rotation work for the same fromDidId/peerDid reuses its decision before and after successor confirmation. A second branch is refused; extending A1 to A2 requires independent exact-address confirmation of A1 in that peer context. A newly allocated successor and its decision commit atomically, so interruption exposes both or neither.
+55. <a id="ch-55"></a> A selected C(A0,B0) with verified local and peer replacements defaults to the unique joined head C(A1,B1), including when contact.useDid still names A0. An unusable head, competing same-end successors or a cycle never defaults back. An explicit pre-rotation user send to C(A,B0) after verified replacement by B1 is permitted subject to ordinary denial, conflict, key/route and other send restrictions. New automatic work from B0 input is refused; an already committed old-peer intent keeps its original channel and may be manually dispatched when otherwise eligible. Import order changes none of these saved endpoints.
+
+56. <a id="ch-56"></a> Repeated rotation work reuses the decision from the same local predecessor throughout its verified peer-only context, before and after successor confirmation. After (A0,B0) selects A1, a valid B0-to-B1 carrier at A0 cannot select A2 or another notification; new user sends default to C(A1,B1). Extending A1 to A2 requires independent exact-address confirmation of A1. A newly allocated successor and its decision commit atomically; evidence learned later can still expose competing decisions without choosing a winner.

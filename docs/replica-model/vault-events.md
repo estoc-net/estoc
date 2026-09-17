@@ -508,14 +508,14 @@ These facts remain distinct from contact assignments and local DID entities.
   "data": {
     "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
     "peerPublicKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
-    "presentedDid": "did:web:bob.example",
-    "did": "did:web:bob.example",
+    "presentedDid": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
+    "did": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
     "documentCid": "bafkrei...resolved-did-document",
     "authenticationMethodIds": [
-      "did:web:bob.example#authentication-0"
+      "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP:z...bob-input-document#authentication-0"
     ],
     "keyAgreementMethodIds": [
-      "did:web:bob.example#key-agreement-0"
+      "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP:z...bob-input-document#key-agreement-0"
     ],
     "service": "did:web:mediator.example"
   }
@@ -525,11 +525,9 @@ These facts remain distinct from contact assignments and local DID entities.
 This event is durable resolution evidence for one authenticated or selected
 peer key. `localKeyName` identifies the local communication key/context.
 
-- `presentedDid` is the exact DID string supplied for resolution, preserved
-  across any resolver-internal URL or DNS normalization.
-- `did` is the canonical DID used by folds under [relationships.md section 10.2](relationships.md#peer-did-numalgo-4-profile),
-  including its exact-string rule for `did:web`. For Peer DID numalgo 4 it is
-  the short form; first disclosure keeps the long form in `presentedDid`.
+- `presentedDid` is the exact numalgo-4 DID string supplied for resolution.
+- `did` is its canonical short form under [relationships.md section 10.2](relationships.md#peer-did-numalgo-4-profile);
+  first disclosure keeps the long form in `presentedDid`.
 - `documentCid` names the raw DASL object containing exact RFC 8785 canonical
   resolved DID document JSON. Its CID commits to those bytes.
 - the selected or authenticated `peerPublicKey` must be present under the named DID and exact
@@ -538,16 +536,16 @@ peer key. `localKeyName` identifies the local communication key/context.
   for those purposes in the exact retained document, with references resolved
   against that document's `id`. They do not prove every listed key controlled the
   observed message. Each consuming message references its
-  own exact evidence; method lists from different revisions MUST NOT be unioned
-  into a channel-wide authorization set; and
+  own exact evidence; method lists from different documents MUST NOT be unioned
+  into an authorization set; and
 - `service` is the selected DIDComm service URI or null.
 
-Receipts and packages may reference different method-authorized revisions under
-the same canonical DID without changing its channel. Predecessor JWT documents
-are associated separately through `message.fromPriorResolved`; the receipt's
+Receipts and packages retain exact resolution references for the immutable
+peer document. Predecessor JWT documents are associated separately through
+`message.fromPriorResolved`; the receipt's
 `peerResolutionEventId` continues to authenticate the current sender only.
 Both use the canonical document representation below. Those exact objects
-remain historical evidence; a later revision cannot replace any reference.
+remain historical evidence; another document cannot replace any reference.
 If the event or object is temporarily missing, processing is deferred until
 verified recovery material is available; absence is not proof that the
 transition is invalid. Phase 1 does not depend on deferred vault sync.
@@ -577,9 +575,8 @@ they do not produce a second document for the same numalgo-4 DID. Import
 validates this representation against `L`; it never repairs evidence by rewriting
 the retained bytes or CID. Method-ID comparison follows [section 6.4](#relationship-peertransitioned).
 
-Equivalent duplicate observations are harmless. Different valid Web document
-revisions for the same DID may coexist and need no portable ordering. Same
-document CID with incompatible contents is an integrity conflict; a different
+Equivalent duplicate observations are harmless. Same document CID with
+incompatible contents is an integrity conflict; a different
 document under one immutable Peer DID is invalid method evidence.
 
 <a id="mediation-communication-dids-and-routes"></a>
@@ -594,8 +591,8 @@ All communication DIDs have the same send, receive and continuity
 semantics. The core stores no public/pairwise role. Disclosure records and
 local address-allocation policy describe whether an address is public or was
 created for private use with one peer. Routes are reusable vault-scoped
-transport configurations. Resolving an external DID, including `did:web`, does
-not create a local DID entity or a publication obligation.
+transport configurations. Resolving an external mediator DID, including
+`did:web`, does not create a local DID entity or a publication obligation.
 
 <a id="mediation-events"></a>
 
@@ -1045,7 +1042,7 @@ disclosure/source references; [section 5.8](#invitation-fold) defines the view.
     "channels": [
       {
         "localDid": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd",
-        "peerDid": "did:web:bob.example"
+        "peerDid": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP"
       }
     ]
   }
@@ -1102,9 +1099,9 @@ Recovery of a saved association uses only its exact referenced document; network
 retrieval can fill missing bytes only when their canonical CID matches.
 Missing material defers verification; an invalid signature, claim, method or
 long form grants no proof authority. Repeated evidence for the same predecessor and
-successor is the same DID replacement even when method-authorized predecessor
-or successor document revisions differ. Verify each complete witness's own
-references; different revisions alone are not conflicting successors. Shared
+successor is the same DID replacement across validated long/short spellings.
+Verify each complete witness's own references against its immutable documents;
+another spelling alone is not a competing successor. Shared
 keys, current resolution alone and display assignment cannot replace the
 channel context and verified proof.
 
@@ -1491,7 +1488,7 @@ therefore identify one logical response.
   "data": {
     "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "senderDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
-    "recipientDid": "did:web:bob.example",
+    "recipientDid": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
     "thid": null,
     "pthid": null,
@@ -1602,7 +1599,7 @@ is an intent conflict.
     "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c",
     "senderDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
     "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
-    "recipientDid": "did:web:bob.example",
+    "recipientDid": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
     "peerResolutionEventId": "019b2a72-0626-7a87-a310-941fe4c1ce77",
     "fromPrior": null,
     "intentHash": "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA",
@@ -1634,8 +1631,8 @@ Requirements:
   the recipient key; its `peerPublicKey` supplies the package's derived peer key.
   Its `localKeyName` equals the package's local key and its canonical `did` matches
   `recipientDid`. It is non-null for every phase-1 package, including a
-  retained numalgo-4 resolution. Recipient-resolution freshness and
-  snapshot reuse follow [relationships.md section 10.1](relationships.md#did-resolution-requirements);
+  retained numalgo-4 resolution. Local resolution and evidence reuse follow
+  [relationships.md section 10.1](relationships.md#did-resolution-requirements);
 - `fromPrior` is the exact compact JWT included in the package or null;
 - the envelope object contains `UTF8(RFC8785(parsedEncryptedEnvelope))` under
   a raw DASL CID; duplicate members or invalid I-JSON are rejected before
@@ -1718,18 +1715,28 @@ for the intent, including manual retry. Further sending requires a new message I
 
 - `expired`: the unsubmitted intent reached its non-null expiry;
 - `cancelled`: an explicit user action cancelled the unsubmitted intent;
-- `peer-key-changed`: the definitive resolution failure before preparation
-  defined by [relationships.md section 10.1](relationships.md#did-resolution-requirements);
+- `peer-key-changed`: the definitive mutable-recipient resolution failure before
+  preparation described in the [deferred profile](did-web-channels.md#resolution-failure-classification);
   `packageId` is always null; or
 - `rejected`: the transport's defined response semantics prove permanent
   rejection of this exact fixed package; `packageId` MUST be non-null.
   A timeout, disconnect, retryable refusal or unclassified response does not
   prove this condition.
 
+Phase-1 producers MUST NOT append `peer-key-changed` or `rejected`: channel
+DID documents are immutable and phase-1 transports define no permanent-rejection
+result. These codes remain in the closed schema; imports still validate their
+message/package references and termination semantics. Mediator lookup errors
+or HTTP status alone cannot produce either code.
+
 When producing the event, `packageId` names the message's committed package
 if one already exists and is null otherwise. A non-null value must name a
 valid matching `message.prepared` for this message; a missing preparation leaves
-that evidence pending, not invalid. Package availability is a producer ordering
+that evidence pending, not invalid. Until complete, that failure supplies no
+terminal outcome and releases no envelope retention. Its unresolved package
+reference nevertheless blocks preparation and dispatch, including manual retry;
+it is not permission to prepare a different package. An independently complete
+submission still takes precedence. Package availability is a producer ordering
 rule: a null termination remains valid when a preparation is imported earlier
 or later. Import MUST NOT infer producer knowledge from event timestamps or
 canonical order, or turn a null termination into a package reference.
@@ -1834,8 +1841,12 @@ prepared
 queued
 ```
 
-`terminal` covers expiry, explicit cancellation and terminal failure; its code
-supplies the reason. `queued` and `prepared` describe retained intent/package
+`terminal` covers complete valid evidence of expiry, explicit cancellation and
+terminal failure; its code supplies the reason. An incomplete failure does not
+add this outcome: retain the otherwise derived queued/prepared/submitted state
+and show its missing-evidence block separately. A missing package reference
+still prevents preparation and dispatch until resolved. `queued` and `prepared`
+describe retained intent/package
 state, not whether a transport call occurred. Missing submission, including in
 a partial snapshot, does not prove nondelivery. Restored pending records require manual action;
 the UI may show that requirement separately. A submitted/terminal record
@@ -1871,7 +1882,7 @@ See [distributed-delivery.md section 9](distributed-delivery.md#observation-iden
     "bafkrei...attachment"
   ],
   "data": {
-    "messageId": "336032bf-0c6e-5ce7-a3ed-a50bbf993055",
+    "messageId": "d2192dcf-cc5c-5f7d-b4f1-46972b7b04de",
     "wireMessageId": "019b2a70-f225-721c-835f-67175be0667e",
     "receiptOrdinal": "42",
     "intentHash": "855qiA-zQ94SVOPYj2KnooWRNJAe1GB419LMTGLMwAs",
@@ -1879,8 +1890,8 @@ See [distributed-delivery.md section 9](distributed-delivery.md#observation-iden
     "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
     "peerResolutionEventId": "019b2a71-4c18-760a-9017-b3e265aa89d0",
-    "presentedDid": "did:web:bob.example",
-    "did": "did:web:bob.example",
+    "presentedDid": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
+    "did": "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
     "thid": null,
     "pthid": null,
     "createdTime": 1788442800,
@@ -2115,8 +2126,9 @@ Keep current eligibility separate from historical intents and completed facts.
 
 Intent conflict requires independently complete authentication, exact DID-pair
 agreement and carried-proof evidence for the disagreeing observations.
-Keys authorized by different valid Web revisions can therefore still produce
-an intent conflict in one logical input. Receipt alone, an unauthorized key or
+Different keys authorized by the same immutable peer document can therefore
+still produce an intent conflict in one logical input. Receipt alone, an
+unauthorized key or
 a still-missing reference cannot establish that conflict or invalidate an
 already complete source witness. Retain
 those rows with their own pending/refused diagnostics.
@@ -2224,8 +2236,9 @@ retainEnvelopeForMessage(M, P) =
     and !messageTerminal(M)
 ```
 
-Terminal means a valid committed message termination under `delivery.failed`,
-including expiry or cancellation. Sampling wall
+Terminal means complete valid committed message termination evidence under
+`delivery.failed`, including expiry or cancellation. A failure whose required
+preparation is missing does not release the envelope. Sampling wall
 time beyond expiry blocks unsubmitted work but MUST NOT release its envelope
 until that durable termination is committed. `submitted(M)` is defined by
 [section 9.7](#outbound-message-and-delivery-fold) and remains true after envelope collection or termination.
@@ -2404,12 +2417,17 @@ Shared keys/routes are not retired merely because one display contact disappears
 ### 13.7 Rotate a local channel address
 
 1. Select the exact predecessor pair from an existing local DID and canonical
-   peer DID, verify exact predecessor confirmation and check current rotation policy.
+   peer DID, verify exact predecessor confirmation and check current rotation
+   policy. Check for an existing decision throughout its verified peer-only
+   context before allocating; reuse it, or defer on missing references.
 2. With an already configured eligible route, allocate a fresh local DID and
    sign one frozen predecessor proof without committing that new DID yet.
-3. Under the lock, recheck lifecycle, denial, supersession, conflict and an
-   existing decision for the same `fromDidId`/`peerDid`. Reuse an existing
-   decision; otherwise atomically commit the new successor's `did.created`
+3. Under the lock, fold complete available continuity and recheck lifecycle,
+   denial, source-input supersession, conflict and existing decisions from the
+   same local predecessor throughout its verified peer-only context under
+   [channels.md](channels.md#did-rotationselected). Reuse that decision and its
+   successor without a new notification selection; missing references defer.
+   Otherwise atomically commit the new successor's `did.created`
    and `did.rotationSelected` with `fromDidId`, `peerDid`, `toDidId`, nullable
    `sourceEventId` and frozen `fromPrior`. Resolve an uncertain commit before
    allocating again. Do not retire shared resources.
@@ -2571,6 +2589,8 @@ derivation requires a new vault version.
 
 ## 17. Required conformance cases
 
+Entries marked Deferred preserve their case IDs but are not phase-1 requirements.
+
 
 <a id="runtime-identity-ve-1-ve-2"></a>
 
@@ -2625,7 +2645,7 @@ derivation requires a new vault version.
 
 17. <a id="ve-17"></a> Missing required source, endpoint or link evidence defers only the affected consumers. Later validation preserves this channel-local identity and grants no automatic recovery dispatch.
 
-18. <a id="ve-18"></a> Contradictory channel identities or authenticated intents conflict; another recipient DID produces another channel and execution identity. Document revisions alone do neither.
+18. <a id="ve-18"></a> Contradictory channel identities or authenticated intents conflict; another recipient DID produces another channel and execution identity. Validated long/short spellings alone do neither.
 
 19. <a id="ve-19"></a> Intent conflicts suppress disputed automatic effects and ACK
     processing.
@@ -2640,7 +2660,7 @@ derivation requires a new vault version.
 
 23. <a id="ve-23"></a> Resolution and channel receipt commit before pickup ACK; missing or refused invitation consumption does not withhold it.
 
-24. <a id="ve-24"></a> Local/cryptographic prerequisites wait without pickup ACK; continuity waits after authenticated receipt. Retired exact keys may drain eligible routes independently of contacts.
+24. <a id="ve-24"></a> Local receive prerequisites wait without pickup ACK; continuity waits after authenticated receipt. Retired exact keys may drain eligible routes independently of contacts.
 
 25. <a id="ve-25"></a> Safely classified hard pre-vault rejection is pickup-ACKed before any
     `message.in` and leaves only bounded local diagnostics.
@@ -2649,9 +2669,8 @@ derivation requires a new vault version.
 
 ### Peer evidence and invitation decisions (VE-26–VE-37)
 
-26. <a id="ve-26"></a> `peer.resolved` retains exact canonical document bytes under their raw CID,
-    presented/canonical DID forms and selected key IDs, including for external
-    `did:web` peers.
+26. <a id="ve-26"></a> `peer.resolved` retains exact canonical numalgo-4 document bytes under their raw CID, presented/canonical DID forms and selected key IDs. Long/short lookup reproduces the same immutable document.
+
 27. <a id="ve-27"></a> Peer DID first disclosure uses one identical long-form spelling in
     plaintext `from`, protected `skid` and decoded `apu`.
 28. <a id="ve-28"></a> Public discovery uses a chosen communication address under disclosure
@@ -2756,8 +2775,8 @@ derivation requires a new vault version.
     suppresses further preparation or submission, including with an imported competing package. Workers
     serialize dispatch per message ID and commit acceptance before further dispatch.
 66. <a id="ve-66"></a> The inbound message ID vectors in [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) recompute to
-    `336032bf-0c6e-5ce7-a3ed-a50bbf993055` and
-    `fb01c09c-f8c5-5c62-b5b4-a8017500a2d8` from their published inputs.
+    `d2192dcf-cc5c-5f7d-b4f1-46972b7b04de` and
+    `9cfaed56-2cb3-5a84-bc56-f8e882784ac8` from their published inputs.
 67. <a id="ve-67"></a> Attachment IDs obey DIDComm 2.1 URI-unreserved syntax independently of
     filename or DASL object identity.
 68. <a id="ve-68"></a> An otherwise retained unsubmitted package survives route unavailability
@@ -2857,25 +2876,16 @@ derivation requires a new vault version.
 
 103. <a id="ve-103"></a> message.out requires immutable senderDidId and recipientDid; their canonical endpoints determine its channel. Different endpoint values conflict even if intentHash agrees; rotation never retargets it.
 
-104. <a id="ve-104"></a> Ordinary user sending and preparation need no first reply or invitation consumption. Their fixed intent and exact package evidence retain the channel through document update, reply, submission, erasure and restore.
+104. <a id="ve-104"></a> Ordinary user sending and preparation need no first reply or invitation consumption. Their fixed intent and exact package evidence retain the channel through rotation, reply, submission, erasure and restore.
 
-105. <a id="ve-105"></a> Successful same-DID resolution with a newly authorized usable key permits preparation and receipt using their own exact evidence. Definitive resolution failure retains the scoped failure path; revoked keys cannot authenticate new delivery.
+105. <a id="ve-105"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ve-105).
 
-106. <a id="ve-106"></a> Keys independently authorized by different valid Web revisions may authenticate the same channel input. Equal intent deduplicates and contradictory intent conflicts; another channel never merges execution.
+106. <a id="ve-106"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ve-106).
 
 107. <a id="ve-107"></a> Channel selectors preserve local/peer roles and compare canonical DID strings; key encoding and display IDs cannot change the pair.
 
-108. <a id="ve-108"></a> Preparation for each new non-numalgo-4 outbound performs
-     fresh resolution. Retry preserves the committed package and its evidence;
-     neither an old snapshot nor a local TTL bypasses the new-message ID rule.
-     Every new non-numalgo-4 inbound observation also requires current sender
-     authentication under [relationships.md section 10.1](relationships.md#did-resolution-requirements); a chain member absent
-     from the current document fails, and unavailable resolution defers
-     without pickup ACK only within that section's per-delivery budget.
-     Exhaustion is terminal input with pickup ACK and no `message.in`, without
-     timing out recoverable local key/route/evidence state.
-     Committed observations recover from their retained evidence without new
-     resolution or retroactive scope changes.
+108. <a id="ve-108"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ve-108).
+
 109. <a id="ve-109"></a> Control type alone creates no invitation consumer, contact or privacy link. A control input with a complete source witness may supply permitted ACK evidence without recursive notifications.
 
 110. <a id="ve-110"></a> Retained old recipient keys can receive. No usable authorized sender means no automatic response intent; later recovery exposes manual work instead of sending or retargeting it.
@@ -2894,7 +2904,7 @@ derivation requires a new vault version.
 
 115. <a id="ve-115"></a> Local rotation changes new intent selection only. Queued, prepared and submitted messages keep their oriented channel; a new-channel send needs a new ID.
 
-116. <a id="ve-116"></a> Equivalent DID replacements are idempotent across valid document revisions; same-side branches, dependency cycles and contradictory identity evidence conflict. Invitation state cannot defer complete links, automatic output or preparation.
+116. <a id="ve-116"></a> Equivalent DID replacements are idempotent across validated long/short spelling; same-side branches, dependency cycles and contradictory identity evidence conflict. Invitation state cannot defer complete links, automatic output or preparation.
 
 117. <a id="ve-117"></a> Verified role-preserving paths can authorize successor ACKs for fixed old outbounds; they do not merge source executions and display membership supplies no path.
 
@@ -2933,7 +2943,7 @@ derivation requires a new vault version.
      controllers, array order and input contexts are preserved as in [section 4.4](#peer-resolved). No resolver-added context or absolute-reference variant is stored.
      Long/short receipt, restore and repeated proof processing reproduce one
      RFC 8785 byte string and raw CID, without a spurious document conflict.
-131. <a id="ve-131"></a> Supported methods without canonicalization preserve exact DID strings; case/encoding/trailing-dot differences cannot collapse channels or proof context, and did:web document IDs must match exactly.
+131. <a id="ve-131"></a> Deferred: [mutable channel DID behavior](did-web-channels.md#ve-131).
 
 <a id="contact-profiles-ve-132-ve-137"></a>
 
@@ -3007,6 +3017,6 @@ derivation requires a new vault version.
 
 ### Termination payload and rotation allocation (VE-156–VE-157)
 
-156. <a id="ve-156"></a> delivery.failed has exactly messageId, nullable packageId and one of expired, cancelled, peer-key-changed or rejected, with empty roots. Extra scope or unknown codes are invalid. Expiry and cancellation name an already prepared package and otherwise use null; peer-key-changed requires null and rejected requires the matching package. A null termination stops a preparation imported in either order. A non-null mismatched package is invalid, a missing own package is pending, and a complete submission still takes precedence. Every valid termination releases its message's envelope contribution without package-scoped state.
+156. <a id="ve-156"></a> delivery.failed has exactly messageId, nullable packageId and one of expired, cancelled, peer-key-changed or rejected, with empty roots. Phase-1 producers emit only expired or cancelled; imports still validate the full closed schema and references. Extra scope or unknown codes are invalid. Expiry/cancellation name an already prepared package and otherwise use null; peer-key-changed requires null and rejected requires the matching package. A null termination stops a preparation imported in either order. A non-null mismatched package is invalid. A missing own package leaves failure evidence pending, blocks preparation/dispatch without contributing terminal display or releasing envelope retention, and becomes terminal only with complete valid evidence. An independently complete submission still takes precedence.
 
 157. <a id="ve-157"></a> New rotation allocation commits its UUIDv7 did.created and did.rotationSelected atomically. A crash exposes both or neither; recovery of an uncertain commit reuses the committed successor/decision instead of allocating a second DID. Import of the decision without its creation remains pending until exact evidence arrives. No crash prefix alone permits disclosure or dispatch.
