@@ -14,17 +14,19 @@ import { DamagedObject, ObjectTooLarge, type Retained, type Vault, type VaultObj
 import type { Keys } from "../identity.js";
 import type { Cid, DidId, EventId, MediationId } from "../types.js";
 import { foldAuthors, foldLabel, type AuthorActivity } from "./author.js";
+import { foldChannelEvidence, verifyProofs, type ChannelEvidence } from "./channels.js";
 import { verifyResolutions, type EvidenceCheck, type ReadObject } from "./evidence.js";
 import { foldErasures, heldRoots, retainedRoots, type Erasures } from "./held.js";
 import { foldMediations, verifyMediationKeys, type KeyCheck, type MediationFold } from "./mediation.js";
 import { foldRoutes, verifyDidKeys, type RouteFold } from "./routes.js";
 import { VaultEventSet } from "./set.js";
 
-/** The verdicts a fold cannot reach on its own: the seed's on each entity, the retained documents' on each snapshot. */
+/** The verdicts a fold cannot reach on its own: the seed's on each entity, the retained documents' on each snapshot and on each proof. */
 export type VaultChecks = {
   mediationKeys?: ReadonlyMap<MediationId, KeyCheck>;
   didKeys?: ReadonlyMap<DidId, KeyCheck>;
   resolutionChecks?: ReadonlyMap<EventId, EvidenceCheck>;
+  proofChecks?: ReadonlyMap<EventId, EvidenceCheck>;
 };
 
 export interface VaultFold {
@@ -34,6 +36,7 @@ export interface VaultFold {
   readonly authors: readonly AuthorActivity[];
   readonly mediations: MediationFold;
   readonly routes: RouteFold;
+  readonly channels: ChannelEvidence;
   readonly erasures: Erasures;
   /** each accepted event with each root it still retains */
   readonly retained: readonly Retained[];
@@ -46,6 +49,7 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}): VaultFo
     mediationKeys: checks.mediationKeys ?? new Map(),
     didKeys: checks.didKeys ?? new Map(),
     resolutionChecks: checks.resolutionChecks ?? new Map(),
+    proofChecks: checks.proofChecks ?? new Map(),
   };
   const mediations = foldMediations(set, { keyChecks: all.mediationKeys });
   const routes = foldRoutes(set, mediations, { keyChecks: all.didKeys });
@@ -57,6 +61,7 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}): VaultFo
     authors: foldAuthors(set),
     mediations,
     routes,
+    channels: foldChannelEvidence(set, routes, all),
     erasures,
     retained: retainedRoots(set, erasures),
     held: heldRoots(set, erasures),
@@ -86,13 +91,16 @@ export function objectReader(objects: VaultObjects, maxBytes = MAX_READ_BYTES): 
 /**
  * Every check beside the fold: the seed's verdict on each mediation
  * and DID entity when the keys are here, no verdict otherwise; each
- * resolution's snapshot against the retained documents.
+ * resolution's snapshot against the retained documents; each proof
+ * against the issuer's document those snapshots retain or its long
+ * form derives.
  */
 export async function checkVault(set: VaultEventSet, keys: Keys | null, readObject: ReadObject): Promise<Required<VaultChecks>> {
   const mediationKeys = keys === null ? new Map<MediationId, KeyCheck>() : await verifyMediationKeys(keys, foldMediations(set));
   const mediations = foldMediations(set, { keyChecks: mediationKeys });
   const didKeys = keys === null ? new Map<DidId, KeyCheck>() : await verifyDidKeys(keys, foldRoutes(set, mediations));
-  return { mediationKeys, didKeys, resolutionChecks: await verifyResolutions(set, readObject) };
+  const resolutionChecks = await verifyResolutions(set, readObject);
+  return { mediationKeys, didKeys, resolutionChecks, proofChecks: await verifyProofs(set, resolutionChecks, readObject) };
 }
 
 export async function foldVaultChecked(set: VaultEventSet, keys: Keys | null, readObject: ReadObject): Promise<VaultFold> {

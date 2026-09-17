@@ -1,15 +1,18 @@
 /**
  * A scene of two vaults: ours with three communication DIDs on a
  * mediated route, the peer's with four DIDs minted from another seed,
- * and the builders that record resolutions, receipts, intents and
- * packages between them, so a fold over messages can be set up in a
- * few lines.
+ * and the builders that record resolutions, receipts, proofs either
+ * side signs, rotation decisions, intents and packages between them,
+ * so a fold over messages can be set up in a few lines.
  */
+import type { Event } from "@estoc/event-store/v3";
 import { v7 as uuidv7 } from "uuid";
 
 import {
+  VaultEventSet,
   authorizedMethodIds,
   automaticMessageId,
+  channelOf,
   didKeyName,
   effectKey,
   inboundMessageId,
@@ -17,6 +20,11 @@ import {
   mintDid,
   mintMediationDid,
   peerResolution,
+  signFromPrior,
+  verifyProofs,
+  verifyResolutions,
+  type Channel,
+  type ChannelChecks,
   type Did,
   type DidId,
   type EventReference,
@@ -27,6 +35,7 @@ import {
   type PackageId,
   type PeerResolution,
   type PublicKey,
+  type ReadObject,
   type VaultData,
   type VaultEvent,
   type WireMessageId,
@@ -131,6 +140,38 @@ export function receipt(scene: Scene, r: Receipt, options: EventOptions = {}): V
 }
 
 export const noObjects = async () => null;
+
+export const IAT = 1_757_700_000;
+
+/** The proof that `successor` continues `predecessor`, signed by whichever seed minted the predecessor. */
+export const proof = (keys: Keys, predecessor: { didId: DidId; longFormDid: Did }, successor: { longFormDid: Did }, iat = IAT) => signFromPrior(keys, predecessor, successor.longFormDid, iat);
+
+export const channel = (local: { did: Did }, peer: { did: Did }): Channel => channelOf(local.did, peer.did);
+
+export type Rotation = { from: Local; peer: Peer; to: Local; source?: VaultEvent<"message.in"> | null; fromPrior?: string; overrides?: Partial<VaultData["did.rotationSelected"]> };
+
+/** Our decision to continue `from` as `to` toward the peer, under the proof our seed signs unless one is given. */
+export async function rotation(scene: Scene, keys: Keys, r: Rotation, options: EventOptions = {}): Promise<VaultEvent<"did.rotationSelected">> {
+  return scene.add(
+    "did.rotationSelected",
+    {
+      fromDidId: r.from.didId,
+      peerDid: r.peer.did,
+      toDidId: r.to.didId,
+      sourceEventId: r.source == null ? null : ref(r.source),
+      fromPrior: r.fromPrior ?? (await proof(keys, r.from, r.to)),
+      ...r.overrides,
+    },
+    options
+  );
+}
+
+/** The verdicts on every resolution and proof of a set of events, computed once: they depend on the set, not on its order. */
+export async function evidenceChecks(events: readonly Event[], readObject: ReadObject = noObjects): Promise<Required<ChannelChecks>> {
+  const set = VaultEventSet.of(events);
+  const resolutionChecks = await verifyResolutions(set, readObject);
+  return { resolutionChecks, proofChecks: await verifyProofs(set, resolutionChecks, readObject) };
+}
 
 /** A locally initiated send in a channel: one intent under a fresh message ID, nothing automatic. */
 export function intent(scene: Scene, sender: Local, recipient: Peer, overrides: Partial<MessageOut> = {}, options: EventOptions = {}): VaultEvent<"message.out"> {
