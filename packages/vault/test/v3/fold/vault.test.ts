@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { Keys, checkVault, foldVault, objectReader, rawCidOfBytes, scanVault, VaultEventSet, type VaultChecks, type VaultFold } from "../../../src/v3/index.js";
 import { SEED, expectOrderFree } from "./helpers.js";
-import { CONTACT, bound, intent, noObjects, packageOf, receipt, resolved, vaults } from "./scene.js";
+import { intent, noObjects, packageOf, receipt, resolved, vaults } from "./scene.js";
 
 const encoder = new TextEncoder();
 
@@ -21,13 +21,11 @@ describe("the whole fold", () => {
   it("feeds every fold the ones it reads, holds what they retain, and is the same over every order of the events", async () => {
     const { scene, keys, a0, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
-    const { R, bound: binding } = bound(scene, a0, b0, root);
-    scene.add("relationship.contactAssigned", { relationshipId: R, contactId: CONTACT });
     scene.add("identity.label", { name: "me" });
-    const inbound = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
-    const out = intent(scene, R);
+    const inbound = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1 });
+    const out = intent(scene, a0, b0);
     const pkg = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
-    scene.add("delivery.submitted", { messageId: out.data.messageId, packageId: pkg.data.packageId });
+    scene.add("message.erased", { messageId: out.data.messageId, dropCids: [pkg.data.envelopeCid], because: "user" });
     const checks = await checkVault(VaultEventSet.of(scene.events), keys, noObjects);
     expect(checks.didKeys.get(a0.didId)).toBe("verified");
     expect(checks.resolutionChecks.get(root.eventId)).toBe("verified");
@@ -36,10 +34,7 @@ describe("the whole fold", () => {
       expect(fold.authors).toHaveLength(1);
       expect(fold.mediations.preferred).not.toBeNull();
       expect(fold.routes.dids.get(a0.didId)!.live).toBe(true);
-      expect(fold.relationships.relationships.get(R)!.contactId).toBe(CONTACT);
-      expect(fold.inbound.observations.get(inbound.eventId)!.scope).toEqual({ status: "scoped", relationshipId: R });
-      expect(fold.outbound.outbounds.get(out.data.messageId)).toMatchObject({ submitted: true, outcome: "submitted" });
-      expect(fold.contacts.get(CONTACT)!.thread.map((entry) => entry.eventIds)).toEqual([[inbound.eventId]]);
+      expect(fold.erasures.get(out.data.messageId)).toEqual(new Set([pkg.data.envelopeCid]));
       expect(fold.held).toEqual(new Set([root.data.documentCid, inbound.data.bodyCid, out.data.bodyCid]));
       expect(fold.retained.filter((edge) => edge.eventId === pkg.eventId)).toEqual([]);
       expect(fold.retained.filter((edge) => edge.eventId === out.eventId)).toEqual([{ eventId: out.eventId, root: out.data.bodyCid }]);
@@ -68,6 +63,6 @@ describe("the whole fold", () => {
     vault.stores.objects.damage(cid);
     expect(await read(cid)).toBeNull();
     const checks: VaultChecks = {};
-    expect(foldVault(VaultEventSet.of(scene.events), checks).checks.problemReports.size).toBe(0);
+    expect(foldVault(VaultEventSet.of(scene.events), checks).checks.resolutionChecks.size).toBe(0);
   });
 });

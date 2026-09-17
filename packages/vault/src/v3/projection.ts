@@ -14,7 +14,7 @@ import { base64urlnopad } from "@scure/base";
 
 import { storeMessage, wireAttachment, type StoredMessage, type StoredMessageDocument } from "./document.js";
 import { InvalidPlaintext } from "./errors.js";
-import { isCompactJwt, isDid, isEpochSeconds } from "./syntax.js";
+import { isDid, isEpochSeconds } from "./syntax.js";
 import type { AdditionalHeaders, Cid, Did, EpochSeconds, MessageHash, MessageOut } from "./types.js";
 
 /** The DIDComm plaintext media type: the `typ` header a plaintext carries. */
@@ -186,9 +186,9 @@ export function readPlaintext(value: unknown): ReadPlaintext {
   }
   const pleaseAck = optional(value.please_ack, "please_ack", strings);
   const ack = optional(value.ack, "ack", strings) ?? [];
-  const fromPrior = optional(value.from_prior, "from_prior", (jwt, at) => {
-    if (!isCompactJwt(jwt)) throw new InvalidPlaintext(`${at} must be a compact JWT`);
-    return jwt;
+  const fromPrior = optional(value.from_prior, "from_prior", (proof, at) => {
+    if (typeof proof !== "string") throw new InvalidPlaintext(`${at} must be a string`);
+    return proof;
   });
   const stored = storeMessage(value.body, value.attachments);
   const headers: AdditionalHeaders = Object.fromEntries(Object.entries(value).filter(([name]) => !RESERVED.has(name)));

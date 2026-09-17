@@ -17,13 +17,12 @@ export type EntityId<Kind extends string> = string & { readonly __entity: Kind }
 /** A vault message entity, or an inbound observation group. */
 export type MessageId = EntityId<"message">;
 export type ContactId = EntityId<"contact">;
-export type RelationshipId = EntityId<"relationship">;
 /** A local communication-DID entity, not the DID string. */
 export type DidId = EntityId<"did">;
 export type RouteId = EntityId<"route">;
 export type MediationId = EntityId<"mediation">;
 export type PackageId = EntityId<"package">;
-/** A relationship-scoped automatic execution. */
+/** A channel-scoped automatic execution. */
 export type ExecutionId = EntityId<"execution">;
 /** Deferred configuration events only. */
 export type SyncId = EntityId<"sync">;
@@ -41,12 +40,13 @@ export type Did = string & { readonly __did: unique symbol };
 export type DidUrl = string & { readonly __didUrl: unique symbol };
 /** The derived idempotency key of one automatic effect. */
 export type EffectKey = string & { readonly __effectKey: unique symbol };
-/** An effect's ordinal as it is stored: canonical non-negative decimal. */
-export type DecimalOrdinal = string & { readonly __decimalOrdinal: unique symbol };
 /** An inbound observation's receipt ordinal as it is stored: canonical positive decimal. */
 export type ReceiptOrdinal = string & { readonly __receiptOrdinal: unique symbol };
 /** Unpadded base64url SHA-256 of a canonical projection or plaintext. */
 export type MessageHash = string & { readonly __messageHash: unique symbol };
+
+/** One of our DIDs and a peer's, both canonical short forms, as an ordered pair: the unit every receipt, intent and continuity fact is scoped to. */
+export type Channel = { localDid: Did; peerDid: Did };
 
 /**
  * A reference to one event whose type the referencing schema fixes. It
@@ -61,27 +61,27 @@ export type EventReference<T extends string> = EventId & { readonly __eventType:
 export type EpochSeconds = number;
 
 export type RouteKind = "mediated" | "direct";
-export type DisclosureAs = "oob" | "profile" | "direct";
+export type DisclosureAs = "oob" | "direct";
 export type DisclosureUses = "one" | "many";
 export type ContactOrigin = "user" | "automatic";
-export type FailureScope = "package" | "message";
-
-/** The offline birth selection of an outbound whose binding is not yet committed. */
-export type Birth = { localDidId: DidId; peerDid: Did };
+/** Why an unsubmitted outbound ended: its expiry was reached, or the user cancelled it. */
+export type DeliveryFailureCode = "expired" | "cancelled";
 
 /** The headers of a message that no dedicated field models; none of them a reserved DIDComm name. */
 export type AdditionalHeaders = JsonObject;
 
 /**
- * The intent an outbound event freezes: what the plaintext will carry.
- * The five effect fields are all null for a locally initiated send and
- * all non-null for an automatic effect, where they are the producing
- * tuple, its key and the message ID derived from that key.
+ * The intent an outbound event freezes: what the plaintext will carry,
+ * and the channel it is fixed to. The three effect fields are all null
+ * for a locally initiated send and all non-null for an automatic
+ * effect, where they are the producing tuple and its key; the source
+ * is the exact observation an effect derives from, the rotation the
+ * decision a notification announces.
  */
 export type MessageOut = {
   messageId: MessageId;
-  relationshipId: RelationshipId;
-  birth: Birth | null;
+  senderDidId: DidId;
+  recipientDid: Did;
   msgType: string;
   thid: string | null;
   pthid: string | null;
@@ -94,10 +94,10 @@ export type MessageOut = {
   attachmentCids: Cid[];
   intentHash: MessageHash;
   executionId: ExecutionId | null;
-  handlerId: string | null;
-  effectKind: string | null;
-  ordinal: DecimalOrdinal | null;
+  effectType: string | null;
   effectKey: EffectKey | null;
+  sourceEventId: EventReference<"message.in"> | null;
+  rotationEventId: EventReference<"did.rotationSelected"> | null;
 };
 
 /** Where an inbound observation arrived: both null for direct transport without them. */
@@ -106,7 +106,8 @@ export type ReceivedVia = { mediationId: MediationId | null; deliveryId: Deliver
 /**
  * One durable inbound observation. An anonymous observation has null
  * `peerResolutionEventId`, `did` and `presentedDid` together; every
- * other observation names its resolution evidence.
+ * other observation names its resolution evidence. `fromPrior` is the
+ * original string off the wire, whatever it turns out to be.
  */
 export type MessageIn = {
   messageId: MessageId;
@@ -117,8 +118,6 @@ export type MessageIn = {
   localKeyName: KeyName;
   msgType: string;
   peerResolutionEventId: EventReference<"peer.resolved"> | null;
-  relationshipBindingEventId: EventReference<"relationship.bound"> | null;
-  peerTransitionEventId: EventReference<"relationship.peerTransitioned"> | null;
   presentedDid: Did | null;
   did: Did | null;
   thid: string | null;
@@ -132,7 +131,6 @@ export type MessageIn = {
   bodyCid: Cid;
   attachmentCids: Cid[];
   bytes: number;
-  signedBy: string | null;
   receivedVia: ReceivedVia;
 };
 
@@ -160,38 +158,16 @@ export type VaultData = {
   "route.retired": { routeId: RouteId; because: string };
   "did.disclosed": { didId: DidId; as: DisclosureAs; uses: DisclosureUses; oobId: string | null; goal: string | null };
   "did.retired": { didId: DidId; because: string };
-  "relationship.bound": { relationshipId: RelationshipId; localDidId: DidId; peerResolutionEventId: EventReference<"peer.resolved"> };
-  "relationship.contactAssigned": { relationshipId: RelationshipId; contactId: ContactId };
-  "relationship.peerTransitioned": {
-    relationshipId: RelationshipId;
-    localKeyName: KeyName;
-    peerPublicKey: PublicKey;
-    fromDid: Did;
-    presentedFromDid: Did;
-    toDid: Did;
-    presentedToDid: Did;
-    fromPrior: string;
-    priorResolutionEventId: EventReference<"peer.resolved">;
-    peerResolutionEventId: EventReference<"peer.resolved">;
-    messageId: MessageId;
-  };
-  "relationship.localTransitioned": {
-    relationshipId: RelationshipId;
-    fromDidId: DidId;
-    toDidId: DidId;
-    fromPrior: string;
-    triggerEventId: EventReference<"message.in"> | null;
-  };
+  "invitation.consumed": { disclosureEventId: EventReference<"did.disclosed">; sourceEventId: EventReference<"message.in"> };
+  "did.rotationSelected": { fromDidId: DidId; peerDid: Did; toDidId: DidId; sourceEventId: EventReference<"message.in"> | null; fromPrior: string };
+  "channel.blocked": { localDid: Did; peerDid: Did; includeSuccessors: boolean };
   "contact.created": { contactId: ContactId; because: ContactOrigin };
   "contact.petname": { contactId: ContactId; name: string };
   "contact.flag": { contactId: ContactId; flag: string; value: boolean };
   "contact.useDid": { contactId: ContactId; didId: DidId; because: string };
-  "contact.peerDidAdded": { contactId: ContactId; did: Did; because: string };
-  "contact.peerDidRemoved": { contactId: ContactId; addEventId: EventReference<"contact.peerDidAdded"> };
+  "contact.channelsSet": { contactId: ContactId; channels: Channel[] };
   "contact.merged": { contactId: ContactId; fromContactId: ContactId };
   "contact.deleted": { contactId: ContactId };
-  "profile.nameClaimed": { relationshipId: RelationshipId; sourceEventId: EventReference<"message.in">; name: string };
-  "profile.shared": { relationshipId: RelationshipId; sourceEventId: EventReference<"message.out"> };
   "message.out": MessageOut;
   "message.prepared": {
     messageId: MessageId;
@@ -205,9 +181,8 @@ export type VaultData = {
     plaintextHash: MessageHash;
     envelopeCid: Cid;
   };
-  "message.packageRetired": { messageId: MessageId; packageId: PackageId; because: string; replacementPackageId: PackageId | null };
   "delivery.submitted": { messageId: MessageId; packageId: PackageId };
-  "delivery.failed": { messageId: MessageId; scope: FailureScope; packageId: PackageId | null; code: string };
+  "delivery.failed": { messageId: MessageId; code: DeliveryFailureCode };
   "delivery.acknowledged": {
     messageId: MessageId;
     localKeyName: KeyName;

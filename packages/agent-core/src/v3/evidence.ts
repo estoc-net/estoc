@@ -28,7 +28,6 @@ import {
   type KeyName,
   type PublicKey,
   type ReadObject,
-  type RelationshipId,
   type VaultData,
   type VaultEvent,
   type VaultFold,
@@ -147,20 +146,6 @@ export async function readResolution(event: VaultEvent<"peer.resolved">, readObj
   const id = document["id"];
   if (typeof id !== "string" || canonicalDidOf(id) !== data.did) throw new InvalidDidDocument(`the retained document is not ${data.did}'s`);
   return resolution(document, bytes);
-}
-
-/**
- * The snapshot a relationship pinned for one of its peer addresses —
- * the binding's for the root, the verified transition's for a
- * successor — as the resolution it is. Null while the address is not
- * in the validated chain, its event is missing, or its object is not
- * here.
- */
-export async function pinnedResolution(fold: VaultFold, readObject: ReadObject, relationshipId: RelationshipId, peerDid: Did): Promise<Resolution | null> {
-  const node = fold.relationships.relationships.get(relationshipId)?.peerChain.find((candidate) => sameDid(candidate.did, peerDid));
-  if (node === undefined) return null;
-  const resolved = fold.set.resolve(node.resolutionEventId, "peer.resolved");
-  return resolved.status === "present" ? readResolution(resolved.event, readObject) : null;
 }
 
 /**

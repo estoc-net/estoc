@@ -5,8 +5,8 @@
  * reuses its exact keys and document after a crash and cannot be
  * recreated on another route; the disclosure that reveals an address,
  * its mediated registration verified first; and the retirement that
- * ends new sending, disclosure and births at it. Every decision is
- * taken over the fold under the lock.
+ * ends new sending, disclosure and invitation consumption at it. Every
+ * decision is taken over the fold under the lock.
  */
 
 import { v7 as uuidv7 } from "uuid";
@@ -139,7 +139,12 @@ export interface Disclosure {
   as: DisclosureAs;
   uses: DisclosureUses;
   goal?: string | null;
-  /** the invitation's ID, for an `oob` disclosure; a fresh UUIDv7 when left out */
+  /**
+   * The invitation's ID, for an `oob` disclosure; a fresh UUIDv7 when
+   * left out. An ID names one disclosure in the whole vault: given
+   * again with the same DID, uses and goal it republishes that
+   * invitation, given with anything else it is refused.
+   */
   oobId?: string;
 }
 
@@ -166,7 +171,10 @@ function requireLive(entity: LocalDidEntity): void {
  * `link` first and refused unless the mediator holds it; a direct
  * address needs no link. The reconciliation and the commit run as the
  * account's one procedure at a time, the reconciliation outside the
- * writer lock and the entity's liveness read again under it.
+ * writer lock and the entity's liveness read again under it. An
+ * invitation already recorded under the same `oobId` is republished:
+ * its disclosure is returned and nothing written, so that a retry
+ * after a lost result cannot record the one invitation twice.
  */
 export async function disclose(link: MediatorLink | null, runtime: VaultRuntime, keys: Keys, didId: DidId, disclosure: Disclosure): Promise<Disclosed> {
   const fold = await scanVault(runtime.vault, keys);
@@ -176,11 +184,14 @@ export async function disclose(link: MediatorLink | null, runtime: VaultRuntime,
   const route = routeOf(fold, created.boundRouteId);
   const goal = disclosure.goal ?? null;
   const oobId = disclosure.as === "oob" ? (disclosure.oobId ?? uuidv7()) : null;
-  const commit = (): Promise<VaultEvent<"did.disclosed">> =>
-    decide(runtime, keys, (fold) => {
+  const data: VaultData["did.disclosed"] = { didId, as: disclosure.as, uses: disclosure.uses, oobId, goal };
+  const commit = async (): Promise<VaultEvent<"did.disclosed">> => {
+    const { fold, events } = await decide(runtime, keys, (fold) => {
       requireLive(didOf(fold, didId));
-      return [vaultDraft("did.disclosed", { didId, as: disclosure.as, uses: disclosure.uses, oobId, goal })];
-    }).then(({ events }) => events[0] as VaultEvent<"did.disclosed">);
+      return oobId !== null && invitationDisclosureOf(fold, oobId, data) !== null ? [] : [vaultDraft("did.disclosed", data)];
+    });
+    return (events[0] as VaultEvent<"did.disclosed"> | undefined) ?? (invitationDisclosureOf(fold, oobId as string, data) as VaultEvent<"did.disclosed">);
+  };
   let disclosed: VaultEvent<"did.disclosed">;
   if (route.configured?.kind === "mediated") {
     const { mediationId } = route.configured;
@@ -197,7 +208,18 @@ export async function disclose(link: MediatorLink | null, runtime: VaultRuntime,
   return { disclosed, longFormDid: created.longFormDid, invitation: oobId === null ? null : invitationOf(created.longFormDid, oobId, goal) };
 }
 
-/** `did.retired` for an entity, `because`: terminal for new sending, disclosure and births. Already retired, the first retirement is returned and nothing written. */
+function invitationDisclosureOf(fold: VaultFold, oobId: string, data: VaultData["did.disclosed"]): VaultEvent<"did.disclosed"> | null {
+  const recorded = fold.set.of("did.disclosed").filter((event) => event.data.oobId === oobId);
+  if (recorded.length === 0) return null;
+  const existing = recorded[0] as VaultEvent<"did.disclosed">;
+  if (recorded.length > 1) throw new EntityConflict("invitation", oobId, "disclosed more than once");
+  if (existing.data.didId !== data.didId || existing.data.uses !== data.uses || existing.data.goal !== data.goal) {
+    throw new EntityConflict("invitation", oobId, existing.data.didId !== data.didId ? `another DID, ${existing.data.didId}` : "another use limit or goal");
+  }
+  return existing;
+}
+
+/** `did.retired` for an entity, `because`: terminal for new sending, disclosure and invitation consumption. Already retired, the first retirement is returned and nothing written. */
 export async function retireDid(runtime: VaultRuntime, keys: Keys, didId: DidId, because: string): Promise<VaultEvent<"did.retired">> {
   const { fold, events } = await decide(runtime, keys, (fold) => (didOf(fold, didId).retired === null ? [vaultDraft("did.retired", { didId, because })] : []));
   return (events[0] as VaultEvent<"did.retired"> | undefined) ?? (fold.set.of("did.retired").find((event) => event.data.didId === didId) as VaultEvent<"did.retired">);

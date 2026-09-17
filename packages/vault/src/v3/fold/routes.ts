@@ -80,14 +80,14 @@ export interface RouteFold {
   entityOfDid(did: string): DidId | null;
   /**
    * May this entity's key-agreement key still receive? `terminal` for
-   * an unknown or conflicted entity, a retired entity nothing retains
-   * or a terminal route, whatever else is missing; `eligible` while the
-   * entity is live, or retired but retained in a relationship's local
-   * history; `pending` while only a recoverable prerequisite is
-   * missing: the route's configuration, the mediation's grant, the key
-   * check.
+   * an unknown or conflicted entity or a terminal route, whatever else
+   * is missing; `eligible` while the entity is live, or retired with
+   * its route intact, since retirement ends new sending and disclosure
+   * but not the draining of what was addressed here; `pending` while
+   * only a recoverable prerequisite is missing: the route's
+   * configuration, the mediation's grant, the key check.
    */
-  receipt(didId: DidId, retainedDidIds: ReadonlySet<DidId>): ReceiptEligibility;
+  receipt(didId: DidId): ReceiptEligibility;
 }
 
 export type ReceiptEligibility = "eligible" | "pending" | "terminal";
@@ -123,10 +123,9 @@ export function foldRoutes(set: VaultEventSet, mediations: MediationFold, option
     desiredRecipients,
     entityOfKey: (name) => byKey.get(name) ?? null,
     entityOfDid: (did) => byDid.get(did) ?? null,
-    receipt(didId, retainedDidIds) {
+    receipt(didId) {
       const did = dids.get(didId);
       if (did === undefined || did.conflict || did.created === null) return "terminal";
-      if (did.retired !== null && !retainedDidIds.has(didId)) return "terminal";
       if (routes.get(did.created.boundRouteId)?.terminal === true) return "terminal";
       return did.faults.length === 0 ? "eligible" : "pending";
     },
@@ -271,14 +270,17 @@ export async function foldWithSeed(set: VaultEventSet, keys: Keys): Promise<{ me
 /**
  * The mediations the runtime must keep receiving on: every usable one
  * that is preferred, or that a usable route depends on while some DID
- * bound to that route is live or is retired but retained in a
- * relationship's local history. Disclosure policy plays no part.
+ * bound to that route may still receive, retired or not. A DID whose
+ * receipt only waits — for the seed's verdict on its keys — keeps the
+ * dependency: what is not yet decidable is not decided against, and
+ * what was addressed to it must not be left at the mediator meanwhile.
+ * Only a terminal entity releases it. Disclosure policy plays no part.
  */
-export function requiredReceivingSet(mediations: MediationFold, routes: RouteFold, retainedDidIds: ReadonlySet<DidId> = new Set()): Set<MediationId> {
+export function requiredReceivingSet(mediations: MediationFold, routes: RouteFold): Set<MediationId> {
   const required = new Set<MediationId>();
   if (mediations.preferred !== null) required.add(mediations.preferred);
   for (const did of routes.dids.values()) {
-    if (did.created === null || routes.receipt(did.didId, retainedDidIds) !== "eligible") continue;
+    if (did.created === null || routes.receipt(did.didId) === "terminal") continue;
     const route = routes.routes.get(did.created.boundRouteId);
     if (route?.configured?.kind !== "mediated" || !route.usable || !mediations.usable(route.configured.mediationId)) continue;
     required.add(route.configured.mediationId);

@@ -8,19 +8,13 @@ import {
   VaultEventSet,
   foldMediations,
   foldRoutes,
-  inboundMessageId,
   mintDid,
   rawCidOfBytes,
-  relationshipId,
   vaultDraft,
   type Did,
   type DidId,
-  type EventReference,
   type KeyName,
   type MediationId,
-  type MessageIn,
-  type PublicKey,
-  type RelationshipId,
   type RouteId,
   type KeyCheck,
   type MediationFold,
@@ -29,7 +23,6 @@ import {
   type VaultData,
   type VaultEvent,
   type VaultEventType,
-  type WireMessageId,
   verifyDidKeys,
   verifyMediationKeys,
 } from "../../../src/v3/index.js";
@@ -50,8 +43,6 @@ export const ROUTING_DID2 = "did:peer:2.Ez6LSghwSE437wnDE1pt3X6hVDUQzSjsHzinpX3X
 export const ENDPOINT = "https://ingress.example/didcomm";
 export const MEDIATED: RouteTarget = { kind: "mediated", routingDid: ROUTING_DID };
 export const DIRECT: RouteTarget = { kind: "direct", endpoint: ENDPOINT };
-export const PEER_DID = "did:web:bob.example" as Did;
-export const PEER_KEY = "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis" as PublicKey;
 export const HASH = "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA";
 
 const encoder = new TextEncoder();
@@ -149,74 +140,6 @@ export async function createdDid(scene: Scene, keys: Keys, didId: DidId, routeId
   scene.add("did.created", data);
   return data;
 }
-
-export type Receipt = {
-  localDidId: DidId;
-  localDid: Did;
-  peerDid?: Did;
-  wire?: string;
-  pthid?: string | null;
-  fromPrior?: string | null;
-  binding?: EventReference<"relationship.bound"> | null;
-  resolution?: EventReference<"peer.resolved"> | null;
-  transition?: EventReference<"relationship.peerTransitioned"> | null;
-  overrides?: Partial<MessageIn>;
-};
-
-/** A peer resolution and a binding for a peer met at one of our DIDs, then an authenticated receipt through that binding. */
-export function bind(scene: Scene, local: { didId: DidId; did: Did }, peerDid: Did = PEER_DID) {
-  const resolved = scene.add("peer.resolved", {
-    localKeyName: `did/${local.didId}/key-agreement` as KeyName,
-    peerPublicKey: PEER_KEY,
-    presentedDid: peerDid,
-    did: peerDid,
-    documentCid: cidOf(`document of ${peerDid}`),
-    authenticationMethodIds: [],
-    keyAgreementMethodIds: [`${peerDid}#key-1` as VaultData["peer.resolved"]["keyAgreementMethodIds"][number]],
-    service: null,
-  });
-  const R = relationshipId(local.did, peerDid);
-  const bound = scene.add("relationship.bound", { relationshipId: R, localDidId: local.didId, peerResolutionEventId: resolved.eventId as EventReference<"peer.resolved"> });
-  return { R, resolved: resolved.eventId as EventReference<"peer.resolved">, bound: bound.eventId as EventReference<"relationship.bound"> };
-}
-
-export function messageIn(scene: Scene, receipt: Receipt & { ordinal: number }): VaultEvent<"message.in"> {
-  const wire = (receipt.wire ?? uuidv7()) as WireMessageId;
-  const anonymous = receipt.resolution === null;
-  const peerDid = anonymous ? null : (receipt.peerDid ?? PEER_DID);
-  const localKeyName = `did/${receipt.localDidId}/key-agreement` as KeyName;
-  const data: MessageIn = {
-    messageId: anonymous ? inboundMessageId({ localKeyName }, wire) : inboundMessageId(PEER_KEY, wire),
-    wireMessageId: wire,
-    receiptOrdinal: String(receipt.ordinal) as MessageIn["receiptOrdinal"],
-    intentHash: HASH as MessageIn["intentHash"],
-    plaintextHash: HASH as MessageIn["plaintextHash"],
-    localKeyName,
-    msgType: "https://didcomm.org/basicmessage/2.0/message",
-    peerResolutionEventId: receipt.resolution ?? null,
-    relationshipBindingEventId: receipt.binding ?? null,
-    peerTransitionEventId: receipt.transition ?? null,
-    presentedDid: peerDid,
-    did: peerDid,
-    thid: null,
-    pthid: receipt.pthid ?? null,
-    createdTime: null,
-    expiresTime: null,
-    pleaseAck: null,
-    ack: [],
-    headers: {},
-    fromPrior: receipt.fromPrior ?? null,
-    bodyCid: cidOf(`body ${wire}`),
-    attachmentCids: [],
-    bytes: 100,
-    signedBy: null,
-    receivedVia: { mediationId: null, deliveryId: null },
-    ...receipt.overrides,
-  };
-  return scene.add("message.in", data);
-}
-
-export type { RelationshipId };
 
 export type KeyChecks = { mediations: Map<MediationId, KeyCheck>; dids: Map<DidId, KeyCheck> };
 

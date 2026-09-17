@@ -73,30 +73,3 @@ export class UnauthorizedKey extends Error {
     this.name = "UnauthorizedKey";
   }
 }
-
-/** A contact has more than one relationship a message may be sent in and no preference among them: which one is the caller's to say. */
-export class AmbiguousTarget extends Error {
-  constructor(
-    contactId: string,
-    readonly relationshipIds: readonly string[]
-  ) {
-    super(`contact ${contactId} may be written in ${relationshipIds.length} relationships: ${relationshipIds.join(", ")}`);
-    this.name = "AmbiguousTarget";
-  }
-}
-
-/** The runtime already receives through another open receiver. */
-export class ReceiverInUse extends Error {
-  constructor() {
-    super("the runtime already has an open receiver");
-    this.name = "ReceiverInUse";
-  }
-}
-
-/** The receiver closed before the delivery reached its receipt: it was neither recorded nor found terminal, and stays wherever it came from. */
-export class ReceiverClosed extends Error {
-  constructor() {
-    super("the receiver is closed");
-    this.name = "ReceiverClosed";
-  }
-}

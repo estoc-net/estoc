@@ -134,7 +134,8 @@ describe("readPlaintext", () => {
     expect(() => readPlaintext({ ...base, created_time: 10, expires_time: 10 })).toThrow(/expires_time must be later/);
     expect(() => readPlaintext({ ...base, please_ack: "" })).toThrow(InvalidPlaintext);
     expect(() => readPlaintext({ ...base, ack: [1] })).toThrow(InvalidPlaintext);
-    expect(() => readPlaintext({ ...base, from_prior: "not.a-jwt" })).toThrow(/compact JWT/);
+    expect(readPlaintext({ ...base, from_prior: "not.a-jwt" }).fromPrior).toBe("not.a-jwt");
+    expect(() => readPlaintext({ ...base, from_prior: 7 })).toThrow(/from_prior must be a string/);
     expect(() => readPlaintext({ ...base, body: [] })).toThrow(/body must be a JSON object/);
     expect(() => readPlaintext("{}")).toThrow(InvalidPlaintext);
   });
@@ -299,8 +300,8 @@ describe("wirePlaintext", () => {
   it("projects a committed message.out the same as the plaintext it produces", () => {
     const out: MessageOut = {
       messageId: intent.id as MessageOut["messageId"],
-      relationshipId: "35807a1e-3b8a-52f5-9580-29cd5265882e" as MessageOut["relationshipId"],
-      birth: null,
+      senderDidId: "019b2a60-c68e-75bf-b6fb-ae1a41f8d715" as MessageOut["senderDidId"],
+      recipientDid: BOB,
       msgType: intent.type,
       thid: null,
       pthid: "p1",
@@ -313,10 +314,10 @@ describe("wirePlaintext", () => {
       attachmentCids: stored.attachmentCids,
       intentHash: intentHash(intent),
       executionId: null,
-      handlerId: null,
-      effectKind: null,
-      ordinal: null,
+      effectType: null,
       effectKey: null,
+      sourceEventId: null,
+      rotationEventId: null,
     };
     const fromEvent = intentOfOutbound(out, stored.document);
     expect(fromEvent).toEqual(intent);

@@ -5,15 +5,16 @@ import { v7 as uuidv7 } from "uuid";
 import {
   InvalidPayload,
   VAULT_EVENT_TYPES,
+  anonymousMessageId,
   automaticMessageId,
   effectKey,
-  inboundMessageId,
   isVaultEventType,
   rawCidOfBytes,
   readVaultDraft,
   readVaultEvent,
   vaultDraft,
   type Cid,
+  type ExecutionId,
   type KeyName,
   type MessageIn,
   type MessageOut,
@@ -34,20 +35,17 @@ const MEDIATION = "019b2a51-118f-7e46-b31b-c63cd090c92c";
 const ROUTE = "019b2a58-fef5-7d59-ae1c-46e4f0a13c73";
 const DID_ID = "019b2a60-c68e-75bf-b6fb-ae1a41f8d715";
 const DID_ID2 = "019b6a10-12c0-7410-89ab-38e54b097c21";
+const UUID_V5_DID_ID = "019b0000-0000-5000-8000-00000000000c";
 const CONTACT = "019b2a63-48bf-7214-961d-4c3f97cb95da";
 const CONTACT2 = "019b2a66-c794-7b41-bff1-68a4ecdd0b67";
-const R = "35807a1e-3b8a-52f5-9580-29cd5265882e";
 const PACKAGE = "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c";
-const PACKAGE2 = "019b2a75-11bd-7ae2-8e41-279d84c2528a";
 const OUT = "019b2a70-e2c8-7fb4-b63f-1aca32152062";
-const IN = "369d7a43-8dce-5b86-b073-e390d457f357";
+const IN = "d2192dcf-cc5c-5f7d-b4f1-46972b7b04de";
 const WIRE = "019b2a70-f225-721c-835f-67175be0667e";
 const RESOLVED = "019b2a71-4c18-760a-9017-b3e265aa89d0";
-const RESOLVED2 = "019b4d14-18bd-77f1-b4a4-5c2a6c2694ba";
-const BOUND = "019b4d11-22d3-7fd0-82fb-f33864a75dd5";
-const ADDED = "019b2a64-86fa-7f28-a63a-5d70ce1d829a";
+const DISCLOSED = "019b2a61-84d8-734a-a996-963bb503e30f";
 const SOURCE_IN = "019b2a84-44ef-7d16-8d04-2b9a5c2a06b1";
-const SOURCE_OUT = "019b2a85-0912-7b2c-9425-4fd7fd0dd019";
+const ROTATION = "019b4d11-22d3-7fd0-82fb-f33864a75dd5";
 const OOB = "019b2a57-a947-7502-8fee-4d80d949dbcb";
 const KEY = `did/${DID_ID}/key-agreement`;
 const PEER_KEY = "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis";
@@ -56,6 +54,11 @@ const INTENT_HASH = "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA";
 const PLAINTEXT_HASH = "WkPpglZREjLGtviZ1L6c-R3EX1cTHtbe0sJrmhl77LQ";
 const SHORT = "did:peer:4zQmRendezvous";
 const LONG = `${SHORT}:z2NpDocument`;
+const LOCAL = "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd";
+const PEER = "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP";
+const PEER_LONG = `${PEER}:z2PeerDocument`;
+const WEB = "did:web:bob.example";
+const PURE_ACK = "https://estoc.dev/distributed-delivery/1.0#pure-ack";
 
 type Data<T extends VaultEventType> = VaultData[T];
 type Loose = Record<string, unknown>;
@@ -94,11 +97,11 @@ const ALL: { [T in VaultEventType]: [Data<T>, readonly string[]] } = {
     {
       localKeyName: KEY as KeyName,
       peerPublicKey: PEER_KEY,
-      presentedDid: "did:web:bob.example",
-      did: "did:web:bob.example",
+      presentedDid: WEB,
+      did: WEB,
       documentCid: DOC,
-      authenticationMethodIds: ["did:web:bob.example#authentication-0"],
-      keyAgreementMethodIds: ["did:web:bob.example#key-agreement-0"],
+      authenticationMethodIds: [`${WEB}#authentication-0`],
+      keyAgreementMethodIds: [`${WEB}#key-agreement-0`],
       service: "did:web:mediator.example",
     } as Data<"peer.resolved">,
     [DOC],
@@ -112,40 +115,21 @@ const ALL: { [T in VaultEventType]: [Data<T>, readonly string[]] } = {
   "route.retired": [{ routeId: ROUTE, because: "replaced" } as Data<"route.retired">, []],
   "did.disclosed": [{ didId: DID_ID, as: "oob", uses: "many", oobId: OOB, goal: "Write to Alice" } as Data<"did.disclosed">, []],
   "did.retired": [{ didId: DID_ID, because: "contact-deleted" } as Data<"did.retired">, []],
-  "relationship.bound": [{ relationshipId: R, localDidId: DID_ID, peerResolutionEventId: RESOLVED } as Data<"relationship.bound">, []],
-  "relationship.contactAssigned": [{ relationshipId: R, contactId: CONTACT } as Data<"relationship.contactAssigned">, []],
-  "relationship.peerTransitioned": [
-    {
-      relationshipId: R,
-      localKeyName: KEY,
-      peerPublicKey: PEER_KEY,
-      fromDid: "did:web:bob.example",
-      presentedFromDid: "did:web:bob.example",
-      toDid: "did:peer:4zQmBobPairwise",
-      presentedToDid: "did:peer:4zQmBobPairwise:z2BobDoc",
-      fromPrior: JWT,
-      priorResolutionEventId: RESOLVED,
-      peerResolutionEventId: RESOLVED2,
-      messageId: "3e7a2368-4a71-5560-8785-348ca4fbf548",
-    } as Data<"relationship.peerTransitioned">,
-    [],
-  ],
-  "relationship.localTransitioned": [{ relationshipId: R, fromDidId: DID_ID, toDidId: DID_ID2, fromPrior: JWT, triggerEventId: null } as Data<"relationship.localTransitioned">, []],
+  "invitation.consumed": [{ disclosureEventId: DISCLOSED, sourceEventId: SOURCE_IN } as Data<"invitation.consumed">, []],
+  "did.rotationSelected": [{ fromDidId: DID_ID, peerDid: PEER, toDidId: DID_ID2, sourceEventId: null, fromPrior: JWT } as Data<"did.rotationSelected">, []],
+  "channel.blocked": [{ localDid: LOCAL, peerDid: PEER, includeSuccessors: true } as Data<"channel.blocked">, []],
   "contact.created": [{ contactId: CONTACT, because: "user" } as Data<"contact.created">, []],
   "contact.petname": [{ contactId: CONTACT, name: "alice" } as Data<"contact.petname">, []],
   "contact.flag": [{ contactId: CONTACT, flag: "pinned", value: true } as Data<"contact.flag">, []],
-  "contact.useDid": [{ contactId: CONTACT, didId: DID_ID, because: "relationship" } as Data<"contact.useDid">, []],
-  "contact.peerDidAdded": [{ contactId: CONTACT, did: LONG, because: "oob" } as Data<"contact.peerDidAdded">, []],
-  "contact.peerDidRemoved": [{ contactId: CONTACT, addEventId: ADDED } as Data<"contact.peerDidRemoved">, []],
+  "contact.useDid": [{ contactId: CONTACT, didId: DID_ID, because: "channel" } as Data<"contact.useDid">, []],
+  "contact.channelsSet": [{ contactId: CONTACT, channels: [{ localDid: LOCAL, peerDid: PEER }] } as Data<"contact.channelsSet">, []],
   "contact.merged": [{ contactId: CONTACT, fromContactId: CONTACT2 } as Data<"contact.merged">, []],
   "contact.deleted": [{ contactId: CONTACT } as Data<"contact.deleted">, []],
-  "profile.nameClaimed": [{ relationshipId: R, sourceEventId: SOURCE_IN, name: "Alice L." } as Data<"profile.nameClaimed">, []],
-  "profile.shared": [{ relationshipId: R, sourceEventId: SOURCE_OUT } as Data<"profile.shared">, []],
   "message.out": [
     {
       messageId: OUT,
-      relationshipId: R,
-      birth: null,
+      senderDidId: DID_ID,
+      recipientDid: PEER,
       msgType: "https://didcomm.org/basicmessage/2.0/message",
       thid: null,
       pthid: null,
@@ -158,10 +142,10 @@ const ALL: { [T in VaultEventType]: [Data<T>, readonly string[]] } = {
       attachmentCids: [PHOTO],
       intentHash: INTENT_HASH,
       executionId: null,
-      handlerId: null,
-      effectKind: null,
-      ordinal: null,
+      effectType: null,
       effectKey: null,
+      sourceEventId: null,
+      rotationEventId: null,
     } as unknown as Data<"message.out">,
     [BODY, PHOTO],
   ],
@@ -171,7 +155,7 @@ const ALL: { [T in VaultEventType]: [Data<T>, readonly string[]] } = {
       packageId: PACKAGE,
       senderDidId: DID_ID,
       localKeyName: KEY,
-      recipientDid: "did:web:bob.example",
+      recipientDid: PEER,
       peerResolutionEventId: RESOLVED,
       fromPrior: null,
       intentHash: INTENT_HASH,
@@ -180,9 +164,8 @@ const ALL: { [T in VaultEventType]: [Data<T>, readonly string[]] } = {
     } as Data<"message.prepared">,
     [ENVELOPE],
   ],
-  "message.packageRetired": [{ messageId: OUT, packageId: PACKAGE, because: "repacked", replacementPackageId: PACKAGE2 } as Data<"message.packageRetired">, []],
   "delivery.submitted": [{ messageId: OUT, packageId: PACKAGE } as Data<"delivery.submitted">, []],
-  "delivery.failed": [{ messageId: OUT, scope: "message", packageId: null, code: "expired" } as Data<"delivery.failed">, []],
+  "delivery.failed": [{ messageId: OUT, code: "expired" } as Data<"delivery.failed">, []],
   "delivery.acknowledged": [
     { messageId: OUT, localKeyName: KEY, peerPublicKey: PEER_KEY, ackMessageId: "27c4471f-8937-501b-9ffb-a7eaeeebc178", ackWireMessageId: "21559fb4-1a9f-54b1-b8fa-1bf82700d365" } as Data<"delivery.acknowledged">,
     [],
@@ -197,10 +180,8 @@ const ALL: { [T in VaultEventType]: [Data<T>, readonly string[]] } = {
       localKeyName: KEY,
       msgType: "https://didcomm.org/basicmessage/2.0/message",
       peerResolutionEventId: RESOLVED,
-      relationshipBindingEventId: BOUND,
-      peerTransitionEventId: null,
-      presentedDid: "did:web:bob.example",
-      did: "did:web:bob.example",
+      presentedDid: PEER,
+      did: PEER,
       thid: null,
       pthid: null,
       createdTime: 1788442800,
@@ -212,7 +193,6 @@ const ALL: { [T in VaultEventType]: [Data<T>, readonly string[]] } = {
       bodyCid: BODY,
       attachmentCids: [PHOTO],
       bytes: 48213,
-      signedBy: null,
       receivedVia: { mediationId: MEDIATION, deliveryId: "01J...opaque" },
     } as unknown as Data<"message.in">,
     [BODY, PHOTO],
@@ -226,10 +206,10 @@ const IN_DATA = ALL["message.in"][0] as MessageIn;
 describe("readVaultEvent", () => {
   it("knows exactly the version-3 types", () => {
     expect([...VAULT_EVENT_TYPES].sort()).toEqual(Object.keys(ALL).sort());
-    expect(VAULT_EVENT_TYPES).toHaveLength(33);
+    expect(VAULT_EVENT_TYPES).toHaveLength(28);
     expect(isVaultEventType("message.out")).toBe(true);
-    expect(isVaultEventType("message.deleted")).toBe(false);
-    expect(() => readVaultEvent(event("message.deleted", {}))).toThrow(/^message\.deleted: not a version-3 event type/);
+    expect(isVaultEventType("relationship.bound")).toBe(false);
+    expect(() => readVaultEvent(event("relationship.bound", {}))).toThrow(/^relationship\.bound: not a version-3 event type/);
     expect(() => readVaultEvent(event("toString", {}))).toThrow(InvalidPayload);
   });
 
@@ -260,11 +240,10 @@ describe("readVaultEvent", () => {
 
 describe("identifiers in payloads", () => {
   it("requires canonical lowercase UUIDs of the version the rule allows", () => {
-    rejects("contact.deleted", { contactId: CONTACT.toUpperCase() }, [], /UUIDv5 or UUIDv7/);
-    accepts("contact.deleted", { contactId: "ebbdeefb-e443-5e14-9cc9-2c468826de1c" });
-    rejects("mediation.selected", { mediationId: R }, [], /UUIDv7/);
-    rejects("relationship.contactAssigned", { relationshipId: MEDIATION, contactId: CONTACT }, [], /relationshipId must be a canonical UUIDv5/);
-    rejects("relationship.bound", { relationshipId: R, localDidId: DID_ID, peerResolutionEventId: R }, [], /peerResolutionEventId must be an event ID/);
+    rejects("contact.deleted", { contactId: CONTACT.toUpperCase() }, [], /UUIDv7/);
+    rejects("contact.deleted", { contactId: IN }, [], /contactId must be a canonical UUIDv7/);
+    rejects("mediation.selected", { mediationId: IN }, [], /UUIDv7/);
+    rejects("invitation.consumed", { disclosureEventId: DISCLOSED, sourceEventId: IN }, [], /sourceEventId must be an event ID/);
     rejects("delivery.acknowledged", { ...ALL["delivery.acknowledged"][0], ackMessageId: OUT }, [], /ackMessageId must be a canonical UUIDv5/);
   });
 
@@ -292,7 +271,7 @@ describe("identifiers in payloads", () => {
       "did:web:bob.example#key\nnext",
       "did:web:bob.example?q=%4",
       "did:web:bob.example/p%",
-      "did:web:bob.example#k\u00e9",
+      "did:web:bob.example#ké",
       "did:web:bob.example/[x]",
       "did:web:bob.example#key\\",
     ]) {
@@ -310,12 +289,33 @@ describe("identifiers in payloads", () => {
     rejects("message.prepared", { ...(ALL["message.prepared"][0] as Loose), plaintextHash: PLAINTEXT_HASH.slice(0, -1) + "B" }, [ENVELOPE]);
     rejects("message.prepared", { ...(ALL["message.prepared"][0] as Loose), fromPrior: "a.b" }, [ENVELOPE], /compact JWT/);
   });
+
+  it("a channel endpoint is a did:peer:4 short form; a peer address a message names may be the long form too", () => {
+    accepts("message.out", { ...OUT_DATA, recipientDid: PEER_LONG }, [BODY, PHOTO]);
+    rejects("message.out", { ...OUT_DATA, recipientDid: WEB }, [BODY, PHOTO], /recipientDid must be a did:peer:4 short or long form/);
+    rejects("message.out", { ...OUT_DATA, recipientDid: "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc" }, [BODY, PHOTO], /did:peer:4/);
+    accepts("message.prepared", { ...ALL["message.prepared"][0], recipientDid: PEER_LONG }, [ENVELOPE]);
+    rejects("message.prepared", { ...ALL["message.prepared"][0], recipientDid: WEB }, [ENVELOPE], /recipientDid must be a did:peer:4/);
+    rejects("did.rotationSelected", { ...ALL["did.rotationSelected"][0], peerDid: PEER_LONG }, [], /peerDid must be a did:peer:4 short form/);
+    rejects("did.rotationSelected", { ...ALL["did.rotationSelected"][0], peerDid: WEB }, [], /peerDid must be a did:peer:4 short form/);
+    rejects("channel.blocked", { ...ALL["channel.blocked"][0], localDid: LONG }, [], /localDid must be a did:peer:4 short form/);
+    rejects("channel.blocked", { ...ALL["channel.blocked"][0], peerDid: WEB }, [], /peerDid must be a did:peer:4 short form/);
+    rejects("contact.channelsSet", { contactId: CONTACT, channels: [{ localDid: LOCAL, peerDid: WEB }] }, [], /channels\[0\]\.peerDid must be a did:peer:4 short form/);
+  });
 });
 
 describe("rules between members", () => {
   it("mediation.created names the arrangement's own key", () => {
     const data = ALL["mediation.created"][0] as Loose;
     rejects("mediation.created", { ...data, me: { keyName: KEY, did: SHORT } }, [], /me\.keyName is the arrangement's own key/);
+  });
+
+  it("a DID entity is minted, never derived: a UUIDv5 is refused wherever an entity ID is named", () => {
+    rejects("did.created", { ...(ALL["did.created"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
+    rejects("did.disclosed", { ...(ALL["did.disclosed"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
+    rejects("did.retired", { ...(ALL["did.retired"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
+    rejects("contact.useDid", { ...(ALL["contact.useDid"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
+    rejects("peer.resolved", { ...(ALL["peer.resolved"][0] as Loose), localKeyName: `did/${UUID_V5_DID_ID}/key-agreement` }, [DOC], /localKeyName must be a vault key name/);
   });
 
   it("did.created holds a numalgo-4 short form and its long form", () => {
@@ -338,41 +338,52 @@ describe("rules between members", () => {
     rejects("route.configured", { routeId: ROUTE, kind: "relay", mediationId: MEDIATION, endpoint: null }, [], /one of "mediated", "direct"/);
   });
 
-  it("did.disclosed carries an oobId exactly for an oob disclosure", () => {
+  it("did.disclosed carries an oobId exactly for an oob disclosure, and a direct disclosure is for many uses", () => {
     const data = ALL["did.disclosed"][0] as Loose;
-    accepts("did.disclosed", { ...data, as: "profile", uses: "many", oobId: null, goal: null });
+    accepts("did.disclosed", { ...data, as: "direct", uses: "many", oobId: null, goal: null });
+    accepts("did.disclosed", { ...data, uses: "one" });
     rejects("did.disclosed", { ...data, oobId: null }, [], /oobId/);
     rejects("did.disclosed", { ...data, as: "direct" }, [], /oobId/);
+    rejects("did.disclosed", { ...data, as: "direct", uses: "one", oobId: null }, [], /direct disclosure is for many uses/);
+    rejects("did.disclosed", { ...data, as: "profile", uses: "many", oobId: null }, [], /one of "oob", "direct"/);
     rejects("did.disclosed", { ...data, uses: "some" });
   });
 
-  it("a transition moves to another DID or DID entity, and a merge names two contacts", () => {
-    const peer = ALL["relationship.peerTransitioned"][0] as Loose;
-    rejects("relationship.peerTransitioned", { ...peer, toDid: peer.fromDid, presentedToDid: peer.fromDid }, [], /fromDid and toDid differ/);
-    rejects("relationship.peerTransitioned", { ...peer, toDid: peer.presentedToDid }, [], /toDid must be a canonical DID/);
-    const local = ALL["relationship.localTransitioned"][0] as Loose;
-    rejects("relationship.localTransitioned", { ...local, toDidId: DID_ID }, [], /differ/);
-    accepts("relationship.localTransitioned", { ...local, triggerEventId: SOURCE_IN });
+  it("a rotation moves to another DID entity, a merge names two contacts, a block names two DIDs", () => {
+    const rotation = ALL["did.rotationSelected"][0] as Loose;
+    rejects("did.rotationSelected", { ...rotation, toDidId: DID_ID }, [], /fromDidId and toDidId differ/);
+    accepts("did.rotationSelected", { ...rotation, sourceEventId: SOURCE_IN });
+    rejects("did.rotationSelected", { ...rotation, fromPrior: "not a jwt" }, [], /fromPrior must be a compact JWT/);
     rejects("contact.merged", { contactId: CONTACT, fromContactId: CONTACT }, [], /two contacts/);
+    rejects("channel.blocked", { localDid: LOCAL, peerDid: LOCAL, includeSuccessors: false }, [], /localDid and peerDid are two DIDs/);
+    rejects("channel.blocked", { localDid: LOCAL, peerDid: PEER, includeSuccessors: "yes" }, [], /includeSuccessors must be a boolean/);
     rejects("contact.created", { contactId: CONTACT, because: "policy" }, [], /one of "user", "automatic"/);
     rejects("contact.flag", { contactId: CONTACT, flag: "pinned", value: "yes" }, [], /value must be a boolean/);
     rejects("contact.flag", { contactId: CONTACT, flag: "", value: true });
   });
 
-  it("delivery.failed names a package for package scope, and the expiry and key-change codes are message-scoped", () => {
-    accepts("delivery.failed", { messageId: OUT, scope: "package", packageId: PACKAGE, code: "rejected" });
-    accepts("delivery.failed", { messageId: OUT, scope: "message", packageId: PACKAGE, code: "rejected" });
-    accepts("delivery.failed", { messageId: OUT, scope: "message", packageId: null, code: "peer-key-changed" });
-    rejects("delivery.failed", { messageId: OUT, scope: "package", packageId: null, code: "rejected" }, [], /names its package/);
-    rejects("delivery.failed", { messageId: OUT, scope: "package", packageId: PACKAGE, code: "expired" }, [], /expired is message-scoped/);
-    rejects("delivery.failed", { messageId: OUT, scope: "message", packageId: PACKAGE, code: "peer-key-changed" }, [], /before any package/);
-    rejects("delivery.failed", { messageId: OUT, scope: "all", packageId: null, code: "x" });
+  it("contact.channelsSet is a duplicate-free selection of distinct pairs in canonical order, possibly empty", () => {
+    const ab = { localDid: LOCAL, peerDid: PEER };
+    const ba = { localDid: PEER, peerDid: LOCAL };
+    accepts("contact.channelsSet", { contactId: CONTACT, channels: [] });
+    accepts("contact.channelsSet", { contactId: CONTACT, channels: [ba, ab] });
+    rejects("contact.channelsSet", { contactId: CONTACT, channels: [ab, ba] }, [], /sorted by their canonical pair encoding/);
+    rejects("contact.channelsSet", { contactId: CONTACT, channels: [ab, ab] }, [], /channels\[1\] repeats channels\[0\]/);
+    rejects("contact.channelsSet", { contactId: CONTACT, channels: [{ localDid: LOCAL, peerDid: LOCAL }] }, [], /localDid and peerDid are two DIDs/);
+    rejects("contact.channelsSet", { contactId: CONTACT, channels: [{ localDid: LOCAL }] }, [], /channels\[0\]\.peerDid is missing/);
+    rejects("contact.channelsSet", { contactId: CONTACT, channels: [{ ...ab, extra: 1 }] }, [], /channels\[0\]\.extra is not a member/);
+    rejects("contact.channelsSet", { contactId: CONTACT, channels: ab }, [], /channels must be an array/);
+  });
+
+  it("delivery.failed ends an unsubmitted message by expiry or cancellation and nothing else", () => {
+    accepts("delivery.failed", { messageId: OUT, code: "cancelled" });
+    rejects("delivery.failed", { messageId: OUT, code: "rejected" }, [], /one of "expired", "cancelled"/);
+    rejects("delivery.failed", { messageId: OUT, code: "expired", packageId: PACKAGE }, [], /packageId is not a member/);
   });
 
   it("message.prepared names the sender entity's own key-agreement key", () => {
     const prepared = ALL["message.prepared"][0] as Loose;
-    const EARLY = "4734b126-9706-5c8f-b971-91a5afb9c1d4";
-    accepts("message.prepared", { ...prepared, senderDidId: EARLY, localKeyName: `did/${EARLY}/key-agreement` }, [ENVELOPE]);
+    accepts("message.prepared", { ...prepared, senderDidId: DID_ID2, localKeyName: `did/${DID_ID2}/key-agreement` }, [ENVELOPE]);
     for (const localKeyName of [`did/${DID_ID2}/key-agreement`, `did/${DID_ID}/authentication`, `mediation/${MEDIATION}/me`]) {
       rejects("message.prepared", { ...prepared, localKeyName }, [ENVELOPE], /localKeyName is the sender entity's key-agreement key/);
     }
@@ -385,64 +396,64 @@ describe("rules between members", () => {
 });
 
 describe("message.out", () => {
-  const PURE_ACK = {
-    executionId: "cf135b1f-1d7a-51eb-88ae-42447d426abe",
-    handlerId: "https://estoc.dev/distributed-delivery/1.0#pure-ack",
-    effectKind: "pure-ack",
-    ordinal: "0",
-  };
-  const KEY_OF_PURE_ACK = "MzoucVz8FGCDtGEE2FTwgiwSg6elFih1OQT91MzmpSU";
+  const EXECUTION = "ccee59f0-8c79-5011-8822-dbb14de9cf7d" as ExecutionId;
+  const KEY_OF_PURE_ACK = "Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20";
   const AUTOMATIC = {
     ...OUT_DATA,
-    ...PURE_ACK,
+    executionId: EXECUTION,
+    effectType: PURE_ACK,
     effectKey: KEY_OF_PURE_ACK,
-    messageId: "7b53df5f-594d-50f4-adc3-3f7fbd0fe6c5",
+    sourceEventId: SOURCE_IN,
+    messageId: "3543ac01-4ac6-5c14-b160-4f8f4e2e6811",
     msgType: "https://didcomm.org/empty/1.0/empty",
     pleaseAck: null,
     ack: [WIRE],
     attachmentCids: [],
   };
 
-  it("freezes timing, exact pleaseAck, exact ack, headers and birth", () => {
-    accepts("message.out", { ...OUT_DATA, createdTime: 1788442800, expiresTime: 1788446400, pleaseAck: null, headers: { lang: "en" }, birth: { localDidId: DID_ID, peerDid: LONG } }, [BODY, PHOTO]);
+  it("freezes timing, exact pleaseAck, exact ack and headers", () => {
+    accepts("message.out", { ...OUT_DATA, createdTime: 1788442800, expiresTime: 1788446400, pleaseAck: null, headers: { lang: "en" } }, [BODY, PHOTO]);
     accepts("message.out", { ...OUT_DATA, pleaseAck: [] }, [BODY, PHOTO]);
     rejects("message.out", { ...OUT_DATA, createdTime: 10, expiresTime: 10 }, [BODY, PHOTO], /expiresTime must be later/);
     rejects("message.out", { ...OUT_DATA, createdTime: 1.5 }, [BODY, PHOTO]);
     rejects("message.out", { ...OUT_DATA, headers: { return_route: "all" } }, [BODY, PHOTO], /reserved header "return_route"/);
     rejects("message.out", { ...OUT_DATA, headers: { thid: "x" } }, [BODY, PHOTO], /reserved header/);
     rejects("message.out", { ...OUT_DATA, headers: [] }, [BODY, PHOTO]);
-    rejects("message.out", { ...OUT_DATA, birth: { localDidId: DID_ID } }, [BODY, PHOTO], /birth\.peerDid is missing/);
     rejects("message.out", { ...OUT_DATA, pleaseAck: [1] }, [BODY, PHOTO]);
     rejects("message.out", { ...OUT_DATA, thid: "" }, [BODY, PHOTO]);
+    rejects("message.out", { ...OUT_DATA, senderDidId: KEY }, [BODY, PHOTO], /senderDidId must be a canonical UUIDv7/);
+    rejects("message.out", { ...OUT_DATA, senderDidId: UUID_V5_DID_ID }, [BODY, PHOTO], /senderDidId must be a canonical UUIDv7/);
   });
 
-  it("a locally initiated send mints its ID, requests nothing automatic and acknowledges nothing", () => {
+  it("a locally initiated send mints its ID, derives from no observation and acknowledges nothing; a manual notification names only its rotation", () => {
     rejects("message.out", { ...OUT_DATA, ack: [WIRE] }, [BODY, PHOTO], /has ack \[\]/);
     rejects("message.out", { ...OUT_DATA, messageId: IN }, [BODY, PHOTO], /mints a UUIDv7/);
-    rejects("message.out", { ...OUT_DATA, handlerId: PURE_ACK.handlerId }, [BODY, PHOTO], /all null or all present/);
+    rejects("message.out", { ...OUT_DATA, effectType: PURE_ACK }, [BODY, PHOTO], /all null or all present/);
+    rejects("message.out", { ...OUT_DATA, sourceEventId: SOURCE_IN }, [BODY, PHOTO], /sourceEventId is present exactly for an effect/);
+    accepts("message.out", { ...OUT_DATA, rotationEventId: ROTATION, msgType: "https://didcomm.org/empty/1.0/empty", attachmentCids: [] }, [BODY]);
   });
 
-  it("an automatic effect stores its producing tuple, the key of that tuple and the message ID of that key", () => {
-    expect(effectKey({ ...PURE_ACK } as Parameters<typeof effectKey>[0])).toBe(KEY_OF_PURE_ACK);
+  it("an automatic effect stores its producing tuple, the key of that tuple, the message ID of that key and the observation it derives from", () => {
+    expect(effectKey(EXECUTION, PURE_ACK)).toBe(KEY_OF_PURE_ACK);
     expect(automaticMessageId(KEY_OF_PURE_ACK as Parameters<typeof automaticMessageId>[0])).toBe(AUTOMATIC.messageId);
     accepts("message.out", AUTOMATIC, [BODY]);
-    rejects("message.out", { ...AUTOMATIC, ordinal: "1" }, [BODY], /effectKey is not the key of the producing tuple/);
-    rejects("message.out", { ...AUTOMATIC, ordinal: "00" }, [BODY], /ordinal/);
-    rejects("message.out", { ...AUTOMATIC, ordinal: 0 }, [BODY]);
+    accepts("message.out", { ...AUTOMATIC, rotationEventId: ROTATION }, [BODY]);
+    rejects("message.out", { ...AUTOMATIC, effectType: "https://didcomm.org/trust-ping/2.0/ping-response" }, [BODY], /effectKey is not the key of the producing tuple/);
     rejects("message.out", { ...AUTOMATIC, effectKey: KEY_OF_PURE_ACK.slice(0, -1) + "V" }, [BODY], /effectKey is not the key/);
     rejects("message.out", { ...AUTOMATIC, messageId: OUT }, [BODY], /messageId is derived from its key/);
     rejects("message.out", { ...AUTOMATIC, executionId: null }, [BODY], /all null or all present/);
+    rejects("message.out", { ...AUTOMATIC, sourceEventId: null }, [BODY], /sourceEventId is present exactly for an effect/);
     rejects("message.out", { ...AUTOMATIC, executionId: OUT }, [BODY], /executionId must be a canonical UUIDv5/);
-    rejects("message.out", { ...AUTOMATIC, handlerId: "" }, [BODY]);
+    rejects("message.out", { ...AUTOMATIC, effectType: "" }, [BODY], /effectType must be a non-empty string/);
+    rejects("message.out", { ...AUTOMATIC, effectType: "pure-ack" }, [BODY], /an effect type is a URI with a scheme/);
   });
 });
 
 describe("message.in", () => {
   const anonymous = {
     ...IN_DATA,
-    messageId: inboundMessageId({ localKeyName: KEY as KeyName }, WIRE as WireMessageId),
+    messageId: anonymousMessageId(KEY as KeyName, WIRE as WireMessageId),
     peerResolutionEventId: null,
-    relationshipBindingEventId: null,
     presentedDid: null,
     did: null,
   };
@@ -453,38 +464,35 @@ describe("message.in", () => {
     rejects("message.in", { ...IN_DATA, receiptOrdinal: 42 }, [BODY, PHOTO]);
   });
 
-  it("keeps normalized headers, the proof, the byte count and where it arrived", () => {
-    accepts("message.in", { ...IN_DATA, pleaseAck: null, ack: [OUT, OUT], headers: { lang: "en" }, fromPrior: JWT, thid: "t", pthid: OOB, signedBy: "did:web:bob.example#authentication-0" }, [BODY, PHOTO]);
+  it("keeps normalized headers, the original proof string, the byte count and where it arrived", () => {
+    accepts("message.in", { ...IN_DATA, pleaseAck: null, ack: [OUT, OUT], headers: { lang: "en" }, fromPrior: JWT, thid: "t", pthid: OOB }, [BODY, PHOTO]);
+    accepts("message.in", { ...IN_DATA, fromPrior: "not a jwt at all" }, [BODY, PHOTO]);
+    accepts("message.in", { ...IN_DATA, fromPrior: "" }, [BODY, PHOTO]);
     accepts("message.in", { ...IN_DATA, receivedVia: { mediationId: null, deliveryId: null }, bytes: 0 }, [BODY, PHOTO]);
-    accepts("message.in", { ...IN_DATA, presentedDid: LONG, did: SHORT, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO]);
-    rejects("message.in", { ...IN_DATA, did: LONG, presentedDid: LONG }, [BODY, PHOTO], /did must be a canonical DID/);
+    rejects("message.in", { ...IN_DATA, fromPrior: 7 }, [BODY, PHOTO], /fromPrior must be a string/);
     rejects("message.in", { ...IN_DATA, headers: { please_ack: [] } }, [BODY, PHOTO], /reserved header/);
     rejects("message.in", { ...IN_DATA, bytes: -1 }, [BODY, PHOTO], /bytes must be a non-negative integer/);
     rejects("message.in", { ...IN_DATA, receivedVia: { mediationId: MEDIATION } }, [BODY, PHOTO], /receivedVia\.deliveryId is missing/);
-    rejects("message.in", { ...IN_DATA, receivedVia: { mediationId: R, deliveryId: null } }, [BODY, PHOTO]);
+    rejects("message.in", { ...IN_DATA, receivedVia: { mediationId: IN, deliveryId: null } }, [BODY, PHOTO]);
     rejects("message.in", { ...IN_DATA, createdTime: 5, expiresTime: 4 }, [BODY, PHOTO], /expiresTime/);
     rejects("message.in", { ...IN_DATA, wireMessageId: "" }, [BODY, PHOTO]);
-    rejects("message.in", { ...IN_DATA, fromPrior: "" }, [BODY, PHOTO]);
   });
 
-  it("an authenticated observation keeps its binding unless a carried proof stands in, and a proof names no transition", () => {
+  it("an authenticated observation names its resolution and a did:peer:4 sender under the spelling presented", () => {
     accepts("message.in", IN_DATA, [BODY, PHOTO]);
-    accepts("message.in", { ...IN_DATA, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO]);
-    accepts("message.in", { ...IN_DATA, fromPrior: JWT }, [BODY, PHOTO]);
-    accepts("message.in", { ...IN_DATA, fromPrior: JWT, relationshipBindingEventId: null }, [BODY, PHOTO]);
-    rejects("message.in", { ...IN_DATA, relationshipBindingEventId: null }, [BODY, PHOTO], /keeps its relationship binding/);
-    rejects("message.in", { ...IN_DATA, relationshipBindingEventId: null, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO], /keeps its relationship binding/);
-    rejects("message.in", { ...IN_DATA, fromPrior: JWT, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO], /names no peer transition/);
+    accepts("message.in", { ...IN_DATA, presentedDid: PEER_LONG }, [BODY, PHOTO]);
+    rejects("message.in", { ...IN_DATA, did: PEER_LONG, presentedDid: PEER_LONG }, [BODY, PHOTO], /did must be a did:peer:4 short form/);
+    rejects("message.in", { ...IN_DATA, did: WEB, presentedDid: PEER }, [BODY, PHOTO], /did must be a did:peer:4 short form/);
+    rejects("message.in", { ...IN_DATA, presentedDid: WEB }, [BODY, PHOTO], /presentedDid must be a did:peer:4 short or long form/);
+    rejects("message.in", { ...IN_DATA, presentedDid: LOCAL }, [BODY, PHOTO], /presentedDid is a spelling of did/);
+    rejects("message.in", { ...IN_DATA, presentedDid: `${PEER}x` }, [BODY, PHOTO], /presentedDid is a spelling of did/);
   });
 
   it("an anonymous observation has no sender evidence and the ID its local key and wire ID derive", () => {
     accepts("message.in", anonymous, [BODY, PHOTO]);
-    rejects("message.in", { ...anonymous, did: "did:web:bob.example" }, [BODY, PHOTO], /null together/);
+    rejects("message.in", { ...anonymous, did: PEER }, [BODY, PHOTO], /null together/);
     rejects("message.in", { ...IN_DATA, presentedDid: null }, [BODY, PHOTO], /null together/);
     rejects("message.in", { ...IN_DATA, peerResolutionEventId: null }, [BODY, PHOTO], /null together/);
-    rejects("message.in", { ...anonymous, signedBy: "did:web:bob.example#key-1" }, [BODY, PHOTO], /signed sender has resolution evidence/);
-    rejects("message.in", { ...anonymous, relationshipBindingEventId: BOUND }, [BODY, PHOTO], /no relationship evidence/);
-    rejects("message.in", { ...anonymous, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO], /no relationship evidence/);
     rejects("message.in", { ...anonymous, messageId: IN }, [BODY, PHOTO], /derived from its local key and wire ID/);
     rejects("message.in", { ...anonymous, localKeyName: `did/${DID_ID2}/key-agreement` }, [BODY, PHOTO], /derived from its local key/);
   });
