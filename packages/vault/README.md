@@ -131,7 +131,10 @@ and joins a local and a peer replacement leaving one pair into the
 pair of both successors, transporting each to the other's successor;
 then, over the whole graph, finds the conflicts, competing successors
 of one endpoint in one context, cycles and a join that would pair a
-DID with itself; then answers: each carrier's and decision's six-state
+DID with itself; then takes the same closure again over the evidence
+no conflict reaches — a masked carrier confirms no decision, a masked
+decision joins nothing — as what grants authority, each link saying
+whether it is `verified`; then answers: each carrier's and decision's six-state
 `status`, what each source `witness`es, whether a channel is
 `conflicted` or `superseded` in its local-only context, its default
 `head`, whether a local DID is `confirmed` toward a peer, the
