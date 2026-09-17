@@ -21,7 +21,7 @@ and **MAY** as described in BCP 14 when they appear in all capitals.
 | --- | --- |
 | Understand channels and display | [Model](#what-it-is-for) → [Identifiers](#symmetric-relationship-identity) → [Peer address changes](#peer-address-changes) |
 | Implement authentication and receipt | [Receipt gates](#uniform-receipt) → [Receive procedure](distributed-delivery.md#receive-a-message) → [Resolution and retry rules](#did-resolution-requirements) → [Peer DID profile](#peer-did-numalgo-4-profile) |
-| Implement address policy | [Discovery](#out-of-band-discovery) → [Select a channel](#ordinary-sending-and-birth-selection) → [Early privacy and notification](#early-private-address-policy-and-notifications) → [Retry and rollover](#retry-replacement-and-address-rollover) |
+| Implement address policy | [Discovery](#out-of-band-discovery) → [Select a channel](#ordinary-sending-and-birth-selection) → [Early privacy and notification](#early-private-address-policy-and-notifications) → [Retry and manual resend](#retry-replacement-and-address-rollover) |
 
 <details>
 <summary>Contents</summary>
@@ -39,7 +39,7 @@ and **MAY** as described in BCP 14 when they appear in all capitals.
 - [11. Early private-address policy and notifications](#early-private-address-policy-and-notifications)
 - [12. Peer address changes](#peer-address-changes)
 - [13. Remote errors and integrity failures](#remote-errors-and-integrity-failures)
-- [14. Retry, manual resend and address rollover](#retry-replacement-and-address-rollover)
+- [14. Retry and manual resend](#retry-replacement-and-address-rollover)
 - [15. Execution and recovery](#execution-and-recovery)
 - [16. Privacy, abuse, interoperability and security](#privacy-abuse-interoperability-and-security)
 - [17. Required conformance cases](#required-conformance-cases)
@@ -325,7 +325,7 @@ A safely classified hard rejection received through Message Pickup:
 - MUST be pickup-ACKed;
 - MUST NOT append `message.in`;
 - MUST NOT create a contact or response effect; and
-- MAY leave only a bounded local diagnostic.
+- MAY leave only a bounded local diagnostic, subject to the requirements below.
 
 Direct transport has no pickup ACK. Malformed envelope crypto, wrong recipient,
 an unsupported sender method, an unknown sender short form without its long
@@ -336,11 +336,15 @@ A malformed or invalid string-valued `from_prior` is post-receipt proof evidence
 not malformed envelope crypto. It cannot change the authenticated sender used
 for ingress limits or supply predecessor authority.
 
-For an unknown current-sender short form, expose a bounded local diagnostic
-stating that sender material is unavailable and the delivery was discarded.
-The diagnostic MUST NOT present the claimed sender as authenticated or assign
-the failure to a contact. It neither sends a response nor appends application
-state. Snapshot restore can cause this condition under
+For an unknown current-sender short form, the receiver MUST expose a bounded
+visible local diagnostic stating that sender material is unavailable and the
+delivery was discarded. For terminal wrong-recipient input with no known local
+recipient key mapping, it MUST likewise expose a bounded visible local
+diagnostic stating that local recipient material is unavailable and the
+delivery was discarded. These diagnostics MUST NOT present a claimed sender
+as authenticated, assign the failure to a contact or assert that missing
+history caused the failure. They neither send a response nor append application
+state. Snapshot restore can cause these conditions under
 [the restore rules](vault-events.md#restore).
 
 <a id="integrity-checks-and-durable-receipt"></a>
@@ -493,15 +497,16 @@ validated long form derives that short form. This immutable material may be
 used across contexts, but each carrier independently authenticates its current
 sender and verifies its own JWT. Do not rewrite signed bytes to change DID spellings.
 
-If the issuer is a valid short form and its long form is unavailable, keep the
-original carrier and show `pending-proof`. Do not poll the network, expire the
-proof into invalidity, or keep the original receive action waiting for that
-material. Later arrival of matching local material schedules verification;
-it grants no automatic ACK, reply or notification for that historical carrier.
+If the issuer is a valid short form and no matching retained `peer.resolved`
+document is available, keep the original carrier and show `pending-proof`.
+Do not poll the network, expire the proof into invalidity, or keep the original
+receive action waiting for that material. A later matching `peer.resolved`
+schedules verification; it grants no automatic ACK, reply or notification for
+that historical carrier.
 A new independently authenticated live carrier is evaluated separately.
 
 The fold checks the original signature and the document's authorized
-authentication method without appending an association or verification event.
+authentication method without appending an event.
 A bad signature or unauthorized key is invalid. Missing source/endpoint/history
 references remain pending for their own reason. Invalid or pending proof never
 undoes durable receipt or pickup ACK.
@@ -548,9 +553,10 @@ authorize new work.
 
 A local producer MUST use the predecessor's exact first-disclosure long form
 for `from_prior.iss` and its protected authentication `kid`; `sub` uses the
-successor's long form. A receiver also accepts short-form issuer spelling for
-verification when matching local long-form material is available; otherwise
-the proof stays pending under section 10.1.
+successor's long form. A receiver also accepts short-form issuer spelling when
+a retained method-valid `peer.resolved` document matches it under section 10.1.
+A long form retained only in other event data does not qualify. Without the
+matching document, a proof that passes the checks not requiring it stays pending.
 A receiver compares predecessor DID spellings and authentication-method IDs
 under [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned), using only the method's validated spelling
 equivalence and the exact verification document. Exact wire spellings remain retained.
@@ -627,7 +633,7 @@ only when no other channel or disclosure still needs it.
 ## 12. Peer address changes
 
 Retain an independently authenticated successor receipt even when predecessor
-evidence is missing. Obtain its proof document under
+evidence is missing. Derive its issuer document under
 [predecessor resolution](#predecessor-resolution), then derive links, joins and
 supersession under [continuity](channels.md#continuity). Show the resulting
 [verification status](channels.md#verification-status). Superseded peer input
@@ -782,7 +788,7 @@ roll back; explicit new communication is a new channel and new message.
 
 <a id="resolution-freshness-and-budgets-rz-39-rz-45"></a>
 
-### Sender authentication and recipient evidence
+### Sender authentication and recipient evidence (RZ-39–RZ-45)
 
 - <a id="rz-39"></a> **RZ-39.** Every new delivery, including a duplicate, authenticates its current sender. Recovery of already committed channel evidence does not re-resolve the sender to admit scope.
 
@@ -825,12 +831,18 @@ roll back; explicit new communication is a new channel and new message.
 
 - <a id="rz-62"></a> **RZ-62.** Both channel endpoints and every continuity predecessor use numalgo 4. An unsupported current sender fails the receive gate; an unsupported proof issuer grants no continuity and causes no network fetch while preserving otherwise authenticated receipt. Mediator Web resolution remains available independently.
 
-- <a id="rz-63"></a> **RZ-63.** A well-formed short-form proof issuer with no local long form stays pending-proof after durable receipt and pickup ACK. No timer or reopen starts network resolution or turns it invalid. Matching validated material later triggers verification of the saved JWT without another receipt or automatic output. Wrong sub, malformed claims or an inconsistent kid are invalid even when issuer material is missing; an unknown current-sender short form still cannot authenticate receipt.
+- <a id="rz-63"></a> **RZ-63.** A well-formed short-form proof issuer with no matching retained peer.resolved document stays pending-proof after durable receipt and pickup ACK, even when its long form appears only in other event data. No timer or reopen starts network resolution or turns it invalid. A matching peer.resolved committed later triggers verification of the saved JWT without another receipt or automatic output. Wrong sub, malformed claims or an inconsistent kid are invalid even when issuer material is missing; an unknown current-sender short form still cannot authenticate receipt.
 
-- <a id="rz-64"></a> **RZ-64.** After a local decision (A0,B0) to A1, a valid B0-to-B1 carrier received at A0 reuses that decision through the verified peer-only context. It selects neither A2 nor another notification; new user sends default to C(A1,B1). A local producer uses long-form issuer and kid in its frozen proof; a received short-form issuer can verify with matching local material without rewriting signed bytes.
+- <a id="rz-64"></a> **RZ-64.** After a local decision (A0,B0) to A1, a valid B0-to-B1 carrier received at A0 reuses that decision through the verified peer-only context. It selects neither A2 nor another notification; new user sends default to C(A1,B1). A local producer uses long-form issuer and kid in its frozen proof; a received short-form issuer verifies with a matching retained peer.resolved document without rewriting signed bytes.
 
-### Disclosure policy and restore limits
+<a id="disclosure-policy-and-restore-limits"></a>
+
+### Disclosure policy and restore limits (RZ-65–RZ-68)
 
 - <a id="rz-65"></a> **RZ-65.** After confirmed rotations (A0,B0) to A1 and (B0,A1) to B1 from disclosed A0 and B0, eligible application input at undisclosed A1 from B1 selects no further privacy rotation. Input from an unrelated C0 likewise cannot trigger automatic rotation merely by sharing A1; separating that reused address requires manual rotation. A disclosed predecessor still applies the policy independently in unrelated peer contexts, reusing any decision already selected in each context.
 
-- <a id="rz-66"></a> **RZ-66.** A snapshot predating a peer's confirmed successor may lack that successor's long form. A new delivery from its unknown short form follows the terminal receive gate: pickup ACK when mediated, no message.in or response, and a bounded visible local diagnostic that does not authenticate or assign the claimed sender. Waiting or an old-channel send supplies no guaranteed repair. A later long-form disclosure can authenticate a new delivery but does not by itself restore missing continuity history or recover the discarded delivery.
+- <a id="rz-66"></a> **RZ-66.** A snapshot predating a peer's confirmed successor may lack that successor's long form. A new delivery from its unknown short form follows the terminal receive gate: pickup ACK when mediated, no message.in or response, and a bounded visible local diagnostic that does not authenticate or assign the claimed sender. Waiting or an old-channel send supplies no guaranteed repair; old-address traffic may also trigger a competing rotation as in [RZ-67](#rz-67). A later long-form disclosure can authenticate a new delivery but does not by itself restore missing continuity history or recover the discarded delivery.
+
+- <a id="rz-67"></a> **RZ-67.** A snapshot retains disclosed A0 but predates Alice's (A0,B0) to A1 decision, whose proof Bob has verified. After restoring it, eligible live input from B0 at A0 may select A1' because the earlier decision is absent. A queued message can supply that input even when the snapshot has no prior B0-channel history. Bob retains both valid replacement proofs and exposes the fork as a conflict: no default send head in that context and no authority through its conflicted continuity. Otherwise eligible authenticated receipt still commits and pickup-ACKs, and recorded outcomes remain intact. Phase 1 has no operation to choose a branch or clear the conflict. Communication may be established independently from a fresh local DID without resolving the old context.
+
+- <a id="rz-68"></a> **RZ-68.** A local DID created after a snapshot is absent after restoring that snapshot; the seed alone cannot reconstruct its UUIDv7 entity ID and key names. Once local recipient state is authoritative, a delivery with no known or recoverably pending recipient mapping follows the terminal wrong-recipient gate, with pickup ACK when mediated, no message.in or response, and a bounded visible diagnostic. Reconciliation removes recipient registrations outside the desired set; an unknown registered recipient produces a bounded visible registration/state-mismatch diagnostic without recreating a DID or asserting the cause of the mismatch.

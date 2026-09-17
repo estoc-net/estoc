@@ -464,15 +464,28 @@ A failed construction is not an empty vault and cannot silently mint another see
 Recovery from a damaged runtime restores only the snapshot's history. Salvaging
 history absent from that snapshot is outside the phase-1 contract.
 
-Before enabling communication after restore, the product MUST explain that
-peer addresses and continuity learned after the snapshot may be missing.
-Messages from unknown short-form senders can therefore be discarded under
-[the receive gate](relationships.md#hard-pre-vault-gate), even if those peers
-previously received address confirmation. Expose that gate's bounded visible
-diagnostic. Recovery may require importing a newer complete snapshot or
-establishing a channel again; waiting or contacting an old address is not a
-guaranteed repair. Recovering sender material alone does not restore missing
-continuity history or discarded messages under [vault restore](vault-events.md#restore).
+Before enabling new user sends or manual dispatch after restore, the product
+MUST explain that local DIDs, peer addresses and continuity learned after the
+snapshot may be missing. The seed alone cannot recover those missing local
+addresses. Messages for unknown local recipients or from
+unknown short-form senders can therefore be discarded under
+[the receive gate](relationships.md#hard-pre-vault-gate), even if those addresses
+were previously confirmed. Expose that gate's bounded visible diagnostics and
+the registration/state mismatch diagnostic under
+[recipient reconciliation](vault-events.md#route-did-and-key-fold). Pickup,
+recipient reconciliation and local projection recovery need not wait for this
+explanation to be presented or acknowledged.
+
+Recovery may require importing a newer complete snapshot or establishing an
+independent channel from a fresh local DID. Waiting or contacting an old address
+is not a guaranteed repair: old-address input, including queued traffic, can
+trigger a rotation that competes with a successor the peer already verified.
+Phase 1 retains the resulting visible fork without a branch-selection or
+conflict-resolution operation. Its affected context has no default send head
+and grants no authority through conflicted continuity. Establishing another
+channel leaves that fork intact. Recovering sender material alone does not
+restore missing continuity history or discarded messages under
+[vault restore](vault-events.md#restore).
 
 <a id="import"></a>
 
@@ -615,10 +628,19 @@ read and maintenance strategies.
     Portable inspection rejects views, triggers or other forbidden schema before
     querying application data, including when only reading metadata.
 34. <a id="sq-34"></a> Restore unlocks the real wrapper and reconstructs state with fresh IDs;
-    pending message dispatch remains manual. Before enabling communication,
-    explain the unknown-short-form and missing-continuity limitations and the
-    possible need to establish channels again. Discarded unknown-short-form
-    deliveries have bounded visible diagnostics without authenticated peer attribution.
+    pending message dispatch remains manual. Before enabling new user sends or
+    manual dispatch, explain missing local DIDs, unknown-short-form senders,
+    missing continuity and visible forks caused by competing post-restore
+    rotations, including those triggered by queued input. The seed alone does
+    not recover lost local addresses. An affected fork has no default send head
+    or authority through conflicted continuity; phase 1 has no branch-resolution
+    operation. Explain the possible need to establish an independent channel
+    from a fresh local DID, which leaves the old fork intact. Pickup,
+    reconciliation and local projection recovery do not wait for this explanation.
+    Discarded deliveries with unknown recipient mappings or unknown short-form
+    senders have bounded visible diagnostics without authenticated peer attribution;
+    unknown mediator recipient registrations likewise expose a bounded visible
+    registration/state-mismatch diagnostic and are reconciled normally.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
 36. <a id="sq-36"></a> A fork, or any `requiredRoots` member with neither verified source
     bytes nor sound accepted target bytes, aborts without semantic writes. Check

@@ -534,7 +534,7 @@ The referenced resolution objects
 remain historical evidence; another document cannot replace any reference.
 If the event or object is temporarily missing, processing is deferred until
 verified recovery material is available; absence is not proof that the
-transition is invalid.
+referenced evidence is invalid.
 
 For a `did:peer:4` first disclosure, the implementation decodes and validates
 `presentedDid`, derives `did` and the document locally, and stores both forms.
@@ -938,8 +938,15 @@ The desired mediator recipient set contains exactly each
 is mediated. On every connection the phase-1 runtime queries each mediator
 and reconciles that desired set with ordinary Coordinate Mediation
 `recipient-query` and `recipient-update`. Current registration is runtime state,
-not portable vault state. Registration diagnostics MAY be kept in local trace;
-a restore re-queries the mediator before disclosure or submission.
+not portable vault state. A restore re-queries the mediator before disclosure
+or submission.
+
+If the mediator reports a registered recipient with no retained local DID
+entity, the runtime MUST expose a bounded visible local diagnostic of the
+registration/state mismatch. The observation does not recreate a DID or
+establish why its local record is absent. Reconciliation still removes
+registrations outside the desired set. Other registration diagnostics MAY be
+kept in local trace.
 
 Direct bound routes do not enter that set. They lead to a full vault runtime
 or ingress service without naming a replica as the application recipient.
@@ -2277,7 +2284,7 @@ list when no new objects are needed; `Vault.events` is read-only.
 6. Rebuild permanent erasure closure, then application display views from their
    remaining source evidence under [section 7.3](#application-message-views).
    This work may recover retained issuer material and recompute a previously
-   pending proof, but appends no proof-association event and grants no protocol
+   pending proof, but appends no event for verification and grants no protocol
    dispatch or business effect.
    Automatically complete missing invitation consumption from retained,
    non-erased sources under [channels.md](channels.md#invitation-consumed),
@@ -2465,13 +2472,23 @@ A portable SQLite restore creates a new local `replica_id` and
 `store_generation`. An exact local move is a separate operation that may retain
 them only with the old writer permanently stopped under
 [vault-sqlite.md section 12.3](vault-sqlite.md#exact-local-move). The restored
-runtime derives every mediation and communication key, reconciles required
-recipients using ordinary Coordinate Mediation, drains the account-scoped
-mailbox, and exposes pending outbox records for manual action. Opening never
+runtime derives the mediation and communication keys named by retained entity
+records, reconciles required recipients using ordinary Coordinate Mediation,
+drains the account-scoped mailbox, and exposes pending outbox records for manual
+action. Opening never
 supplies initial or retry dispatch authority, even after an exact local move.
 It also reconciles unfinished committed inbound work under [section 13.1](#open-the-writable-full-runtime),
 including observations already pickup-ACKed before the snapshot. Local queue
 state is not a recovery source.
+
+A local DID created after the snapshot, including a privacy successor, may be
+absent after restore. The seed alone cannot reconstruct the missing UUIDv7
+entity IDs in its key names. Once local recipient state is authoritative,
+deliveries with no known or recoverably pending recipient mapping follow the
+terminal wrong-recipient gate and its bounded visible diagnostic under
+[relationships.md](relationships.md#hard-pre-vault-gate). Ordinary recipient
+reconciliation removes registrations outside the restored desired set and
+reports unknown registered recipients under [section 5.7](#route-did-and-key-fold).
 
 A snapshot can predate a peer's successor long form even though the peer has
 already received confirmation and now sends its short form. Such a delivery
@@ -2481,9 +2498,19 @@ under [relationships.md](relationships.md#hard-pre-vault-gate). Waiting alone
 does not recover the long form. A new long-form disclosure can enable sender
 authentication but does not itself recover missing continuity history or a
 discarded delivery. Importing a newer complete snapshot may restore retained
-evidence; otherwise the channel may need to be established again. Sending to
-an old address is no guaranteed repair, since supersession can prevent a reply.
-Restore UI MUST explain these limits under
+evidence; otherwise the channel may need to be established again.
+
+Traffic at a snapshot-era address is not a guaranteed repair. Supersession
+can prevent a reply, and eligible live input, including an already queued
+message, can trigger another privacy rotation when the snapshot lacks a later
+decision. A manual rotation can also select a different successor. If the peer
+already verified the lost decision's successor, it can then retain two valid
+replacements of the same endpoint in one context. Phase 1 preserves this fork
+as a visible conflict under [channels.md](channels.md#continuity), with no
+default send head in the affected context and no authority through conflicted
+continuity. Restoring the lost decision does not choose between the branches.
+Communication may be established independently from a fresh local DID; doing
+so does not resolve the old context. Restore UI MUST explain these limits under
 [vault-sqlite.md](vault-sqlite.md#restore).
 
 No previous process must be online. Mediator retention still bounds messages
@@ -2673,7 +2700,7 @@ derivation requires a new vault version.
     the immutable document or JWT bytes.
 - <a id="ve-39"></a> **VE-39.** `from_prior.sub` equals plaintext `from` byte-for-byte; before confirmation
     both use the successor's Peer-DID long form.
-- <a id="ve-40"></a> **VE-40.** Each carrier's original JWT verifies against the immutable document derived from its long-form issuer or matching retained peer.resolved material for a short-form issuer. Link derivation uses that carrier's exact authentication and endpoint evidence; iat selects no alternative document. Rebuild needs no association event or prior verification cache.
+- <a id="ve-40"></a> **VE-40.** Each carrier's original JWT verifies against the immutable document derived from its long-form issuer or matching retained peer.resolved material for a short-form issuer. Link derivation uses that carrier's exact authentication and endpoint evidence; iat selects no alternative document. Rebuild appends no event for verification and needs no prior verification cache.
 
 - <a id="ve-41"></a> **VE-41.** Successor/local decision and exact package commit before disclosure. Each transport call requires current eligibility and a live initial/manual action; an uncertain preparation commit permits neither dispatch nor a replacement package until resolved. Links themselves have no commit boundary.
 
@@ -2807,7 +2834,7 @@ derivation requires a new vault version.
 
 ### Transition evidence and automatic intent (VE-90–VE-100)
 
-- <a id="ve-90"></a> **VE-90.** Peer proof verification appends no association or verification event. did.rotationSelected contains exactly fromDidId, peerDid, toDidId, nullable sourceEventId and frozen fromPrior. Channel links derive from authenticated carriers, immutable issuer material and local decisions without stored link IDs.
+- <a id="ve-90"></a> **VE-90.** Peer proof verification appends no event. did.rotationSelected contains exactly fromDidId, peerDid, toDidId, nullable sourceEventId and frozen fromPrior. Channel links derive from authenticated carriers, immutable issuer material and local decisions without stored link IDs.
 
 - <a id="ve-91"></a> **VE-91.** Erasure preserves invitation consumptions, exact source/disclosure skeletons, original source JWTs and local decisions. A long-form issuer remains derivable from the JWT; peer.resolved roots retain documents used by short-form issuers independently of message content. Missing required material defers verification; deleting all local verification caches changes no rebuild result.
 
@@ -2871,7 +2898,7 @@ derivation requires a new vault version.
 
 - <a id="ve-119"></a> **VE-119.** A peer carrier establishes its exact channel link or verified join context. Proof-free input uses its own authentication evidence and exact DID pair; each operation checks any additional evidence it requires.
 
-- <a id="ve-120"></a> **VE-120.** A complete receipt can witness a peer link before any handler runs. Restoring its exact missing proof document or endpoint evidence permits local validation without inventing a new global identity.
+- <a id="ve-120"></a> **VE-120.** A complete receipt can witness a peer link before any handler runs. Restoring missing issuer material or endpoint evidence permits local validation without inventing a new global identity.
 
 - <a id="ve-121"></a> **VE-121.** Operation eligibility is computed from current policy and evidence. Concrete operation references must form a complete witness; missing exact references defer and contradictory identity/intent conflicts without moving effects or reopening invitations.
 
@@ -2893,7 +2920,7 @@ derivation requires a new vault version.
 
 - <a id="ve-128"></a> **VE-128.** Confirmation in an unrelated channel does not permit short-form disclosure. Exact predecessor verification evidence and validated DID spelling equivalence govern JWT method comparison.
 
-- <a id="ve-129"></a> **VE-129.** The phase-1 adapter preserves the original proof string and authenticates receipt independently of continuity. Missing proof evidence and invalid JWTs do not block message.in or pickup ACK; restored exact proof evidence updates verification without another receipt. Invalid paths grant no new operation authority; envelope/current-sender authentication failure remains pre-receipt under the gate's wait or terminal rules.
+- <a id="ve-129"></a> **VE-129.** The phase-1 adapter preserves the original proof string and authenticates receipt independently of continuity. Missing proof evidence and invalid JWTs do not block message.in or pickup ACK; restored issuer material updates verification without another receipt. Invalid paths grant no new operation authority; envelope/current-sender authentication failure remains pre-receipt under the gate's wait or terminal rules.
 
 - <a id="ve-130"></a> **VE-130.** Given the same validated numalgo-4 long form L and short form S, every
      stored resolution document uses id=L, preserves input alsoKnownAs entries

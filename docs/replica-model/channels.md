@@ -373,6 +373,13 @@ cannot fill a missing side. Competing successors for the same
 endpoint/context, cycles and contradictory identity evidence are visible
 conflicts, not ordinary opposite-side rotation.
 
+Phase 1 retains all independently valid branch evidence and exposes the fork;
+it defines no operation to select a winning branch or clear this conflict.
+Ordinary authenticated receipt remains available under section 3. The affected
+context grants no authority through conflicted continuity under section 3.2
+and has no default send head under section 8. Previously recorded outcomes
+remain intact.
+
 For peer replacements, one context includes channels connected by validated
 local-only replacements while retaining the same canonical peer DID. Compare
 competing peer successors across that context. For local replacements,
@@ -626,7 +633,7 @@ must define an authenticated application operation ID and its own rules.
 - <a id="ch-7"></a> **CH-7.** Contradictory authenticated intent with complete source witnesses suppresses new effects; previously submitted IDs and outcomes remain unchanged.
 - <a id="ch-8"></a> **CH-8.** Unknown policy, missing verification evidence and invalid continuity leave receipts intact and grant no effects.
 - <a id="ch-9"></a> **CH-9.** A retained channel denial applies independently of contact membership; deleting a contact alone grants or revokes no cryptographic authority.
-- <a id="ch-10"></a> **CH-10.** Crash after receipt, invitation consumption or a concrete intent/result preserves each committed fact; reopen recomputes proof verification and pending-work views without a proof-association event or dispatching old work.
+- <a id="ch-10"></a> **CH-10.** Crash after receipt, invitation consumption or a concrete intent/result preserves each committed fact; reopen recomputes proof verification and pending-work views without appending events for verification or dispatching old work.
 - <a id="ch-11"></a> **CH-11.** Competing one-use invite receipts can both be saved; only a complete invitation.consumed records a consumer. Crash, erasure, denial and retirement never reopen that consumption.
 - <a id="ch-12"></a> **CH-12.** Missing recoverable local receive material waits without pickup ACK; current-sender authentication uses locally available numalgo-4 material. Definitive envelope/authentication rejection pickup-ACKs without an observation. Missing predecessor proof material is never a pre-receipt wait.
 - <a id="ch-13"></a> **CH-13.** One-use consumption is automatic and needs no additional user decision. Select the first eligible non-erased receipt in receiptOrderKey order; an earlier candidate with missing evidence defers selection. Timeout, control type and matching pthid alone establish no consumption.
@@ -648,7 +655,7 @@ must define an authenticated application operation ID and its own rules.
 - <a id="ch-29"></a> **CH-29.** Learning a missing graph link after independent channel executions never merges or replays those executions.
 - <a id="ch-36"></a> **CH-36.** The phase-1 adapter authenticates a carrier without resolving its predecessor. Receipt commits and pickup-ACKs with the exact original from_prior; UI shows pending-proof and no verified peer continuity or application effect. Proof failure never changes the authenticated source used for ingress limits.
 - <a id="ch-37"></a> **CH-37.** Deriving the issuer document from the original JWT and verifying its link need no earlier predecessor-channel message. A valid signature with a missing required source/endpoint/rotation record shows pending-history for that path; restoring it completes the path through local recomputation.
-- <a id="ch-38"></a> **CH-38.** A malformed string-valued carried JWT, wrong sub or complete failed signature check shows invalid while preserving authenticated receipt and pickup ACK. A valid short-form issuer without local long-form material stays pending-proof. Tampered envelope integrity or mismatched current-sender/recipient evidence still fails the receive gate and creates no message.in.
+- <a id="ch-38"></a> **CH-38.** A malformed string-valued carried JWT, wrong sub or complete failed signature check shows invalid while preserving authenticated receipt and pickup ACK. A valid short-form issuer without a matching retained peer.resolved document stays pending-proof, even when its long form appears only in message.out.recipientDid or another carrier's JWT. Tampered envelope integrity or mismatched current-sender/recipient evidence still fails the receive gate and creates no message.in.
 
 - <a id="ch-39"></a> **CH-39.** Importing missing proof/history updates verification status, links and eligible ACK projections without a new receipt ordinal, input identity or automatic reply/notification dispatch.
 - <a id="ch-40"></a> **CH-40.** Rebuilding from receipts with their original JWTs, retained immutable issuer material and local decisions yields the same graph and verification statuses in any import order. No consumer references a link/status projection row as an event.

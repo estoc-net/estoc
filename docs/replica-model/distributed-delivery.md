@@ -262,7 +262,7 @@ or not transport was called; reopen cannot replay it. Further calls follow
 4. Pickup-ACK process-durable receipt independently of channel policy/history.
 5. If `from_prior` is present, derive its immutable issuer document and verify
    this carrier's original JWT under [predecessor resolution](relationships.md#predecessor-resolution).
-   Fold proof status and continuity without appending a proof-association event,
+   Fold proof status and continuity without appending an event,
    showing missing evidence as pending.
 6. For each consumer, validate exact source/proof evidence and its required
    target or protocol fields. Before new work, recheck supersession, denial
@@ -987,7 +987,7 @@ or mediator-visible IDs.
 
 ### Recovery and automatic effects (DD-50–DD-56)
 
-- <a id="dd-50"></a> **DD-50.** Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. Proof verification derives the immutable issuer document from its original JWT or matching retained material; receipt authentication still uses its exact saved references. Neither verification nor a cache rebuild appends a proof event.
+- <a id="dd-50"></a> **DD-50.** Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. Proof verification uses the immutable issuer document derived from its long-form issuer or a matching retained peer.resolved document for a short-form issuer; receipt authentication still uses its exact saved references. Neither verification nor a cache rebuild appends an event.
 
 - <a id="dd-51"></a> **DD-51.** A crash before transport and a crash after acceptance but before submission commit expose the same prepared state. Neither proves delivery or nondelivery; manual retry preserves wire ID, package, channel and expiry.
 
