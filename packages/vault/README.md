@@ -63,9 +63,16 @@ CID; `canonicalDidOf` is the DID folds compare by; `authorizedMethodIds`,
 `methodPublicKey` and `didcommServiceUris` read any retained document's
 relationships, keys and DIDComm endpoints) and the `from_prior` proof
 (`from-prior.ts`: `signFromPrior` issues the compact EdDSA JWT with
-`jose`, `verifyFromPrior` verifies one against the exact pinned
-predecessor document only, DID spellings compared by validated
-equivalence and the rest of a method ID byte for byte; what the proof
+`jose`; a carried proof is read in three steps, `fromPriorClaims` for
+its form and claims, `carriedClaims` for the claims against the
+carrier they arrived on, and `verifyFromPrior` for the signature
+against the issuer's immutable document, which `issuerDocumentOf`
+derives from a long-form issuer's spelling or takes from a retained
+method-valid `peer.resolved` of a short-form issuer and which the
+caller must have checked to be that DID's before verifying; DID
+spellings compare by validated equivalence and the rest of a method
+ID byte for byte; `verifyLocalProof` holds a rotation decision's
+frozen proof to the exact counterpart of signing one; what a proof
 means for a channel is the continuity fold's), and the first
 folds (`fold/`: `VaultEventSet` reads every event once against its
 schema and hands a type's events out in canonical order and a typed

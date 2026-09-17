@@ -105,6 +105,8 @@ describe("peerResolution", () => {
     expect(() => canonicalDidOf(longFormOfBytes(duplicated))).toThrow(InvalidDidDocument);
     expect(() => peerResolution(longFormOfBytes(utf8(text), [0x80, 0x03]))).toThrow(/multicodec-tagged JSON/);
     expect(() => peerResolution(longFormOfBytes(utf8("[]")))).toThrow(/JSON object/);
+    expect(() => peerResolution(longFormOfBytes(utf8('{"authentication": BROKEN_JSON}')))).toThrow(/encoded document is not JSON/);
+    expect(() => canonicalDidOf(longFormOfBytes(utf8('{"authentication": BROKEN_JSON}')))).toThrow(InvalidDidDocument);
   });
 
   it("refuses an input document the method forbids or one whose members are not the shape a document gives them", () => {

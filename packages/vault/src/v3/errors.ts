@@ -41,7 +41,7 @@ export class InvalidDidDocument extends Error {
   }
 }
 
-/** A `from_prior` JWT that the pinned predecessor document does not authorize. */
+/** A `from_prior` JWT that is malformed, claims what its carrier contradicts, or that its issuer's document does not authorize. */
 export class InvalidFromPrior extends Error {
   constructor(message: string) {
     super(message);
