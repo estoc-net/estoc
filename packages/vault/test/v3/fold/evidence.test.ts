@@ -10,7 +10,6 @@ const WEB_DID = "did:web:bob.example" as Did;
 
 const readerOf = (objects: Map<Cid, Uint8Array>) => async (wanted: Cid) => objects.get(wanted) ?? null;
 
-/** A did:web peer over the keys a seed derives for an entity: an Ed25519 key for authentication, an X25519 key for key agreement, unless the document is edited. */
 async function webPeer(peerKeys: Keys, edit: (document: JsonObject) => JsonObject = (document) => document): Promise<Peer & { bytes: Uint8Array }> {
   const signer = await peerKeys.signing(didKeyName(PEER_ID0, "authentication"));
   const agreer = await peerKeys.agreement(didKeyName(PEER_ID0, "key-agreement"));

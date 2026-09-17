@@ -5,6 +5,7 @@
  * side signs, rotation decisions, intents and packages between them,
  * so a fold over messages can be set up in a few lines.
  */
+import { encodeLongForm } from "@estoc/did-peer";
 import type { Event } from "@estoc/event-store/v3";
 import { v7 as uuidv7 } from "uuid";
 
@@ -16,6 +17,7 @@ import {
   didKeyName,
   effectKey,
   inboundMessageId,
+  inputDocumentOf,
   methodPublicKey,
   mintDid,
   mintMediationDid,
@@ -27,6 +29,7 @@ import {
   type ChannelChecks,
   type Did,
   type DidId,
+  type DidKeys,
   type EventReference,
   type ExecutionId,
   type Keys,
@@ -40,7 +43,7 @@ import {
   type VaultEvent,
   type WireMessageId,
 } from "../../../src/v3/index.js";
-import { DID_ID, DID_ID2, DID_ID3, DIRECT, HASH, MEDIATED, MEDIATION, OTHER_SEED, ROUTE, Scene, type EventOptions, cidOf, createdDid, mediatedRoute, openKeys } from "./helpers.js";
+import { DID_ID, DID_ID2, DID_ID3, DIRECT, ENDPOINT, HASH, MEDIATED, MEDIATION, OTHER_SEED, ROUTE, Scene, type EventOptions, cidOf, createdDid, mediatedRoute, openKeys } from "./helpers.js";
 
 export const PEER_ID0 = "019b7000-0000-7000-8000-000000000b00" as DidId;
 export const PEER_ID1 = "019b7000-0000-7000-8000-000000000b01" as DidId;
@@ -56,6 +59,14 @@ export async function peerDid(keys: Keys, didId: DidId): Promise<Peer> {
   const resolution = peerResolution(minted.longFormDid);
   const [keyAgreement] = authorizedMethodIds(resolution.document, "keyAgreement");
   return { didId, did: minted.did, longFormDid: minted.longFormDid, resolution, publicKey: methodPublicKey(resolution.document, keyAgreement!) };
+}
+
+/** A peer signing with the key its seed derives but agreeing keys on the given one, whatever curve that is on. */
+export async function peerAgreeingOn(keys: Keys, didId: DidId, keyAgreement: PublicKey): Promise<Peer> {
+  const authentication = await keys.signing(didKeyName(didId, "authentication"));
+  const longFormDid = encodeLongForm(inputDocumentOf({ authentication, keyAgreement: { publicKey: keyAgreement } as DidKeys["keyAgreement"] }, ENDPOINT)) as Did;
+  const resolution = peerResolution(longFormDid);
+  return { didId, did: resolution.did, longFormDid, resolution, publicKey: keyAgreement };
 }
 
 export type Local = { didId: DidId; did: Did; longFormDid: Did };

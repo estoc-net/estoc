@@ -100,7 +100,9 @@ evidence (`fold/channels.ts`: `foldSources`, each `message.in` with the
 local entity its key belongs to, the channel its actual endpoints form
 and its standing — complete, incomplete while evidence is missing or
 the seed has not yet confirmed the local entity, conflict when evidence
-contradicts it or the entity is in conflict; `foldReceipts`, the receipt
+contradicts it, the entity is in conflict or the peer key selected is
+on another curve than the entity's own key-agreement key, a
+contradiction always reported over an absence; `foldReceipts`, the receipt
 ordinals' high-water mark and the messages one author's reused ordinal
 affects; `foldCarriers`, each source that brought a `from_prior`,
 its proof invalid on the carrier's own evidence, pending while the
