@@ -405,7 +405,9 @@ this projection.
 `plaintextHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON
 for the complete innermost DIDComm plaintext actually encrypted by one
 package or received in one observation. It includes `from`, `to`, `from_prior`
-and every present header.
+and every present header. An explicitly null optional standard header reads as
+absent before hashing; the sending side hashes the same normalized plaintext it
+encrypts.
 
 An outbound `messageId` has one fixed package. Its intent hash matches the
 intent; its plaintext hash preserves the exact prepared addressing and proof.

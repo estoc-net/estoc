@@ -111,7 +111,8 @@ authenticated unpack independently of `from_prior` verification. It MUST return
 the original string-valued `from_prior` unchanged and distinguish an unverified
 claim from verified proof metadata. Missing predecessor material, a malformed
 JWT or an invalid proof MUST NOT prevent otherwise valid authenticated receipt
-and its pickup ACK. A non-string header still fails ordinary wire syntax checks.
+and its pickup ACK. An absent or explicitly null `from_prior` header denotes no
+carried proof; any other non-string value fails ordinary wire syntax checks.
 
 The adapter MUST retain all envelope integrity, current-sender authorization,
 recipient and cross-layer addressing checks. Failure of those checks follows
