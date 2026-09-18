@@ -227,4 +227,18 @@ describe("unpack", () => {
     }
     await a.runtime.close();
   });
+
+  it("refuses attachment data that carries two content forms before anything of it is kept, and keeps a lone null json payload", async () => {
+    const a = await alice();
+    const key = agreementKeyOf(a.ring.secrets());
+    const wire = (data: string) => JSON.stringify({ ...plain(null, a.longFormDid), attachments: [{ id: "a", data: "@@" }] }).replace('"@@"', data);
+    for (const data of ['{"base64":"aGk","json":{"different":true}}', '{"base64":"aGk","json":null}', '{"base64":"aGk","links":["https://example.invalid/other"],"hash":"zQmYmVjaWFs"}', '{"base64":"YQ","base64":"Yg"}']) {
+      const opening = unpack(didcomm, await anonymously(wire(data), key.kid, key.jwk), resolverOf(), a.secrets);
+      await expect(opening).rejects.toThrow(/Malformed/);
+      await expect(opening).rejects.not.toThrow(EnvelopeRefused);
+    }
+    const opened = await unpack(didcomm, await anonymously(wire('{"json":null,"note":1,"note":2}'), key.kid, key.jwk), resolverOf(), a.secrets);
+    expect(opened.plaintext.attachments?.[0]?.data).toEqual({ json: null });
+    await a.runtime.close();
+  });
 });

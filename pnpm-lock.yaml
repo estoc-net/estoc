@@ -24,8 +24,8 @@ importers:
         specifier: workspace:^
         version: link:../packages/daemon
       '@estoc/didcomm':
-        specifier: ^0.4.1-estoc.2
-        version: 0.4.1-estoc.2
+        specifier: ^0.4.1-estoc.3
+        version: 0.4.1-estoc.3
       '@estoc/event-store':
         specifier: workspace:^
         version: link:../packages/event-store
@@ -112,11 +112,11 @@ importers:
         version: 2.0.32
     devDependencies:
       '@estoc/didcomm':
-        specifier: ^0.4.1-estoc.2
-        version: 0.4.1-estoc.2
+        specifier: ^0.4.1-estoc.3
+        version: 0.4.1-estoc.3
       '@estoc/didcomm-node':
-        specifier: ^0.4.1-estoc.2
-        version: 0.4.1-estoc.2
+        specifier: ^0.4.1-estoc.3
+        version: 0.4.1-estoc.3
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
@@ -1334,11 +1334,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@estoc/didcomm-node@0.4.1-estoc.2':
-    resolution: {integrity: sha512-5AKqiDxb1zi9ROpY6JHmmK+UFwsW66Ac8fzaOO/euSDUxI0/ruDpaRa6nQvLUkUvniV1+Q2LApqTLABZysw+8A==}
+  '@estoc/didcomm-node@0.4.1-estoc.3':
+    resolution: {integrity: sha512-EoAZHCUlAsjOcSTBK84o55WidCf7rOmjtt4yB9CUB7Brfa/4sWG1s5a5pfq+zX7yIKgjG120UlcbBTQeaQnQHw==}
 
-  '@estoc/didcomm@0.4.1-estoc.2':
-    resolution: {integrity: sha512-t1vYk6A7SiEA5U+HpCfREHArZeK9O93ezbRbcuLTu6gVUDRMHCKAKM5Kvi3Qr6HuDbeQ5GYA9Ap2knVY+vevcA==}
+  '@estoc/didcomm@0.4.1-estoc.3':
+    resolution: {integrity: sha512-uyf6f+XXt1kbWFrSx6VC9xzpTzBqVPOapKpkOU1vhp7fRGM9YmOTCEkDYTFntwuwUC3TBXOz7KfIElATXVb8iQ==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -4140,9 +4140,9 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@estoc/didcomm-node@0.4.1-estoc.2': {}
+  '@estoc/didcomm-node@0.4.1-estoc.3': {}
 
-  '@estoc/didcomm@0.4.1-estoc.2': {}
+  '@estoc/didcomm@0.4.1-estoc.3': {}
 
   '@img/colour@1.1.0': {}
 

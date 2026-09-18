@@ -55,15 +55,15 @@
     "web-did-resolver": "^2.0.32"
   },
   "peerDependencies": {
-    "@estoc/didcomm": "^0.4.1-estoc.2"
+    "@estoc/didcomm": "^0.4.1-estoc.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
     "didcomm-node": "^0.4.1",
     "typescript": "~5.8.0",
     "vitest": "^3.2.7",
-    "@estoc/didcomm": "^0.4.1-estoc.2",
-    "@estoc/didcomm-node": "^0.4.1-estoc.2",
+    "@estoc/didcomm": "^0.4.1-estoc.3",
+    "@estoc/didcomm-node": "^0.4.1-estoc.3",
     "jose": "^6.0.0"
   }
 }
