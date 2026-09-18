@@ -419,6 +419,15 @@ member is excluded. The JSON value inside a `json` carrier is unchanged,
 nested nulls included, and the ordinary attachment syntax rules still apply,
 including the required non-null `hash` of a `links` carrier.
 
+The single-carrier rule of that profile is checked on the decrypted `data`
+object as received, before it is projected onto a typed carrier and before
+any member is discarded: exactly one of `base64`, `json` and `links` is
+present, counted by presence, so `json: null` is a present carrier. A second
+recognized carrier is not unsupported metadata and is never dropped to make
+the attachment valid. A library that projects attachment data onto one
+carrier must therefore reject an ambiguous object itself, or hand the
+receiver enough of the original to reject it before acceptance.
+
 The sender hashes the normalized plaintext it encrypts; the receiver
 normalizes the accepted plaintext the same way before hashing. A hash helper
 that hashes its input unchanged requires that normalization to have happened
