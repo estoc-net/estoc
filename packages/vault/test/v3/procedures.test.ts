@@ -220,7 +220,7 @@ describe("consuming invitations", () => {
 });
 
 describe("unfinished work", () => {
-  it("lists the outbounds still to prepare or dispatch, the replies established inputs are owed under the built-in address rule, and the proofs waiting for issuer material", async () => {
+  it("lists the outbounds still to prepare or dispatch, the reply candidates of established inputs under the built-in address rule, and the proofs waiting for issuer material", async () => {
     const { scene, keys, peerKeys, a0, a1, b0, b2, b3 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
     const queued = intent(scene, a0, b0);
@@ -324,7 +324,7 @@ describe("unfinished work", () => {
     expect(responseChannel(vault, vault.inbound.ofMessage(asked.data.messageId)!)).toEqual({ status: "none", because: "the channel is denied" });
   });
 
-  it("lists the notification a verified decision is owed while its source stays eligible, reuses one already recorded, and reports several as a conflict", async () => {
+  it("lists the notification a verified decision permits while its source stays eligible, reuses one already recorded, and reports several as a conflict", async () => {
     const { scene, keys, peerKeys, a0, a1, b0, b1 } = await vaults();
     const source = proofFreeReceipt(scene, a0, b0, 1);
     const decision = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source });
