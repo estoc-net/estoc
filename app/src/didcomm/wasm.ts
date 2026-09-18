@@ -1,5 +1,5 @@
 /**
- * The `didcomm` package for the browser via Vite.
+ * The `@estoc/didcomm` package for the browser via Vite.
  *
  * The package's own index.js is webpack-shaped: it imports the .wasm expecting
  * the bundler to instantiate it with the glue module's imports wired up. Vite
@@ -10,8 +10,8 @@
  *
  * `initDidcomm()` must resolve before anything from this module is called.
  */
-import wasmUrl from "didcomm/index_bg.wasm?url";
-import * as glue from "didcomm/index_bg.js";
+import wasmUrl from "@estoc/didcomm/index_bg.wasm?url";
+import * as glue from "@estoc/didcomm/index_bg.js";
 
 let ready: Promise<void> | null = null;
 
@@ -23,8 +23,9 @@ export function initDidcomm(): Promise<void> {
     (glue as { __wbg_set_wasm(exports: unknown): void }).__wbg_set_wasm(
       instance.exports
     );
+    (instance.exports as { __wbindgen_start(): void }).__wbindgen_start();
   })();
   return ready;
 }
 
-export * from "didcomm/index_bg.js";
+export * from "@estoc/didcomm/index_bg.js";

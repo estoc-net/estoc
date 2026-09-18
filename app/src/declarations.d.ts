@@ -1,11 +1,11 @@
 /// <reference types="vite-plugin-pwa/client" />
 
-declare module "didcomm/index_bg.js" {
-  export * from "didcomm";
+declare module "@estoc/didcomm/index_bg.js" {
+  export * from "@estoc/didcomm";
   export function __wbg_set_wasm(exports: unknown): void;
 }
 
-declare module "didcomm/index_bg.wasm?url" {
+declare module "@estoc/didcomm/index_bg.wasm?url" {
   const url: string;
   export default url;
 }

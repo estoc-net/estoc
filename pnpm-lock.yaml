@@ -23,6 +23,9 @@ importers:
       '@estoc/daemon':
         specifier: workspace:^
         version: link:../packages/daemon
+      '@estoc/didcomm':
+        specifier: ^0.4.1-estoc.1
+        version: 0.4.1-estoc.1
       '@estoc/event-store':
         specifier: workspace:^
         version: link:../packages/event-store
@@ -41,9 +44,6 @@ importers:
       '@vitejs/plugin-vue':
         specifier: ^5.2.0
         version: 5.2.4(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(vue@3.5.41(typescript@5.8.3))
-      didcomm:
-        specifier: ^0.4.1
-        version: 0.4.1
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
@@ -2075,9 +2075,6 @@ packages:
 
   didcomm-node@0.4.1:
     resolution: {integrity: sha512-5vR2T6AyFhw20LI3Hu7Xps1nYimpooEIbefweIAsZ964p8sSnWW07qulvnRwd1fMihtUaAK+DlwGkR4jZIf6Mg==}
-
-  didcomm@0.4.1:
-    resolution: {integrity: sha512-fcGSfLL5ri18vbbjRexHWVk2RAxZ/eBlyKeLCzS/3k5RdogqJbnUEcNsq64at1nA1u16ENa1bsZodGeRoq84ZA==}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -4869,8 +4866,6 @@ snapshots:
   did-resolver@4.1.0: {}
 
   didcomm-node@0.4.1: {}
-
-  didcomm@0.4.1: {}
 
   dunder-proto@1.0.1:
     dependencies:
