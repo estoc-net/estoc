@@ -2087,6 +2087,10 @@ receipt order, authenticated intent agreement and its concrete intents/results.
 The deterministic execution ID comes from the channel, sender and
 wire ID under [delivery](distributed-delivery.md#execution-id-and-immutable-transcript).
 An anonymous or mediator-control observation has no application execution.
+Mediator-control input is traffic authenticated and correlated within a
+mediation, pickup or routing transport session, independently of application
+channel evidence. A protocol type string alone does not establish that role
+for an observation received on an ordinary communication channel.
 
 Each consumer derives pending/refused/eligible status from its exact evidence
 and operation rules. At least one complete source witness and no conflicting
