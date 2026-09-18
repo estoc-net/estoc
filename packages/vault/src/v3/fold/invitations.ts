@@ -61,10 +61,12 @@ export interface Candidate {
 /**
  * Available while no consumer is recorded and nothing stands in the
  * way of recording one; consumed once exactly one consumer is; pending
- * while a record that could establish a consumer is incomplete;
- * unavailable while the disclosed DID cannot acquire a consumer;
+ * while a record that could establish a consumer is incomplete, or a
+ * candidate ahead of every eligible one waits for evidence;
+ * unavailable while the disclosed DID's lifecycle refuses a consumer;
  * conflict when the records disagree, the invitation's ID is disclosed
- * twice, or the walk reaches a receipt-integrity conflict.
+ * twice, or the walk reaches a receipt-integrity conflict before an
+ * eligible receipt.
  */
 export type InvitationStatus = { status: "available" } | { status: "consumed"; consumer: Did } | { status: "pending"; because: string } | { status: "unavailable"; because: string } | { status: "conflict"; because: string };
 
@@ -176,11 +178,13 @@ function consumerOf(consumptions: readonly Consumption[]): Did | null {
 }
 
 /**
- * What the disclosed DID's lifecycle says about acquiring a consumer:
- * ended for good — no consistent entity, retired, or bound to a route
- * that is retired, misconfigured or on a terminal mediation — or
- * waiting on something that may recover: the route's configuration,
- * the mediation's grant, the seed's check of the keys.
+ * What the disclosed DID's lifecycle says about acquiring a consumer
+ * now: ended — no new consumer while the DID is retired or in
+ * conflict, its route retired, misconfigured or on a terminal
+ * mediation, or its creation not yet here — or waiting on something
+ * that may recover: the route's configuration, the mediation's grant,
+ * the seed's check of the keys. Only retirement and conflict are
+ * final; a creation still to arrive reopens the DID.
  */
 type Lifecycle = { readonly ended: string | null; readonly waiting: string | null };
 

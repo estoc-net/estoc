@@ -150,13 +150,17 @@ its disclosure a one-use invitation, its source a proof-free complete
 witness at the disclosed DID under the invitation's `pthid` — and only
 a complete record names the consumer, the source's canonical peer DID;
 the invitation is `available`, `consumed`, `pending` while a record
-waits, `unavailable` on a retired or unknown DID, or in `conflict`
-when complete records disagree, the ID is disclosed twice or a
-candidate is caught in a receipt-integrity conflict; the `candidates`
-are the unerased proof-free followers in first-receipt order, each
-`eligible`, `deferred`, `refused` by current denial, supersession or
-retirement, `invalid` or in `integrity-conflict`, for the runtime to
-walk when it records a consumption, the fold recording none), the
+or a candidate ahead of every eligible one waits, `unavailable` while
+the disclosed DID is retired, in conflict or not yet created here, or
+its route is retired, misconfigured or on a terminal mediation, or in
+`conflict` when complete records disagree, any OOB disclosure repeats
+the ID, or the walk reaches a candidate caught in a receipt-integrity
+conflict before an eligible one; the `candidates` are the unerased
+proof-free followers in first-receipt order, each `eligible`,
+`deferred`, `refused` by the DID's lifecycle or by the channel's
+current denial, continuity conflict or supersession, `invalid` or in
+`integrity-conflict`, for the runtime to walk when it records a
+consumption, the fold recording none), the
 contacts (`fold/contacts.ts`: `foldContacts` is a table of latest-wins
 decisions under each contact ID — tombstone, petname, flags, local-DID
 preference, the whole channel selection replaced or cleared, merge
