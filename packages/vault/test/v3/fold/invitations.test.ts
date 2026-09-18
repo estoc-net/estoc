@@ -282,7 +282,7 @@ describe("the candidates", () => {
   });
 
   it("are invalid on an input whose authenticated intents disagree, under whichever thread or proof the disagreement came, and eligible beside siblings that cannot raise one", async () => {
-    const { scene, keys, a0, b0, b1, b2, b3 } = await vaults();
+    const { scene, keys, peerKeys, a0, b0, b1, b2, b3 } = await vaults();
     const disclosure = invitation(scene, a0);
     const oobId = disclosure.data.oobId!;
     const contradicted = uuidv7();
@@ -290,7 +290,7 @@ describe("the candidates", () => {
     const disagreeing = follower(scene, a0, b0, oobId, 21, { wire: contradicted, overrides: { intentHash: OTHER_HASH } });
     const elsewhere = uuidv7();
     const followed = follower(scene, a0, b2, oobId, 30, { wire: elsewhere });
-    receipt(scene, { local: a0, peer: b2, resolution: resolved(scene, a0.didId, b2), ordinal: 31, wire: elsewhere, overrides: { intentHash: OTHER_HASH, pthid: uuidv7() } });
+    receipt(scene, { local: a0, peer: b2, resolution: resolved(scene, a0.didId, b2), ordinal: 31, wire: elsewhere, fromPrior: await proof(peerKeys, b0, b2), overrides: { intentHash: OTHER_HASH, pthid: uuidv7() } });
     const independent = follower(scene, a0, b1, oobId, 40);
     const beside = uuidv7();
     const besideSiblings = follower(scene, a0, b3, oobId, 50, { wire: beside });
@@ -298,6 +298,10 @@ describe("the candidates", () => {
     receipt(scene, { local: a0, peer: b3, resolution: resolved(scene, a0.didId, b3), ordinal: 52, wire: beside, fromPrior: "not a JWT", overrides: { intentHash: OTHER_HASH, pthid: oobId } });
     const vault = await fold(scene, keys);
     expect(vault.inbound.ofSource(agreed.eventId)!.status.status).toBe("conflict");
+    expect(vault.inbound.ofSource(followed.eventId)!.members.map(({ positive, witness }) => [positive, witness.status])).toEqual([
+      [true, "complete"],
+      [true, "complete"],
+    ]);
     expect(vault.inbound.ofSource(followed.eventId)!.status.status).toBe("conflict");
     expect(vault.inbound.ofSource(besideSiblings.eventId)!.status.status).toBe("complete");
     expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "available" });
