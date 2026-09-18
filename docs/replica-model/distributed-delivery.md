@@ -403,11 +403,18 @@ this projection.
 ### 5.3 Exact plaintext hash
 
 `plaintextHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON
-for the complete innermost DIDComm plaintext actually encrypted by one
-package or received in one observation. It includes `from`, `to`, `from_prior`
-and every present header. An explicitly null optional standard header reads as
-absent before hashing; the sending side hashes the same normalized plaintext it
-encrypts.
+for the normalized innermost DIDComm plaintext of one package or one
+observation. Normalization omits a top-level member whose value is explicitly
+null when its name is one of `from`, `to`, `thid`, `pthid`, `created_time`,
+`expires_time`, `from_prior` or `attachments`; that set is closed and does not
+grow with the headers a library recognizes. Every other present member stays
+in the hash input, including `please_ack: null`, `ack: null`, null values in
+additional headers and null values inside `body` and `attachments`.
+
+The sender hashes the normalized plaintext it encrypts; the receiver
+normalizes the accepted plaintext the same way before hashing. A hash helper
+that hashes its input unchanged requires that normalization to have happened
+before the call.
 
 An outbound `messageId` has one fixed package. Its intent hash matches the
 intent; its plaintext hash preserves the exact prepared addressing and proof.
