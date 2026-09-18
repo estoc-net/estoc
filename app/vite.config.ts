@@ -42,6 +42,6 @@ export default defineConfig({
   // itself and imports the glue module directly; keeping the package out of
   // prebundling makes sure that glue module is the single instance the shim
   // wires up.
-  optimizeDeps: { exclude: ["didcomm"] },
+  optimizeDeps: { exclude: ["@estoc/didcomm"] },
   build: { target: "es2022" },
 });

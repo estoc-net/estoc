@@ -31,11 +31,11 @@ export const PLAIN_TYP = "application/didcomm-plain+json";
 export const ENCRYPTED_MIME = "application/didcomm-encrypted+json";
 
 /*
- * The binding keeps every `Message` and `FromPrior` in WebAssembly memory
- * that no garbage collection reclaims: each lives only as long as the one
- * call made with it. It is freed only after that call settles, even when
- * its caller has already stopped waiting at a deadline of its own, since
- * the call may still be using it.
+ * Every `Message` and `FromPrior` lives in WebAssembly memory for the one
+ * call made with it and is freed explicitly once that call settles, so the
+ * release does not wait for a finalizer. It is freed only after the call
+ * settles, even when its caller has already stopped waiting at a deadline
+ * of its own, since the call may still be using it.
  */
 
 /** `pack_encrypted` over a `Message` made for this pack alone. */
