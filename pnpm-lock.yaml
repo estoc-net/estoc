@@ -120,12 +120,12 @@ importers:
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
-      didcomm:
-        specifier: ^0.4.1
-        version: 0.4.1
       didcomm-node:
         specifier: ^0.4.1
         version: 0.4.1
+      jose:
+        specifier: ^6.0.0
+        version: 6.2.9
       typescript:
         specifier: ~5.8.0
         version: 5.8.3

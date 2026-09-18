@@ -29,13 +29,22 @@
   `@estoc/didcomm-node`, whose `unpack` can leave a `from_prior` header
   unverified. `unpack` under `@estoc/agent-core/v3` opens an inbound
   envelope that way: the binding checks the envelope's integrity, the
-  recipient key and the sealer's authorization, and hands back the
-  plaintext, the sealer as `sender` (null for an anonymous envelope,
-  signed or not) and the proof as the string it came as, unresolved and
-  unverified. An envelope that is not encrypted, or a proof that is not
-  a string, is `EnvelopeRefused`; a binding that verified the proof on
-  its own is refused as the wrong build. The mediator link is unchanged
-  and still verifies a proof at unpack.
+  recipient key, the sealer's authorization and the wire's syntax (a
+  proof that is not a string is malformed to it, an explicit null reads
+  as absent); `unpack` then ties the layers together, requiring the
+  plaintext's `from` to name the sealer and a signature inside to be the
+  sealer's, and hands back the plaintext, the sealer as `sender` (null
+  for an anonymous envelope, signed or not) and the proof as the string
+  it came as, unresolved and unverified. An envelope that is not
+  encrypted, whose `from` or signer is not the sealer, or whose
+  authenticated layer is wrapped in an anonymous one (the binding
+  reports only the outer layer's recipients, so the inner one could have
+  been sealed to someone else) is `EnvelopeRefused`; a binding that
+  verified the proof on its own is refused as the wrong build. The
+  upstream `didcomm` is no longer a peer dependency. The mediator link
+  is unchanged and still verifies a proof at unpack.
+- Base64url in the object-share wire format and the envelope header
+  reader comes from `multiformats`, not hand-rolled alphabet swaps.
 - **Realigned to the channel model** with `@estoc/vault/v3`: `send`,
   `prepare`, `submit`, the `Outbox`, the acceptance ledger and the
   receive gate, receiver and resolution accounting were built on

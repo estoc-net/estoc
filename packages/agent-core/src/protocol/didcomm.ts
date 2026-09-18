@@ -71,9 +71,10 @@ export interface Unpacked {
   plaintext: IMessage;
   /**
    * The key that sealed the envelope as authenticated encryption, and its
-   * DID; null when the envelope was anonymous, signed or not. A signature
-   * proves who wrote the plaintext, not who sent this envelope: anyone
-   * holding a signed plaintext can seal it to us again.
+   * DID, which the plaintext's `from` names byte for byte; null when the
+   * envelope was anonymous, signed or not. A signature proves who wrote
+   * the plaintext, not who sent this envelope: anyone holding a signed
+   * plaintext can seal it to us again.
    */
   sender: { did: string; kid: string } | null;
   /** the `from_prior` header as it came off the wire, unverified; null when the plaintext carries none */
@@ -83,12 +84,22 @@ export interface Unpacked {
 
 /**
  * `Message.unpack` for an inbound message, with the `from_prior` header
- * left unverified: the envelope's integrity, the recipient key and the
- * sender's authorization are checked by the binding, the rotation proof
- * is kept as the string it came as. A proof whose issuer cannot be
- * resolved, or that does not verify, must not stop the message from
- * being received and acknowledged; what the proof is worth is decided
- * once the message is recorded, from the recorded evidence.
+ * left unverified. The binding checks the envelope's integrity, that a
+ * key of ours opened it, that the sealer's key is one its document
+ * authorizes and that the wire is well formed (a `from_prior` that is
+ * not a string is malformed to it; an explicit null reads as absent,
+ * as the vault reads every optional header). What is checked here is
+ * what ties the layers together: the plaintext's `from` is the sealer's
+ * DID, a signature inside the sealed envelope is the sealer's too, and
+ * the sealed layer is the outermost one. The binding reports only the
+ * outermost layer's recipients, so an authenticated layer wrapped in an
+ * anonymous one could have been sealed to someone else and re-wrapped
+ * to us; nothing we send is sender-protected, and such an envelope is
+ * refused until the binding reports the recipients of every layer.
+ * The rotation proof is kept as the string it came as: a proof whose
+ * issuer cannot be resolved, or that does not verify, must not stop the
+ * message from being received and acknowledged; what the proof is worth
+ * is decided once the message is recorded, from the recorded evidence.
  */
 export async function unpack(didcomm: DidcommApi, packed: string, resolver: DIDResolver, secrets: SecretsResolver): Promise<Unpacked> {
   const [plaintext, metadata] = await unpackMessage(didcomm, packed, resolver, secrets, { verify_from_prior: false });
@@ -96,15 +107,14 @@ export async function unpack(didcomm: DidcommApi, packed: string, resolver: DIDR
     throw new Error("the didcomm binding verified from_prior on its own: it is not a build that can leave it unverified");
   }
   if (!metadata.encrypted) throw new EnvelopeRefused("the envelope is not encrypted");
-  const fromPrior = plaintext.from_prior ?? null;
-  if (fromPrior !== null && typeof fromPrior !== "string") throw new EnvelopeRefused("from_prior is not a string");
   const kid = metadata.encrypted_from_kid;
-  return {
-    plaintext,
-    sender: typeof kid === "string" ? { did: didOf(kid) as string, kid } : null,
-    fromPrior,
-    metadata,
-  };
+  const sender = typeof kid === "string" ? { did: didOf(kid) as string, kid } : null;
+  if (sender !== null) {
+    if (metadata.anonymous_sender) throw new EnvelopeRefused("the authenticated layer is wrapped in an anonymous one: its own recipients are not reported");
+    if (plaintext.from !== sender.did) throw new EnvelopeRefused(`from ${plaintext.from === undefined ? "is missing" : "does not name the sealer"}`);
+    if (metadata.non_repudiation && didOf(metadata.sign_from) !== sender.did) throw new EnvelopeRefused("the plaintext is signed by another than the sealer");
+  }
+  return { plaintext, sender, fromPrior: plaintext.from_prior ?? null, metadata };
 }
 
 /** `pack` over a `FromPrior` made for this signature alone. */

@@ -231,8 +231,11 @@ a `from_prior` header unverified, so that a rotation proof whose issuer is
 out of reach does not stop the message it rides from being received. The v3
 agent opens inbound envelopes that way and has the vault judge the proof
 from the evidence it records; the upstream builds cannot open them so, and
-the v3 `unpack` refuses one. The mediator link still verifies the proof at
-unpack.
+the v3 `unpack` refuses one. `unpack` also holds the layers to one sender:
+the plaintext's `from` and any signature inside must be the sealer's, and
+an authenticated layer wrapped in an anonymous one is refused, since the
+binding reports only the outer layer's recipients. The mediator link still
+verifies the proof at unpack.
 
 `@estoc/didcomm` is a peer dependency for its types only; install the build
 you inject.
