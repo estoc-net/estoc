@@ -183,7 +183,32 @@ listed and counted for nothing, those with no input to join are
 has the agreed intent's `kind` — application, pure ACK in its exact
 shape, any other Empty message, ping-response or problem report — its
 `firstReceiptKey` for freezing ACK targets in order, and whether an
-erasure names it), the whole fold
+erasure names it), the outbound
+messages (`fold/outbound.ts`: `foldOutbound` reads, for each message
+ID, the intent its `message.out` records must agree on and the
+channel its sender entity and canonical recipient fix; every distinct
+preparation, each checked against the intent and its own resolution
+evidence, one being the `package` and two a conflict with no winner;
+each `delivery.submitted`, complete when it names a complete package,
+so that `submitted` is a fact nothing imported later withdraws; each
+`delivery.failed`, an expiry counting only against an intent that
+expires; the `ackWitnesses`, the complete witnesses whose `ack` names
+the message in its channel or over a verified role-preserving path,
+the recorded `delivery.acknowledged` checked against the carrier each
+names, and `late` by the earliest witness against the expiry; an
+intent derived from an input has its `effect` checked against the
+input's execution, the source's witness, the output's channel and the
+built-in operation's shape, a notification against its decision; the
+`outcome` in the order conflict, submitted, terminal, prepared,
+queued, and the `work` left — a package to prepare, or one to
+dispatch, the runtime alone deciding whether to make the call; the
+messages whose envelope contribution is `released`, submitted or
+terminated under a consistent intent, which the held roots drop;
+`notificationFor` a decision, one intent selecting and several
+conflicting; `ackTargets` a carrier's request names, established
+inputs of its channel or a verified predecessor in first-receipt
+order; and `inReplyTo`, the outbound a ping-response or problem report
+answers), the whole fold
 (`fold/vault.ts`: `foldVault` runs every fold over one set, each fed
 the ones it reads, and adds the retention edge by edge and the roots
 it holds; `checkVault` computes every verdict beside it in one motion,
@@ -197,8 +222,8 @@ message over every root its events and packages still name, in one
 commit, and `closeErasures` appends the equivalent erases a later
 observation or package made an erased message owed, `eraseDrafts` /
 `erasureClosure` being the decisions). The channel model's remaining
-folds — outbound delivery, the views and the procedures over them —
-are being rebuilt on this base.
+folds — the views and the procedures over them — are being rebuilt on
+this base.
 Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned
