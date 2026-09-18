@@ -42,7 +42,11 @@
   been sealed to someone else) is `EnvelopeRefused`; a binding that
   verified the proof on its own is refused as the wrong build. The
   upstream `didcomm` is no longer a peer dependency. The mediator link
-  is unchanged and still verifies a proof at unpack.
+  is unchanged and still verifies a proof at unpack. The build is
+  `0.4.1-estoc.2`, which also carries the whole DIDComm attachment
+  model: an inline attachment's `hash` and an object-valued `jws`
+  survive pack and unpack, where upstream dropped the one and rejected
+  the other as malformed.
 - Base64url in the object-share wire format and the envelope header
   reader comes from `multiformats`, not hand-rolled alphabet swaps.
 - **Realigned to the channel model** with `@estoc/vault/v3`: `send`,

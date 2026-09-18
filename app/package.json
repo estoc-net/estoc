@@ -43,7 +43,7 @@
     "@estoc/post": "workspace:^",
     "@estoc/vault": "workspace:^",
     "@vitejs/plugin-vue": "^5.2.0",
-    "@estoc/didcomm": "^0.4.1-estoc.1",
+    "@estoc/didcomm": "^0.4.1-estoc.2",
     "fflate": "^0.8.2",
     "playwright-core": "^1.62.1",
     "qrcode-generator": "^2.0.4",

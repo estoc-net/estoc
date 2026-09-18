@@ -206,4 +206,25 @@ describe("unpack", () => {
     await expect(unpack(upstream, packed, resolverOf(bob.predecessor), a.secrets)).rejects.toThrow(/not a build/);
     await a.runtime.close();
   });
+
+  it("carries an inline attachment hash and an object jws through an authenticated envelope", async () => {
+    const a = await alice();
+    const bob = await webIdentity(BOB, 77);
+    const photo = { id: "photo", data: { base64: "aGk", hash: "zQmYmVjaWFs", jws: { protected: "e30", signature: "c2ln", header: { kid: `${BOB}#auth` } } } };
+    const card = { id: "card", data: { json: { note: null }, hash: "zQmYmVjaWFs" } };
+    const attachments: NonNullable<IMessage["attachments"]> = [photo, card];
+    const message = plain(BOB, a.longFormDid, { attachments });
+    const [sealed] = await new didcomm.Message(message).pack_encrypted(a.longFormDid, BOB, null, resolverOf(bob), secretsResolverFor(bob.secrets), { forward: false });
+    const opened = await unpack(didcomm, sealed, resolverOf(bob), a.secrets);
+    expect(opened.sender?.did).toBe(BOB);
+    expect(opened.plaintext.attachments).toEqual(attachments);
+    expect(() => new UpstreamMessage(message)).toThrow(/Malformed/);
+    const upstream = new UpstreamMessage(plain(BOB, a.longFormDid, { attachments: [card] }));
+    try {
+      expect(upstream.as_value().attachments?.[0]?.data).toEqual({ json: { note: null } });
+    } finally {
+      upstream.free();
+    }
+    await a.runtime.close();
+  });
 });
