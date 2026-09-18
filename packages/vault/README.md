@@ -88,7 +88,8 @@ retirement, faults and liveness, the key-name and spelling reverse maps,
 the desired mediator recipients and each entity's receipt eligibility;
 `requiredReceivingSet`; `heldRoots` / `foldErasures` / `readState`,
 what collection must keep — every root an accepted event retains, a
-message's until its erasure releases it — and how a root reads, erased
+message's until its erasure releases it, a prepared envelope until
+its message is submitted or terminated — and how a root reads, erased
 before absent. Every fold is a pure function of the event set, checked
 by shuffling; what needs the seed, whether an entity's document carries
 the keys its ID derives, is `verifyDidKeys` / `verifyMediationKeys`
@@ -188,27 +189,33 @@ messages (`fold/outbound.ts`: `foldOutbound` reads, for each message
 ID, the intent its `message.out` records must agree on and the
 channel its sender entity and canonical recipient fix; every distinct
 preparation, each checked against the intent and its own resolution
-evidence, one being the `package` and two a conflict with no winner;
-each `delivery.submitted`, complete when it names a complete package,
-so that `submitted` is a fact nothing imported later withdraws; each
-`delivery.failed`, an expiry counting only against an intent that
-expires; the `ackWitnesses`, the complete witnesses whose `ack` names
-the message in its channel or over a verified role-preserving path,
-the recorded `delivery.acknowledged` checked against the carrier each
-names, and `late` by the earliest witness against the expiry; an
-intent derived from an input has its `effect` checked against the
-input's execution, the source's witness, the output's channel and the
-built-in operation's shape, a notification against its decision; the
-`outcome` in the order conflict, submitted, terminal, prepared,
-queued, and the `work` left — a package to prepare, or one to
-dispatch, the runtime alone deciding whether to make the call; the
-messages whose envelope contribution is `released`, submitted or
-terminated under a consistent intent, which the held roots drop;
+evidence — the peer key it selected on the curve the sender's own
+key-agreement key is on — one being the `package` and two a conflict
+with no winner; each `delivery.submitted`, complete when a complete
+preparation carries its package ID, so that under a consistent intent
+`submitted` is a fact no unrelated, competing or later evidence
+withdraws; each `delivery.failed`, an expiry counting only against an
+intent that expires; the `ackWitnesses`, once a complete package is
+here, the complete witnesses whose `ack` names the message in its
+channel or over a verified role-preserving path, the recorded
+`delivery.acknowledged` checked against the carrier each names, and
+`late` by the earliest witness against the expiry; an intent derived
+from an input has its `effect` checked against the input's execution,
+the source's witness, the output's channel and the built-in
+operation's shape — a pure ACK's frozen targets each requested by the
+source and established for it — and a notification against its
+decision's continuity and selection; the `outcome` in the order
+conflict, submitted, terminal, prepared, queued, and the `work` left —
+a package to prepare, when no submission names one still to arrive,
+or one to dispatch, neither through blocked or conflicted continuity,
+the runtime alone deciding whether to make the call; the messages
+whose envelope contribution is `released`, submitted or terminated
+under a consistent intent, which the held roots drop;
 `notificationFor` a decision, one intent selecting and several
 conflicting; `ackTargets` a carrier's request names, established
 inputs of its channel or a verified predecessor in first-receipt
-order; and `inReplyTo`, the outbound a ping-response or problem report
-answers), the whole fold
+order, the carrier's own by its exact source; and `inReplyTo`, the
+outbound a ping-response or problem report answers), the whole fold
 (`fold/vault.ts`: `foldVault` runs every fold over one set, each fed
 the ones it reads, and adds the retention edge by edge and the roots
 it holds; `checkVault` computes every verdict beside it in one motion,

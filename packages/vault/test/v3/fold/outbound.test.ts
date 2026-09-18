@@ -1,3 +1,5 @@
+import { p256 } from "@noble/curves/nist";
+import { base64urlnopad } from "@scure/base";
 import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +11,7 @@ import {
   PING_TYPE,
   PROBLEM_REPORT_TYPE,
   ROTATION_NOTIFICATION_EFFECT,
+  canonicalPublicKey,
   didKeyName,
   executionId,
   foldVault,
@@ -28,11 +31,16 @@ import {
   type WireMessageId,
 } from "../../../src/v3/index.js";
 import { AUTHOR2, Scene, cidOf, expectOrderFree } from "./helpers.js";
-import { PURE_ACK, automatic, blocked, intent, noObjects, packageOf, proof, receipt, ref, resolved, rotation, vaults, type Local, type Peer } from "./scene.js";
+import { PEER_ID3, PURE_ACK, automatic, blocked, intent, noObjects, packageOf, peerAgreeingOn, proof, receipt, ref, resolved, rotation, vaults, type Local, type Peer } from "./scene.js";
 
 const fold = (scene: Scene, keys: Keys | null) => foldVaultChecked(scene.set(), keys, noObjects);
 
 const OTHER_HASH = "Amqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA" as MessageHash;
+
+const P256_KEY = (() => {
+  const point = p256.getPublicKey(new Uint8Array(32).fill(1), false);
+  return canonicalPublicKey({ kty: "EC", crv: "P-256", x: base64urlnopad.encode(point.subarray(1, 33)), y: base64urlnopad.encode(point.subarray(33)) });
+})();
 
 /** The outbound fold as comparable data: every outbound by its verdicts, with events by ID. */
 function picture(vault: VaultFold) {
@@ -204,21 +212,48 @@ describe("an outbound message", () => {
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
-  it("keeps a complete submission whatever is imported later, and keeps the envelopes released", async () => {
+  it("agrees no keys across curves: a package whose resolution selected a peer key on another curve than the sender's contradicts the intent, and its submission releases nothing", async () => {
+    const { scene, keys, peerKeys, a0, b0 } = await vaults();
+    const nist = await peerAgreeingOn(peerKeys, PEER_ID3, P256_KEY);
+    const out = intent(scene, a0, nist);
+    const pkg = packageOf(scene, out, { sender: a0.didId, recipient: nist, resolution: resolved(scene, a0.didId, nist) });
+    submitted(scene, out, pkg);
+    const agreed = intent(scene, a0, b0);
+    const agreeing = packageOf(scene, agreed, { sender: a0.didId, recipient: b0, resolution: resolved(scene, a0.didId, b0) });
+    submitted(scene, agreed, agreeing);
+    const because = "the peer key is P-256 and the sender's key-agreement key X25519: no key is agreed across curves";
+    for (const vault of [await fold(scene, keys), await fold(scene, null)]) {
+      expect(outboundOf(vault, out).packages[0]!.status).toEqual({ status: "conflict", because });
+      expect(outboundOf(vault, out)).toMatchObject({ submitted: false, outcome: { status: "conflict", because: `the package contradicts the intent: ${because}` }, work: { kind: "none" }, released: false });
+      expect(vault.held.has(pkg.data.envelopeCid)).toBe(true);
+      expect(outboundOf(vault, agreed)).toMatchObject({ submitted: true, outcome: { status: "submitted" }, released: true });
+      expect(vault.held.has(agreeing.data.envelopeCid)).toBe(false);
+    }
+    expectSameOverEveryOrder(scene, (await fold(scene, keys)).checks);
+  });
+
+  it("keeps a complete submission under a consistent intent whatever competing preparation or disagreeing intent is imported later, and keeps the envelopes released", async () => {
     const { scene, keys, a0, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
     const out = intent(scene, a0, b0);
     const pkg = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
     submitted(scene, out, pkg);
+    const sameId = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root, packageId: pkg.data.packageId, overrides: { peerResolutionEventId: uuidv7() as EventId as never } }, { at: "2020-01-01T00:00:00.000Z" });
+    let vault = await fold(scene, keys);
+    expect(outboundOf(vault, out).packages.map((p) => [p.event.eventId, p.status])).toEqual([
+      [sameId.eventId, { status: "pending", because: "the resolution it names is not here" }],
+      [pkg.eventId, { status: "complete" }],
+    ]);
+    expect(outboundOf(vault, out)).toMatchObject({ submissions: [{ status: { status: "complete" } }], submitted: true, outcome: { status: "conflict", because: "2 packages are prepared for one message" }, work: { kind: "none" }, released: true });
+    expect(vault.held.has(pkg.data.envelopeCid)).toBe(false);
+    expectSameOverEveryOrder(scene, vault.checks);
+
     const competing = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
     scene.add("message.out", { ...out.data, intentHash: OTHER_HASH });
-    const vault = await fold(scene, keys);
+    vault = await fold(scene, keys);
     const outbound = outboundOf(vault, out);
     expect(outbound.intent).toEqual({ status: "conflict", because: "the intents recorded under one message ID disagree" });
-    expect(outbound.packages.map((p) => p.status)).toEqual([
-      { status: "pending", because: "the intent is not consistent" },
-      { status: "pending", because: "the intent is not consistent" },
-    ]);
+    expect(outbound.packages.map((p) => p.status)).toEqual(new Array(3).fill({ status: "pending", because: "the intent is not consistent" }));
     expect(outbound).toMatchObject({ submitted: false, outcome: { status: "conflict" }, released: false });
     expect(vault.held.has(pkg.data.envelopeCid)).toBe(true);
 
@@ -226,7 +261,7 @@ describe("an outbound message", () => {
     agreed.events.push(...scene.events.filter((event) => event.type !== "message.out" || event.eventId === out.eventId));
     const settled = foldVault(agreed.set(), vault.checks);
     const complete = outboundOf(settled, out);
-    expect(complete).toMatchObject({ submitted: true, package: null, outcome: { status: "conflict", because: "2 packages are prepared for one message" }, work: { kind: "none" }, released: true });
+    expect(complete).toMatchObject({ submitted: true, package: null, outcome: { status: "conflict", because: "3 packages are prepared for one message" }, work: { kind: "none" }, released: true });
     expect(settled.held.has(pkg.data.envelopeCid)).toBe(false);
     expect(settled.held.has(competing.data.envelopeCid)).toBe(false);
     expectOrderFree(agreed.events, (set) => picture(foldVault(set, vault.checks)));
@@ -296,12 +331,40 @@ describe("an outbound message", () => {
     expectSameOverEveryOrder(scene, vault.checks);
 
     const lateOut = intent(scene, a0, b0, { expiresTime: start });
+    packageOf(scene, lateOut, { sender: a0.didId, recipient: b0, resolution: root });
     receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 5, overrides: { ack: [lateOut.data.messageId] } });
     const noExpiry = intent(scene, a0, b0);
+    packageOf(scene, noExpiry, { sender: a0.didId, recipient: b0, resolution: root });
     receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 6, overrides: { ack: [noExpiry.data.messageId] } });
     vault = await fold(scene, keys);
     expect(outboundOf(vault, lateOut)).toMatchObject({ acknowledged: true, late: true });
     expect(outboundOf(vault, noExpiry)).toMatchObject({ acknowledged: true, late: false });
+  });
+
+  it("attributes a receipt to no outbound whose package is not here: the acknowledgement waits for the package, and conflicts with one that contradicts the intent", async () => {
+    const { scene, keys, a0, b0 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    const unpackaged = intent(scene, a0, b0, { expiresTime: 1 });
+    const unpackagedCarrier = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1, overrides: { ack: [unpackaged.data.messageId] } });
+    const unpackagedRecord = acknowledged(scene, unpackaged, unpackagedCarrier, b0, a0);
+    const waiting = intent(scene, a0, b0);
+    packageOf(scene, waiting, { sender: a0.didId, recipient: b0, resolution: root, overrides: { peerResolutionEventId: uuidv7() as EventId as never } });
+    const waitingCarrier = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 2, overrides: { ack: [waiting.data.messageId] } });
+    acknowledged(scene, waiting, waitingCarrier, b0, a0);
+    const contradicted = intent(scene, a0, b0);
+    packageOf(scene, contradicted, { sender: a0.didId, recipient: b0, resolution: root, overrides: { intentHash: OTHER_HASH } });
+    const contradictedCarrier = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 3, overrides: { ack: [contradicted.data.messageId] } });
+    acknowledged(scene, contradicted, contradictedCarrier, b0, a0);
+    let vault = await fold(scene, keys);
+    expect(outboundOf(vault, unpackaged)).toMatchObject({ ackWitnesses: [], acknowledged: false, late: false, acknowledgements: [{ status: { status: "pending", because: "no package is prepared here" } }], work: { kind: "prepare" } });
+    expect(outboundOf(vault, waiting)).toMatchObject({ acknowledged: false, acknowledgements: [{ status: { status: "pending", because: "the resolution it names is not here" } }] });
+    expect(outboundOf(vault, contradicted)).toMatchObject({ acknowledged: false, acknowledgements: [{ status: { status: "conflict", because: "the package contradicts the intent: the package's intent hash is not the intent's" } }] });
+    expectSameOverEveryOrder(scene, vault.checks);
+
+    packageOf(scene, unpackaged, { sender: a0.didId, recipient: b0, resolution: root });
+    vault = await fold(scene, keys);
+    expect(outboundOf(vault, unpackaged)).toMatchObject({ ackWitnesses: [{ source: { event: unpackagedCarrier } }], acknowledged: true, late: true, acknowledgements: [{ event: unpackagedRecord, status: { status: "complete" } }], submitted: false, released: false });
+    expectSameOverEveryOrder(scene, vault.checks);
   });
 
   it("checks an automatic intent against its source's input and the operation's rules, for good when they contradict it and pending while evidence is missing", async () => {
@@ -355,6 +418,50 @@ describe("an outbound message", () => {
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
+  it("checks a pure ACK's frozen targets against the source's request and the inputs they name, waiting for an input not here and never rebuilding the array", async () => {
+    const { scene, keys, peerKeys, a0, a1, b0, b1 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    const silent = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1 });
+    const ackOfSilent = pureAck(scene, a0, b0, silent);
+    const earlier = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 2 });
+    const elsewhere = receipt(scene, { local: a1, peer: b0, resolution: resolved(scene, a1.didId, b0), ordinal: 3 });
+    const unseen = uuidv7() as WireMessageId;
+    const ambiguous = uuidv7() as WireMessageId;
+    receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 4, wire: ambiguous });
+    const successorRoot = resolved(scene, a0.didId, b1);
+    receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 5, wire: ambiguous, fromPrior: await proof(peerKeys, b0, b1) });
+    const requests = ["", earlier.data.wireMessageId, elsewhere.data.wireMessageId, unseen, ambiguous];
+    const source = receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 6, fromPrior: await proof(peerKeys, b0, b1), overrides: { pleaseAck: requests } });
+    const own = pureAck(scene, a0, b1, source);
+    const ofEarlier = pureAck(scene, a0, b1, source, { ack: [earlier.data.wireMessageId, source.data.wireMessageId] });
+    const unrequested = pureAck(scene, a0, b1, source, { ack: [source.data.wireMessageId, silent.data.wireMessageId] });
+    const ofElsewhere = pureAck(scene, a0, b1, source, { ack: [elsewhere.data.wireMessageId] });
+    const ofUnseen = pureAck(scene, a0, b1, source, { ack: [unseen] });
+    const ofAmbiguous = pureAck(scene, a0, b1, source, { ack: [ambiguous] });
+    const variants = [own, ofEarlier, unrequested, ofElsewhere, ofUnseen, ofAmbiguous];
+    let vault = await fold(scene, keys);
+    expect(outboundOf(vault, ackOfSilent).effect).toEqual({ status: "conflict", because: "the source requests no ACK" });
+    expect(vault.outbound.ackTargets(source.eventId)).toEqual([earlier.data.wireMessageId, source.data.wireMessageId]);
+    expect(variants.map((event) => variant(scene, vault.checks, event, variants).effect)).toEqual([
+      { status: "complete" },
+      { status: "complete" },
+      { status: "conflict", because: `the source does not request an ACK of ${silent.data.wireMessageId}` },
+      { status: "pending", because: `no input of the channel or a verified predecessor has wire ID ${elsewhere.data.wireMessageId}` },
+      { status: "pending", because: `no input of the channel or a verified predecessor has wire ID ${unseen}` },
+      { status: "conflict", because: `wire ID ${ambiguous} names 2 inputs` },
+    ]);
+    expect(variant(scene, vault.checks, ofUnseen, variants).work).toEqual({ kind: "none", because: `no input of the channel or a verified predecessor has wire ID ${unseen}` });
+    expectSameOverEveryOrder(scene, vault.checks);
+
+    receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 7, wire: unseen });
+    receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 2, overrides: { intentHash: OTHER_HASH } });
+    vault = await fold(scene, keys);
+    expect(variant(scene, vault.checks, ofUnseen, variants)).toMatchObject({ effect: { status: "complete" }, work: { kind: "prepare" } });
+    expect(variant(scene, vault.checks, ofEarlier, variants).effect).toEqual({ status: "conflict", because: `the input with wire ID ${earlier.data.wireMessageId} is under a receipt conflict` });
+    expect(vault.outbound.ackTargets(source.eventId)).toEqual([source.data.wireMessageId, unseen]);
+    expectSameOverEveryOrder(scene, vault.checks);
+  });
+
   it("lets an automatic output continue its source's channel at a verified local successor, and a triggered notification follow its decision", async () => {
     const { scene, keys, a0, a1, a2, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
@@ -366,39 +473,74 @@ describe("an outbound message", () => {
     const manualForm = intent(scene, a1, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventId: ref(decision) });
     const noRequest = automatic(scene, a1, b0, source, inputOf(source, b0, a0), ROTATION_NOTIFICATION_EFFECT, { bodyCid: EMPTY_CONTENT_CID, thid: source.data.wireMessageId, rotationEventId: ref(decision) });
     const notNotification = automatic(scene, a1, b0, source, inputOf(source, b0, a0), PURE_ACK, { bodyCid: EMPTY_CONTENT_CID, ack: [source.data.wireMessageId], thid: source.data.wireMessageId, rotationEventId: ref(decision) });
-    const variants = [ackAtSuccessor, notification, fromPredecessor, noRequest, notNotification];
+    const noRotation = automatic(scene, a1, b0, source, inputOf(source, b0, a0), ROTATION_NOTIFICATION_EFFECT, { bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], thid: source.data.wireMessageId });
+    const variants = [ackAtSuccessor, notification, fromPredecessor, manualForm, noRequest, notNotification, noRotation];
     let vault = await fold(scene, keys);
     expect(vault.continuity.ackPath({ localDid: a0.did, peerDid: b0.did }, { localDid: a1.did, peerDid: b0.did })).toBe(true);
     expect(variant(scene, vault.checks, ackAtSuccessor, variants).effect).toEqual({ status: "complete" });
     expect(variant(scene, vault.checks, notification, variants)).toMatchObject({ effect: { status: "complete" }, work: { kind: "prepare" } });
-    expect([fromPredecessor, manualForm, noRequest, notNotification].map((event) => variant(scene, vault.checks, event, variants).effect)).toEqual([
+    expect([fromPredecessor, manualForm, noRequest, notNotification, noRotation].map((event) => variant(scene, vault.checks, event, variants).effect)).toEqual([
       { status: "conflict", because: "a notification is sent from the decision's successor" },
       { status: "conflict", because: "a notification is triggered exactly as its decision was, by the same source" },
       { status: "conflict", because: "a notification requests its own receipt, carries no ACK and does not expire" },
       { status: "conflict", because: "an intent naming a rotation is a rotation notification" },
+      { status: "conflict", because: "a rotation notification names its rotation" },
     ]);
     expect(vault.outbound.notificationFor(decision.eventId)).toEqual({ status: "conflict", messageIds: [manualForm.data.messageId, notification.data.messageId, notNotification.data.messageId].sort() });
+    expect(outboundOf(vault, notification)).toMatchObject({ intent: { status: "conflict" }, work: { kind: "none" } });
     expectSameOverEveryOrder(scene, vault.checks);
 
+    const withoutSource = new Scene();
+    withoutSource.events.push(...scene.events.filter((event) => event.eventId !== source.eventId && (event === notification || !variants.includes(event as VaultEvent<"message.out">))));
+    expect(outboundOf(foldVault(withoutSource.set(), vault.checks), notification)).toMatchObject({ effect: { status: "pending", because: "the source it names is not here" }, work: { kind: "none" } });
+
+    receipt(scene, { local: a1, peer: b0, resolution: resolved(scene, a1.didId, b0), ordinal: 2 });
     const manual = await rotation(scene, keys, { from: a1, peer: b0, to: a2, source: null });
     const announced = intent(scene, a2, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventId: ref(manual) });
     const threaded = intent(scene, a2, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], thid: "thread", rotationEventId: ref(manual) });
     const unknownDecision = intent(scene, a2, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventId: uuidv7() as EventId as never });
     vault = await fold(scene, keys);
+    expect(vault.continuity.status(manual.eventId)).toEqual({ status: "verified" });
     expect(vault.outbound.notificationFor(manual.eventId)).toEqual({ status: "conflict", messageIds: [announced.data.messageId, threaded.data.messageId].sort() });
-    expect(outboundOf(vault, announced).effect).toEqual({ status: "complete" });
+    expect(outboundOf(vault, announced)).toMatchObject({ effect: { status: "conflict", because: "another notification is selected for the rotation" }, work: { kind: "none", because: "another notification is selected for the rotation" } });
     expect(outboundOf(vault, threaded).effect).toEqual({ status: "conflict", because: "a manual notification has no thread and no creation time" });
     expect(outboundOf(vault, unknownDecision).effect).toEqual({ status: "pending", because: "the rotation it names is not here" });
     expect(vault.outbound.notificationFor(uuidv7() as EventId)).toEqual({ status: "none" });
 
     const alone = new Scene();
     alone.events.push(...scene.events.filter((event) => event.eventId !== threaded.eventId && event.eventId !== unknownDecision.eventId));
-    expect(foldVault(alone.set(), vault.checks).outbound.notificationFor(manual.eventId)).toEqual({ status: "selected", messageId: announced.data.messageId });
+    const settled = foldVault(alone.set(), vault.checks);
+    expect(settled.outbound.notificationFor(manual.eventId)).toEqual({ status: "selected", messageId: announced.data.messageId });
+    expect(outboundOf(settled, announced)).toMatchObject({ effect: { status: "complete" }, work: { kind: "prepare" } });
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
-  it("needs no work while the sender is not live, the channel is blocked, the message is erased or the sender is unknown here", async () => {
+  it("stops the work of two well-formed notifications selected for one rotation, keeps a submitted one submitted, and waits while the rotation's predecessor is unconfirmed", async () => {
     const { scene, keys, a0, a1, a2, b0 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1 });
+    const confirmed = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source: null });
+    const first = intent(scene, a1, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventId: ref(confirmed) });
+    const pkg = packageOf(scene, first, { sender: a1.didId, recipient: b0, resolution: resolved(scene, a1.didId, b0) });
+    submitted(scene, first, pkg);
+    const second = intent(scene, a1, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventId: ref(confirmed) });
+    const unconfirmed = await rotation(scene, keys, { from: a1, peer: b0, to: a2, source: null });
+    const early = intent(scene, a2, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventId: ref(unconfirmed) });
+    const vault = await fold(scene, keys);
+    const because = "another notification is selected for the rotation";
+    expect(outboundOf(vault, first)).toMatchObject({ effect: { status: "conflict", because }, submitted: true, outcome: { status: "conflict", because }, work: { kind: "none", because }, released: true });
+    expect(outboundOf(vault, second)).toMatchObject({ effect: { status: "conflict", because }, outcome: { status: "conflict", because }, work: { kind: "none", because } });
+    expect(vault.held.has(pkg.data.envelopeCid)).toBe(false);
+    expect(vault.continuity.status(unconfirmed.eventId)).toMatchObject({ status: "pending-history" });
+    expect(outboundOf(vault, early)).toMatchObject({
+      effect: { status: "pending", because: "the rotation it names is not verified yet: no complete source from the peer or a verified successor is addressed to the predecessor" },
+      work: { kind: "none", because: "the rotation it names is not verified yet: no complete source from the peer or a verified successor is addressed to the predecessor" },
+    });
+    expectSameOverEveryOrder(scene, vault.checks);
+  });
+
+  it("needs no work while the sender is not live, the channel is blocked or in conflicted continuity, the message is erased, a submission names a package not here, or the sender is unknown here", async () => {
+    const { scene, keys, peerKeys, a0, a1, a2, b0, b1, b2, b3 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
     const retired = intent(scene, a0, b0);
     scene.add("did.retired", { didId: a0.didId, because: "done" });
@@ -409,6 +551,14 @@ describe("an outbound message", () => {
     scene.add("message.erased", { messageId: erasedOut.data.messageId, dropCids: [erasedOut.data.bodyCid], because: "user" });
     const unknownSender = intent(scene, { didId: uuidv7() as DidId, did: a0.did, longFormDid: a0.longFormDid }, b0);
     const toSelf = intent(scene, a2, { did: a2.did } as Peer);
+    const restored = intent(scene, a2, b0);
+    submitted(scene, restored, packageOf(new Scene(), restored, { sender: a2.didId, recipient: b0, resolution: root }));
+    const forkedRoot = resolved(scene, a2.didId, b1);
+    const forked = intent(scene, a2, b1);
+    const forkedPackage = packageOf(scene, forked, { sender: a2.didId, recipient: b1, resolution: forkedRoot });
+    const unprepared = intent(scene, a2, b1);
+    receipt(scene, { local: a2, peer: b2, resolution: resolved(scene, a2.didId, b2), ordinal: 1, fromPrior: await proof(peerKeys, b1, b2) });
+    receipt(scene, { local: a2, peer: b3, resolution: resolved(scene, a2.didId, b3), ordinal: 2, fromPrior: await proof(peerKeys, b1, b3) });
     const vault = await fold(scene, keys);
     expect(outboundOf(vault, retired).work).toEqual({ kind: "none", because: "the sender is not live: retired: done" });
     expect(outboundOf(vault, denied).work).toEqual({ kind: "none", because: "the channel is blocked" });
@@ -416,6 +566,10 @@ describe("an outbound message", () => {
     expect(vault.held.has(pkg.data.envelopeCid)).toBe(true);
     expect(outboundOf(vault, unknownSender)).toMatchObject({ sender: null, channel: null, outcome: { status: "queued" }, work: { kind: "none", because: "no communication DID here records the sender" } });
     expect(outboundOf(vault, toSelf)).toMatchObject({ channel: null, outcome: { status: "conflict", because: "the recipient is the sender's own DID" } });
+    expect(outboundOf(vault, restored)).toMatchObject({ packages: [], submissions: [{ status: { status: "pending", because: "the package it names is not here" } }], submitted: false, outcome: { status: "queued" }, work: { kind: "none", because: "a submission names a package that is not here" }, released: false });
+    expect(vault.continuity.conflicted({ localDid: a2.did, peerDid: b1.did })).toBe(true);
+    expect(outboundOf(vault, forked)).toMatchObject({ package: { event: forkedPackage, status: { status: "complete" } }, outcome: { status: "prepared" }, work: { kind: "none", because: "the channel's continuity is in conflict" } });
+    expect(outboundOf(vault, unprepared)).toMatchObject({ outcome: { status: "queued" }, work: { kind: "none", because: "the channel's continuity is in conflict" } });
     expect(root.data.did).toBe(b0.did);
 
     const unseeded = await fold(scene, null);
@@ -439,8 +593,10 @@ describe("an outbound message", () => {
     const carrier = receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 7, fromPrior: await proof(peerKeys, b0, b1), overrides: { pleaseAck: requests } });
     const unproven = receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 8, fromPrior: "not a JWT", overrides: { pleaseAck: [""] } });
     const silent = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 9, overrides: { pleaseAck: [] } });
+    const itself = receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 10, wire: ambiguous, fromPrior: await proof(peerKeys, b0, b1), overrides: { pleaseAck: [""] } });
     const vault = await fold(scene, keys);
     expect(vault.outbound.ackTargets(carrier.eventId)).toEqual([earliest.data.wireMessageId, earlier.data.wireMessageId, carrier.data.wireMessageId]);
+    expect(vault.outbound.ackTargets(itself.eventId)).toEqual([ambiguous]);
     expect(vault.outbound.ackTargets(unproven.eventId)).toEqual([]);
     expect(vault.outbound.ackTargets(silent.eventId)).toEqual([]);
     expect(vault.outbound.ackTargets(earliest.eventId)).toEqual([]);
