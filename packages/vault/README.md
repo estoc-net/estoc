@@ -142,7 +142,30 @@ in its local-only context, its default `head`, none while a replacement
 ahead of it is not granted, whether a local DID is `confirmed` toward a peer, the
 role-preserving `ackPath` from an outbound to a carrier, the denials
 that cover a channel and the decisions already made in its peer-only
-context; a conflict masks authority and removes no edge), the whole fold
+context; a conflict masks authority and removes no edge), the
+invitations (`fold/invitations.ts`: `foldInvitations` reads each
+one-use OOB disclosure with the consumption records that name it and
+the receipts that could consume it; a record is read on its own —
+its disclosure a one-use invitation, its source a proof-free complete
+witness at the disclosed DID under the invitation's `pthid` — and only
+a complete record names the consumer, the source's canonical peer DID;
+the invitation is `available`, `consumed`, `pending` while a record
+or a candidate ahead of every eligible one waits, `unavailable` while
+the disclosed DID is retired, in conflict or not yet created here, or
+its route is retired, misconfigured or on a terminal mediation, or in
+`conflict` when complete records disagree, any OOB disclosure repeats
+the ID, or the walk reaches a candidate caught in a receipt-integrity
+conflict before an eligible one; the `candidates` are the unerased
+proof-free followers in first-receipt order, each `eligible`,
+`deferred`, `refused` by the DID's lifecycle or by the channel's
+current denial, continuity conflict or supersession, `invalid` or in
+`integrity-conflict`, for the runtime to walk when it records a
+consumption, the fold recording none), the
+contacts (`fold/contacts.ts`: `foldContacts` is a table of latest-wins
+decisions under each contact ID — tombstone, petname, flags, local-DID
+preference, the whole channel selection replaced or cleared, merge
+hints from either side — and `selecting` names the undeleted contacts
+whose selection holds a channel), the whole fold
 (`fold/vault.ts`: `foldVault` runs every fold over one set, each fed
 the ones it reads, and adds the retention edge by edge and the roots
 it holds; `checkVault` computes every verdict beside it in one motion,
@@ -156,9 +179,8 @@ message over every root its events and packages still name, in one
 commit, and `closeErasures` appends the equivalent erases a later
 observation or package made an erased message owed, `eraseDrafts` /
 `erasureClosure` being the decisions). The channel model's remaining
-folds — invitations, contacts, inbound executions, outbound delivery,
-the views and the procedures over them — are being rebuilt on this
-base.
+folds — inbound executions, outbound delivery, the views and the
+procedures over them — are being rebuilt on this base.
 Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned

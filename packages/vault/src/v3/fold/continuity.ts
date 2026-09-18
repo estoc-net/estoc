@@ -27,6 +27,7 @@
  * appends an event or reads arrival order.
  */
 
+import { Components } from "../../set.js";
 import { channelKey, channelOf, compareChannels, sameChannel } from "../ids.js";
 import type { VaultEvent } from "../schema.js";
 import type { Channel, Did, EventId } from "../types.js";
@@ -255,31 +256,17 @@ function buildGraph(peerLinks: readonly PeerLink[], localLinks: readonly LocalLi
 
 /** The channels connected by edges of one kind, undirected: a local-only context by local edges, a peer-only context by peer edges. */
 class Contexts {
-  private readonly parent = new Map<string, string>();
+  private readonly components = new Components();
 
   constructor(graph: Graph, replaces: Replaced) {
     for (const edge of graph.edges()) {
-      if (edge.replaces === replaces) this.unite(channelKey(edge.from), channelKey(edge.to));
+      if (edge.replaces === replaces) this.components.union(channelKey(edge.from), channelKey(edge.to));
     }
   }
 
+  /** the least key of the context, the key itself for a channel no edge of this kind touches */
   root(key: string): string {
-    const path: string[] = [];
-    let current = key;
-    for (let parent = this.parent.get(current); parent !== undefined && parent !== current; parent = this.parent.get(current)) {
-      path.push(current);
-      current = parent;
-    }
-    for (const visited of path) this.parent.set(visited, current);
-    return current;
-  }
-
-  private unite(a: string, b: string): void {
-    const ra = this.root(a);
-    const rb = this.root(b);
-    if (ra === rb) return;
-    const [small, large] = ra < rb ? [ra, rb] : [rb, ra];
-    this.parent.set(large, small);
+    return this.components.has(key) ? this.components.find(key) : key;
   }
 }
 

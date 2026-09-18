@@ -186,6 +186,8 @@ export {
   verifyProofs,
 } from "./fold/channels.js";
 export { type Replaced, type ContinuityLink, type Conflict, type Status, type Witness, type Continuity, foldContinuity } from "./fold/continuity.js";
+export { type ConsumptionStatus, type Consumption, type Eligibility, type Candidate, type InvitationStatus, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
+export { type Contact, type ContactFold, foldContacts } from "./fold/contacts.js";
 export { type Erasures, type ReadState, foldErasures, erased, retainedRoots, heldRoots, readState } from "./fold/held.js";
 export { type VaultChecks, type VaultFold, type ScanOptions, MAX_READ_BYTES, foldVault, objectReader, checkVault, foldVaultChecked, scanVault } from "./fold/vault.js";
 export { type Committed, vaultRetention, vaultHeldRoots, collectGarbage, eraseDrafts, erasureClosure, eraseMessage, closeErasures } from "./procedures.js";
