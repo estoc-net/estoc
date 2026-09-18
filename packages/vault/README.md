@@ -165,7 +165,24 @@ contacts (`fold/contacts.ts`: `foldContacts` is a table of latest-wins
 decisions under each contact ID — tombstone, petname, flags, local-DID
 preference, the whole channel selection replaced or cleared, merge
 hints from either side — and `selecting` names the undeleted contacts
-whose selection holds a channel), the whole fold
+whose selection holds a channel), the inbound
+inputs (`fold/inbound.ts`: `foldInbound` groups every authenticated
+observation whose own authentication is complete into the input its
+canonical sender, recipient and wire ID name, one execution per input
+in its channel, its members in first-receipt order; the members whose
+proof, if any, supports a link must agree on the intent, and a
+disagreement is a `conflict` for good, whatever later becomes of
+those members' witnesses; the input is `complete` once one member is
+a complete witness under the continuity, `pending` otherwise, and a
+member whose proof is refused or not yet verified neither makes a
+conflict nor clears one; the observations of the input whose own
+authentication is incomplete or contradicted are its `siblings`,
+listed and counted for nothing, those with no input to join are
+`unplaced`, and the `anonymous` ones are apart; each complete input
+has the agreed intent's `kind` — application, pure ACK in its exact
+shape, any other Empty message, ping-response or problem report — its
+`firstReceiptKey` for freezing ACK targets in order, and whether an
+erasure names it), the whole fold
 (`fold/vault.ts`: `foldVault` runs every fold over one set, each fed
 the ones it reads, and adds the retention edge by edge and the roots
 it holds; `checkVault` computes every verdict beside it in one motion,
@@ -179,8 +196,8 @@ message over every root its events and packages still name, in one
 commit, and `closeErasures` appends the equivalent erases a later
 observation or package made an erased message owed, `eraseDrafts` /
 `erasureClosure` being the decisions). The channel model's remaining
-folds — inbound executions, outbound delivery, the views and the
-procedures over them — are being rebuilt on this base.
+folds — outbound delivery, the views and the procedures over them —
+are being rebuilt on this base.
 Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned
