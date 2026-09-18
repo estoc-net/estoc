@@ -16,13 +16,12 @@ import { heldRootsOf, type Collected, type Event, type HeldRoots, type RetainedR
 
 import type { Carrier, Decision, Source } from "./fold/channels.js";
 import { erased } from "./fold/held.js";
-import type { Execution } from "./fold/inbound.js";
+import { kindOf, type Execution } from "./fold/inbound.js";
 import { PING_RESPONSE_EFFECT, PING_TYPE, PURE_ACK_EFFECT, type Notification, type Outbound } from "./fold/outbound.js";
 import { scanVault, type ScanOptions, type VaultFold } from "./fold/vault.js";
 import { channelPolicy, messageIdsOf, senderGate } from "./fold/views.js";
 import type { Keys } from "./identity.js";
 import { automaticMessageId, channelKey, channelOf, compareChannels, effectKey, sameChannel } from "./ids.js";
-import { requestsAck } from "./projection.js";
 import { vaultDraft, type VaultDraft } from "./schema.js";
 import type { Channel, Cid, ContactId, Did, EffectKey, EventId, EventReference, ExecutionId, MessageId } from "./types.js";
 
@@ -197,7 +196,12 @@ export function responseChannel(fold: VaultFold, execution: Execution): Response
 
 // ---- unfinished work -----------------------------------------------------
 
-/** A reply an established input is owed and no intent records yet, with the channel a manual completion would fix it to. */
+/**
+ * A reply an established input may still be given and no intent
+ * records: a candidate for manual completion, listed with the channel
+ * the completion would fix it to. Whether it is given is the
+ * completion's call, under current policy and what the body says.
+ */
 export interface MissingResponse {
   readonly execution: Execution;
   readonly effectType: string;
@@ -206,7 +210,7 @@ export interface MissingResponse {
   readonly source: Source;
 }
 
-/** A verified rotation decision with no notification intent yet, while its source, when it has one, still permits creating it. */
+/** A verified rotation decision with no notification intent yet, while its source, when it has one, still permits one. */
 export interface MissingNotification {
   readonly decision: Decision;
   /** from the successor to the decision's peer */
@@ -222,10 +226,10 @@ export interface NotificationConflict {
 /**
  * What an open lists for manual action, and dispatches nothing of:
  * the outbounds not yet submitted or terminated, each with the work
- * it still needs; the replies established inputs are owed; the
- * notifications verified decisions are owed; the decisions whose
- * notification intents disagree, listed as a diagnostic, since no
- * retry may select among them; the proofs that wait for issuer
+ * it still needs; the replies established inputs may still be given;
+ * the notifications verified decisions still permit; the decisions
+ * whose notification intents disagree, listed as a diagnostic, since
+ * no retry may select among them; the proofs that wait for issuer
  * material a repair or an import may bring; and the invitation
  * consumptions the runtime records on its own.
  */
@@ -251,12 +255,13 @@ export function unfinishedWork(fold: VaultFold): PendingWork {
 }
 
 /**
- * A pure ACK is owed by every established input that asks for its own
- * acknowledgment and whose request names a target, whatever the
- * input's kind, an erased body included: the request is in the
- * headers. A Ping reply is owed by an established, unerased Ping;
- * whether it asked for a response, and whether it has expired, is in
- * its body and its timing, which the completion reads.
+ * A pure ACK is a candidate for every established input whose request
+ * names an eligible target, its own wire ID or an earlier input's,
+ * whatever the input's kind, an erased body included: the request is
+ * in the headers, and honoring it is policy the completion applies. A
+ * Ping reply is a candidate for an established, unerased Ping; whether
+ * it asked for a response, and whether it has expired, is in its body
+ * and its timing, which the completion reads.
  */
 function missingResponses(fold: VaultFold): MissingResponse[] {
   const missing: MissingResponse[] = [];
@@ -264,14 +269,13 @@ function missingResponses(fold: VaultFold): MissingResponse[] {
   for (const execution of executions) {
     if (execution.status.status !== "complete") continue;
     const source = execution.members.find((member) => member.witness.status === "complete")!.source;
-    const { data } = source.event;
-    const owed: string[] = [];
-    if (requestsAck(data.wireMessageId, data.pleaseAck) && fold.outbound.ackTargets(source.event.eventId).length > 0) owed.push(PURE_ACK_EFFECT);
-    if (data.msgType === PING_TYPE && !execution.erased) owed.push(PING_RESPONSE_EFFECT);
-    if (owed.length === 0) continue;
+    const candidates: string[] = [];
+    if (fold.outbound.ackTargets(source.event.eventId).length > 0) candidates.push(PURE_ACK_EFFECT);
+    if (source.event.data.msgType === PING_TYPE && !execution.erased) candidates.push(PING_RESPONSE_EFFECT);
+    if (candidates.length === 0) continue;
     const channel = responseChannel(fold, execution);
     if (channel.status === "none") continue;
-    for (const effectType of owed) {
+    for (const effectType of candidates) {
       if (automaticIntent(fold, execution, effectType).existing !== null) continue;
       missing.push({ execution, effectType, channel: channel.channel, source });
     }
@@ -280,12 +284,13 @@ function missingResponses(fold: VaultFold): MissingResponse[] {
 }
 
 /**
- * A decision is owed a notification once continuity has verified it
+ * A decision permits a notification once continuity has verified it
  * and no intent names it. With a source, the source must still be a
- * complete witness of an established input, and its channel must not
- * be denied, in conflict, or left by the peer; the successor must be
- * able to send to that peer. A source-free decision is held only to
- * the successor's channel.
+ * complete witness of an established application input, since a
+ * control input triggers none, and its channel must not be denied, in
+ * conflict, or left by the peer; the successor must be able to send
+ * to that peer. A source-free decision is held only to the successor's
+ * channel.
  */
 function missingNotifications(fold: VaultFold): { notifications: MissingNotification[]; conflicts: NotificationConflict[] } {
   const notifications: MissingNotification[] = [];
@@ -304,6 +309,7 @@ function missingNotifications(fold: VaultFold): { notifications: MissingNotifica
       source = fold.channels.sources.get(decision.event.data.sourceEventId as EventId) ?? null;
       if (source === null || fold.continuity.witness(source.event.eventId).status !== "complete") continue;
       if (fold.inbound.ofSource(source.event.eventId)?.status.status !== "complete") continue;
+      if (kindOf(source.event.data) !== "application") continue;
       if (channelPolicy(fold, decision.channel, { automatic: true }) !== null) continue;
     }
     notifications.push({ decision, channel, source });

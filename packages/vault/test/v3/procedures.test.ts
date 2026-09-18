@@ -10,7 +10,9 @@ import {
   EMPTY_MESSAGE_TYPE,
   Keys,
   PING_RESPONSE_EFFECT,
+  PING_RESPONSE_TYPE,
   PING_TYPE,
+  PROBLEM_REPORT_TYPE,
   PURE_ACK_EFFECT,
   ROTATION_NOTIFICATION_EFFECT,
   automaticIntent,
@@ -30,6 +32,7 @@ import {
   executionId,
   foldVault,
   foldVaultChecked,
+  kindOf,
   rawCidOfBytes,
   responseChannel,
   scanVault,
@@ -150,8 +153,7 @@ const inputOf = (source: { data: { wireMessageId: string } }, peer: Peer, local:
 
 const CONTACT = "019b7100-0000-7000-8000-000000000c01" as ContactId;
 
-/** The unfinished work as comparable data. */
-const picture = (work: PendingWork) => ({
+const workSnapshot = (work: PendingWork) => ({
   outbounds: work.outbounds.map((o) => [o.messageId, o.work.kind]),
   responses: work.responses.map((r) => [r.execution.messageId, r.effectType, r.channel]),
   notifications: work.notifications.map((n) => [n.decision.event.eventId, n.channel, n.source?.event.eventId ?? null]),
@@ -238,7 +240,7 @@ describe("unfinished work", () => {
     const vault = await fold(scene, keys);
     expect(vault.channels.carriers.get(waiting.eventId)!.proof).toEqual({ status: "pending-proof" });
     const work = unfinishedWork(vault);
-    expect(picture(work)).toEqual({
+    expect(workSnapshot(work)).toEqual({
       outbounds: [
         [prepared.data.messageId, "dispatch"],
         [queued.data.messageId, "prepare"],
@@ -258,7 +260,30 @@ describe("unfinished work", () => {
     const draft = automaticIntent(vault, vault.inbound.ofMessage(asking.data.messageId)!, PURE_ACK_EFFECT);
     expect(draft).toMatchObject({ executionId: inputOf(asking, b0, a0), effectType: PURE_ACK_EFFECT, existing: null });
     expect(automaticIntent(vault, vault.inbound.ofMessage(answered.data.messageId)!, PURE_ACK_EFFECT).existing).not.toBeNull();
-    expectOrderFree(scene.events, (set) => picture(unfinishedWork(foldVault(set, vault.checks))));
+    expectOrderFree(scene.events, (set) => workSnapshot(unfinishedWork(foldVault(set, vault.checks))));
+  });
+
+  it("lists a pure ACK for an input whose request names an earlier input, none for one naming nothing here, none once the tuple has an intent, and one from the peer's successor naming the predecessor's input", async () => {
+    const { scene, keys, peerKeys, a0, b0, b1 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    const first = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1 });
+    const namingFirst = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 2, overrides: { pleaseAck: [first.data.wireMessageId] } });
+    const namingNothing = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 3, overrides: { pleaseAck: [uuidv7()] } });
+    let vault = await fold(scene, keys);
+    expect(vault.outbound.ackTargets(namingFirst.eventId)).toEqual([first.data.wireMessageId]);
+    expect(vault.outbound.ackTargets(namingNothing.eventId)).toEqual([]);
+    expect(workSnapshot(unfinishedWork(vault)).responses).toEqual([[namingFirst.data.messageId, PURE_ACK_EFFECT, channel(a0, b0)]]);
+
+    automatic(scene, a0, b0, namingFirst, inputOf(namingFirst, b0, a0), PURE_ACK, { bodyCid: EMPTY_CONTENT_CID, thid: namingFirst.data.wireMessageId, ack: [first.data.wireMessageId] });
+    const ack = scene.events.at(-1)!.data as { messageId: MessageId };
+    vault = await fold(scene, keys);
+    expect(workSnapshot(unfinishedWork(vault))).toMatchObject({ outbounds: [[ack.messageId, "prepare"]], responses: [] });
+
+    const fromSuccessor = receipt(scene, { local: a0, peer: b1, resolution: resolved(scene, a0.didId, b1), ordinal: 4, fromPrior: await proof(peerKeys, b0, b1), overrides: { pleaseAck: [first.data.wireMessageId] } });
+    vault = await fold(scene, keys);
+    expect(vault.outbound.ackTargets(fromSuccessor.eventId)).toEqual([first.data.wireMessageId]);
+    expect(workSnapshot(unfinishedWork(vault)).responses).toEqual([[fromSuccessor.data.messageId, PURE_ACK_EFFECT, channel(a0, b1)]]);
+    expectOrderFree(scene.events, (set) => workSnapshot(unfinishedWork(foldVault(set, vault.checks))));
   });
 
   it("selects the reply address as the carrier channel while its local DID sends, else the unique verified local successor keeping the peer, and none through denial, conflict or a peer that moved on", async () => {
@@ -308,22 +333,38 @@ describe("unfinished work", () => {
     let vault = await fold(scene, keys);
     expect(vault.continuity.status(decision.eventId)).toEqual({ status: "verified" });
     expect(vault.continuity.status(manual.eventId)).toEqual({ status: "verified" });
-    expect(picture(unfinishedWork(vault)).notifications).toEqual([
+    expect(workSnapshot(unfinishedWork(vault)).notifications).toEqual([
       [decision.eventId, channel(a1, b0), source.eventId],
       [manual.eventId, channel(a0, b1), null],
     ]);
 
     const notification = automatic(scene, a1, b0, source, inputOf(source, b0, a0), ROTATION_NOTIFICATION_EFFECT, { bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], thid: source.data.wireMessageId, rotationEventId: ref(decision) });
     vault = await fold(scene, keys);
-    expect(picture(unfinishedWork(vault)).notifications).toEqual([[manual.eventId, channel(a0, b1), null]]);
+    expect(workSnapshot(unfinishedWork(vault)).notifications).toEqual([[manual.eventId, channel(a0, b1), null]]);
     expect(unfinishedWork(vault).outbounds.map((o) => o.messageId)).toEqual([notification.data.messageId]);
 
     await receiptCarryingProof(scene, peerKeys, a0, b0, b1, 3);
     const manualForm = intent(scene, a1, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventId: ref(decision) });
     vault = await fold(scene, keys);
-    const work = picture(unfinishedWork(vault));
+    const work = workSnapshot(unfinishedWork(vault));
     expect(work.notifications).toEqual([]);
     expect(work.notificationConflicts).toEqual([[decision.eventId, [notification.data.messageId, manualForm.data.messageId].sort()]]);
+  });
+
+  it("lists no notification for a verified decision a control input triggered: a pure ACK, another Empty, a ping response or a problem report", async () => {
+    const { scene, keys, a0, a1, b0, b1, b2, b3 } = await vaults();
+    const controls = [
+      proofFreeReceipt(scene, a0, b0, 1, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, ack: [uuidv7()] }),
+      proofFreeReceipt(scene, a0, b1, 2, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID }),
+      proofFreeReceipt(scene, a0, b2, 3, { msgType: PING_RESPONSE_TYPE }),
+      proofFreeReceipt(scene, a0, b3, 4, { msgType: PROBLEM_REPORT_TYPE }),
+    ];
+    const decisions = [];
+    for (const [index, peer] of [b0, b1, b2, b3].entries()) decisions.push(await rotation(scene, keys, { from: a0, peer, to: a1, source: controls[index] }));
+    const vault = await fold(scene, keys);
+    expect(controls.map((source) => kindOf(source.data))).toEqual(["pure-ack", "empty", "ping-response", "error"]);
+    for (const decision of decisions) expect(vault.continuity.status(decision.eventId)).toEqual({ status: "verified" });
+    expect(workSnapshot(unfinishedWork(vault))).toMatchObject({ notifications: [], notificationConflicts: [] });
   });
 });
 

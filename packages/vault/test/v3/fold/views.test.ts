@@ -14,14 +14,14 @@ const receiptCarryingProof = async (scene: Scene, peerKeys: Keys, local: Local, 
 
 const CONTACT = "019b7100-0000-7000-8000-000000000c01" as ContactId;
 const CONTACT2 = "019b7100-0000-7000-8000-000000000c02" as ContactId;
+const UNRESOLVED = "019b7100-0000-7000-8000-000000000c03" as ContactId;
 
 const contact = (scene: Scene, contactId: ContactId, channels: readonly { local: Local; peer: Peer }[]) => {
   scene.add("contact.created", { contactId, because: "user" });
   scene.add("contact.channelsSet", { contactId, channels: channels.map(({ local, peer }) => channel(local, peer)).sort(compareChannels) });
 };
 
-/** A contact view as comparable data: channels by pair and selection, with the messages each shows. */
-const picture = (view: ContactView) => ({
+const viewSnapshot = (view: ContactView) => ({
   channels: view.channels.map((c) => ({ channel: c.channel, selected: c.selected, head: c.head, send: c.send, inbound: c.inbound.map((e) => e.messageId), outbound: c.outbound.map((o) => o.messageId) })),
   writeTo: view.writeTo,
   preference: view.preference,
@@ -43,9 +43,9 @@ describe("a channel view", () => {
     const view = vault.views.channel(channel(a0, b0));
     expect(view.inbound.map((execution) => execution.messageId)).toEqual([earlier, later, report, reportOfElsewhere].map((event) => event.data.messageId));
     expect(view.outbound.map((outbound) => outbound.messageId)).toEqual([out.data.messageId]);
-    expect(view.errors.map(({ execution, outbound, readable }) => [execution.messageId, outbound?.messageId ?? null, readable])).toEqual([
-      [report.data.messageId, out.data.messageId, true],
-      [reportOfElsewhere.data.messageId, null, false],
+    expect(view.errors.map(({ execution, outbound }) => [execution.messageId, outbound?.messageId ?? null, execution.erased])).toEqual([
+      [report.data.messageId, out.data.messageId, false],
+      [reportOfElsewhere.data.messageId, null, true],
     ]);
     expect(view).toMatchObject({ head: channel(a0, b0), superseded: false, blocked: false, conflicted: false, send: { status: "open" } });
     expect(vault.views.channel(channel(a1, b0)).outbound.map((outbound) => outbound.messageId)).toEqual([elsewhere.data.messageId]);
@@ -100,7 +100,7 @@ describe("a contact view", () => {
     expect(view.writeTo).toEqual([channel(a1, b1)]);
     expect(view.preference).toEqual({ didId: a0.didId, matches: [channel(a1, b1)] });
     expect(view.defaultWriteTo).toEqual(channel(a1, b1));
-    expectOrderFree(scene.events, (set) => picture(foldVault(set, vault.checks).views.contact(CONTACT)));
+    expectOrderFree(scene.events, (set) => viewSnapshot(foldVault(set, vault.checks).views.contact(CONTACT)));
   });
 
   it("offers every distinct eligible head, defaults only when one is left after the preference, and follows the preference to no unrelated channel", async () => {
@@ -152,7 +152,7 @@ describe("a contact view", () => {
     expect(vault.views.channel(channel(a0, b0)).send).toEqual({ status: "open" });
   });
 
-  it("selects nothing for a deleted contact or one no event creates, and applies the preferences of several contacts only when they agree", async () => {
+  it("selects nothing for a deleted contact or one no event names, shows a selection no creation resolves with its origin missing, and applies the preferences of several contacts only when they agree", async () => {
     const { scene, keys, a0, a1, b0, b1 } = await vaults();
     proofFreeReceipt(scene, a0, b0, 1);
     proofFreeReceipt(scene, a1, b1, 2);
@@ -160,10 +160,12 @@ describe("a contact view", () => {
     contact(scene, CONTACT2, [{ local: a1, peer: b1 }]);
     scene.add("contact.useDid", { contactId: CONTACT, didId: a0.didId, because: "user" });
     scene.add("contact.useDid", { contactId: CONTACT2, didId: a1.didId, because: "user" });
+    scene.add("contact.channelsSet", { contactId: UNRESOLVED, channels: [channel(a1, b1)] });
     let vault = await fold(scene, keys);
     expect(vault.views.contact(CONTACT, CONTACT2)).toMatchObject({ preference: null, defaultWriteTo: null });
     expect(vault.views.contact(CONTACT, CONTACT2).writeTo).toHaveLength(2);
-    expect(vault.views.contact(uuidv7() as ContactId)).toMatchObject({ channels: [], writeTo: [], preference: null, defaultWriteTo: null });
+    expect(vault.views.contact(uuidv7() as ContactId)).toMatchObject({ contacts: [{ origin: null, channels: [] }], channels: [], writeTo: [], preference: null, defaultWriteTo: null });
+    expect(vault.views.contact(UNRESOLVED)).toMatchObject({ contacts: [{ origin: null, channels: [channel(a1, b1)] }], writeTo: [channel(a1, b1)], defaultWriteTo: channel(a1, b1) });
 
     scene.add("contact.deleted", { contactId: CONTACT2 });
     vault = await fold(scene, keys);

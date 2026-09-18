@@ -18,7 +18,6 @@ import type { Execution, InboundFold } from "./inbound.js";
 import type { Outbound, OutboundFold } from "./outbound.js";
 import type { RouteFold } from "./routes.js";
 
-/** The folds a view reads. */
 export type ViewInputs = {
   readonly routes: RouteFold;
   readonly continuity: Continuity;
@@ -55,13 +54,12 @@ export function channelPolicy(fold: ViewInputs, channel: Channel, options: { aut
 /**
  * A problem report a peer sent in a channel, beside the outbound its
  * thread names when the carrier may answer that outbound; with no such
- * outbound it is a report of nothing this vault sent. Its body stays
- * readable until an erasure drops it.
+ * outbound it is a report of nothing this vault sent. Whether its body
+ * is still here is the execution's erasure and the object store's.
  */
 export interface RemoteError {
   readonly execution: Execution;
   readonly outbound: Outbound | null;
-  readonly readable: boolean;
 }
 
 export interface ChannelView {
@@ -91,6 +89,7 @@ export interface Preference {
 }
 
 export interface ContactView {
+  /** the contacts named; one no creation resolves has no origin, and its selection still shows, since membership grants nothing a send gate does not check */
   readonly contacts: readonly Contact[];
   /** the selected channels first, then the derived ones, each in canonical order */
   readonly channels: readonly ContactChannel[];
@@ -138,7 +137,7 @@ function channelView(fold: ViewInputs, channel: Channel, executions: readonly Ex
   for (const execution of inbound) {
     if (execution.kind !== "error" || execution.status.status !== "complete") continue;
     const source = execution.members.find((member) => member.witness.status === "complete")!.source;
-    errors.push({ execution, outbound: fold.outbound.inReplyTo(source.event.eventId), readable: !execution.erased });
+    errors.push({ execution, outbound: fold.outbound.inReplyTo(source.event.eventId) });
   }
   return {
     channel,

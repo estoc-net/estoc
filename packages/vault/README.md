@@ -252,12 +252,14 @@ now, refused and invalid ones passed over and a waiting one stopping
 the walk, `consumptionDrafts` being the decision; `unfinishedWork`
 lists what an open finds and dispatches nothing of — the outbounds
 still to prepare or dispatch, the pure ACKs and Ping replies
-established inputs are owed under `responseChannel`, the carrier's own
-channel while its local DID sends there and otherwise the unique
-verified local successor head keeping the peer, the notifications
-verified decisions are owed while their source stays eligible, the
-decisions whose notification intents disagree, the proofs waiting for
-issuer material, and the consumptions; `automaticIntent` names an
+established inputs may still be given, each a candidate the manual
+completion still holds to current policy and to what the body says,
+under `responseChannel`, the carrier's own channel while its local DID
+sends there and otherwise the unique verified local successor head
+keeping the peer, the notifications verified decisions permit while
+their source, an application input, stays eligible, the decisions
+whose notification intents disagree, the proofs waiting for issuer
+material, and the consumptions; `automaticIntent` names an
 operation's tuple over an input, its message ID and the intent already
 under it; `decisionFor` is the decision a rotation away from a pair
 reuses, defers on or refuses over, from its verified peer-only
