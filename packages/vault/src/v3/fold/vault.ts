@@ -64,6 +64,7 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}): VaultFo
   const channels = foldChannelEvidence(set, routes, all);
   const continuity = foldContinuity(set, channels);
   const erasures = foldErasures(set);
+  const inbound = foldInbound(channels, continuity, erasures);
   return {
     set,
     checks: all,
@@ -73,8 +74,8 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}): VaultFo
     routes,
     channels,
     continuity,
-    inbound: foldInbound(channels, continuity, erasures),
-    invitations: foldInvitations(set, routes, channels, continuity, erasures),
+    inbound,
+    invitations: foldInvitations(set, routes, channels, continuity, inbound, erasures),
     contacts: foldContacts(set),
     erasures,
     retained: retainedRoots(set, erasures),

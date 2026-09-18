@@ -1,17 +1,18 @@
 /**
- * The inbound observations as logical inputs. Every authenticated
- * observation whose own authentication is complete belongs to the
- * input its canonical sender, recipient and wire ID name, and that
- * input has one execution in its channel; the observations of one
- * input agree on its intent or contradict it, and contradiction is
- * for good. What each observation is worth is the continuity fold's
- * verdict on it, its witness: an input is established once one
- * observation is a complete witness, and an observation whose
- * authentication or proof is incomplete or refused neither supplies an
- * input of its own nor withdraws what a complete one established. An
- * anonymous observation is in no channel and has no execution. The
- * fold reads inputs; what an input has produced, or is still owed, is
- * the outbound fold's question.
+ * The inbound observations as logical inputs. An observation whose own
+ * authentication is complete is a member of the input its canonical
+ * sender, recipient and wire ID name, and that input has one execution
+ * in its channel; one whose authentication is incomplete or
+ * contradicted is listed beside that input and counts for nothing; an
+ * anonymous one is in no channel and has no execution. Among the
+ * members, only those whose proof, if they brought one, is verified
+ * speak for the input's intent, and their disagreement is a conflict
+ * for good; a member whose proof is unverified or refused neither
+ * raises a conflict nor settles one. Whether the input is established
+ * is the continuity fold's witness on each member: one complete
+ * witness establishes it, and no member withdraws what another
+ * established. What an input has produced, or is still owed, is the
+ * outbound fold's question.
  */
 
 import { storeMessage } from "../document.js";
@@ -34,9 +35,11 @@ export const EMPTY_CONTENT_CID = storeMessage({}, []).bodyCid;
  * and no ACK request of its own; any other Empty message — a rotation
  * notification, or a variant that is no pure ACK — is `empty`. A
  * ping-response and a problem report are read in the thread of what
- * they answer. None of the four is application input: they may
- * acknowledge, none of them starts an automatic reply. Everything
- * else is application input.
+ * they answer. None of the four is application input, and none of them
+ * is answered with a privacy notification, so a notification never
+ * begets another; what each may acknowledge, or what reply it earns,
+ * is each operation's own policy. Everything else is application
+ * input.
  */
 export type InboundKind = "application" | "pure-ack" | "empty" | "ping-response" | "error";
 
@@ -62,12 +65,11 @@ export interface Member {
 }
 
 /**
- * Complete once one member is a complete witness and no two positive
- * members disagree on the intent. Conflict when they do, for good:
- * whatever later becomes of those members' witnesses, the input's
- * intent stays contradicted. Pending otherwise, with what the first
- * member still waiting for evidence waits for, or, when none waits,
- * why the first member is no complete witness.
+ * Conflict is read from the members' positive evidence, not from their
+ * current witnesses: a continuity conflict that later overtakes those
+ * members leaves the intent contradiction standing. Pending carries
+ * what the first member still waiting for evidence waits for, or, when
+ * none waits, why the first member is no complete witness.
  */
 export type ExecutionStatus = { status: "complete" } | { status: "pending"; because: string } | { status: "conflict"; because: string };
 
@@ -76,13 +78,12 @@ export interface Execution {
   readonly messageId: MessageId;
   readonly channel: Channel;
   readonly wireMessageId: WireMessageId;
-  /** the observations whose own authentication is complete, in first-receipt order */
+  /** in first-receipt order */
   readonly members: readonly Member[];
-  /** the observations claiming this input whose own authentication is incomplete or contradicted, in first-receipt order: listed, counted for nothing */
+  /** the observations of this input whose own authentication is incomplete or contradicted, in first-receipt order */
   readonly siblings: readonly Source[];
   /** the intent the positive members agree on; null while none is positive, or when they disagree */
   readonly intentHash: MessageHash | null;
-  /** the kind of the agreed intent */
   readonly kind: InboundKind | null;
   readonly status: ExecutionStatus;
   /** the least receipt key among the complete witnesses of a complete input: the order ACK targets are frozen in */
@@ -142,12 +143,9 @@ export function foldInbound(evidence: ChannelEvidence, continuity: Continuity, e
 const byReceipt = (a: Source, b: Source) => compareReceiptKeys(receiptOrderKey(a.event), receiptOrderKey(b.event));
 
 /**
- * One input from its complete observations. They share the message
- * ID, and a complete authentication has checked that ID against the
- * observation's own endpoints and wire ID, so they share the channel
- * and the wire ID too. The positive ones must agree on the intent;
- * the others carry a proof not yet verified or refused, and neither
- * establish a contradiction nor clear one.
+ * The members share the message ID, and a complete authentication has
+ * checked that ID against the observation's own endpoints and wire ID,
+ * so they share the channel and the wire ID too.
  */
 function executionOf(messageId: MessageId, sources: readonly Source[], siblings: readonly Source[], evidence: ChannelEvidence, continuity: Continuity, erasures: Erasures): Execution {
   const channel = sources[0]!.channel!;

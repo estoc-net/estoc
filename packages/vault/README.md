@@ -158,7 +158,8 @@ the ID, or the walk reaches a candidate caught in a receipt-integrity
 conflict before an eligible one; the `candidates` are the unerased
 proof-free followers in first-receipt order, each `eligible`,
 `deferred`, `refused` by the DID's lifecycle or by the channel's
-current denial, continuity conflict or supersession, `invalid` or in
+current denial, continuity conflict or supersession, `invalid` by its
+own witness or by the intent conflict of the input it observes, or in
 `integrity-conflict`, for the runtime to walk when it records a
 consumption, the fold recording none), the
 contacts (`fold/contacts.ts`: `foldContacts` is a table of latest-wins
