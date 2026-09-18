@@ -6,7 +6,7 @@
  * so a fold over messages can be set up in a few lines.
  */
 import { encodeLongForm } from "@estoc/did-peer";
-import type { Event } from "@estoc/event-store/v3";
+import type { Event, JsonObject } from "@estoc/event-store/v3";
 import { v7 as uuidv7 } from "uuid";
 
 import {
@@ -67,6 +67,17 @@ export async function peerAgreeingOn(keys: Keys, didId: DidId, keyAgreement: Pub
   const longFormDid = encodeLongForm(inputDocumentOf({ authentication, keyAgreement: { publicKey: keyAgreement } as DidKeys["keyAgreement"] }, ENDPOINT)) as Did;
   const resolution = peerResolution(longFormDid);
   return { didId, did: resolution.did, longFormDid, resolution, publicKey: keyAgreement };
+}
+
+/** A peer whose document authorizes a second key-agreement key beside the one its seed derives; `publicKey` is the first. */
+export async function peerAgreeingOnBoth(keys: Keys, didId: DidId, second: PublicKey): Promise<Peer> {
+  const input = inputDocumentOf(await keys.didKeys(didId), ENDPOINT);
+  (input.verificationMethod as JsonObject[]).push({ id: "#key-3", type: "Multikey", publicKeyMultibase: second });
+  (input.keyAgreement as string[]).push("#key-3");
+  const longFormDid = encodeLongForm(input) as Did;
+  const resolution = peerResolution(longFormDid);
+  const [keyAgreement] = authorizedMethodIds(resolution.document, "keyAgreement");
+  return { didId, did: resolution.did, longFormDid, resolution, publicKey: methodPublicKey(resolution.document, keyAgreement!) };
 }
 
 export type Local = { didId: DidId; did: Did; longFormDid: Did };

@@ -189,6 +189,32 @@ export { type Replaced, type ContinuityLink, type Conflict, type Status, type Wi
 export { EMPTY_MESSAGE_TYPE, PING_RESPONSE_TYPE, PROBLEM_REPORT_TYPE, EMPTY_CONTENT_CID, type InboundKind, kindOf, type Member, type ExecutionStatus, type Execution, type InboundFold, foldInbound } from "./fold/inbound.js";
 export { type ConsumptionStatus, type Consumption, type Eligibility, type Candidate, type InvitationStatus, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type Contact, type ContactFold, foldContacts } from "./fold/contacts.js";
-export { type Erasures, type ReadState, foldErasures, erased, retainedRoots, heldRoots, readState } from "./fold/held.js";
-export { type VaultChecks, type VaultFold, type ScanOptions, MAX_READ_BYTES, foldVault, objectReader, checkVault, foldVaultChecked, scanVault } from "./fold/vault.js";
+export {
+  PURE_ACK_EFFECT,
+  PING_RESPONSE_EFFECT,
+  ROTATION_NOTIFICATION_EFFECT,
+  PING_TYPE,
+  BUILT_IN_EFFECTS,
+  type IntentStatus,
+  type PackageStatus,
+  type Package,
+  type SubmissionStatus,
+  type Submission,
+  type TerminationStatus,
+  type Termination,
+  type AckWitness,
+  type AcknowledgementStatus,
+  type Acknowledgement,
+  type EffectStatus,
+  type Outcome,
+  type Work,
+  type Outbound,
+  type Notification,
+  type StrayEvent,
+  type OutboundFold,
+  type OutboundFoldOptions,
+  foldOutbound,
+} from "./fold/outbound.js";
+export { type Erasures, type Released, type ReadState, foldErasures, erased, retainedRoots, heldRoots, readState } from "./fold/held.js";
+export { type VaultChecks, type VaultFold, type FoldOptions, type ScanOptions, MAX_READ_BYTES, foldVault, objectReader, checkVault, foldVaultChecked, scanVault } from "./fold/vault.js";
 export { type Committed, vaultRetention, vaultHeldRoots, collectGarbage, eraseDrafts, erasureClosure, eraseMessage, closeErasures } from "./procedures.js";

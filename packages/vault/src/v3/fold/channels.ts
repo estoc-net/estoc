@@ -226,7 +226,8 @@ function sourceOf(event: VaultEvent<"message.in">, localDidId: DidId | null, loc
   return { event, localDidId, resolution, channel, standing };
 }
 
-function keyAgreementTypeOf(local: LocalDidEntity): KeyType | null {
+/** The curve of the entity's own key-agreement key, null while its document does not read. */
+export function keyAgreementTypeOf(local: LocalDidEntity): KeyType | null {
   const [id] = local.methodIds.keyAgreement;
   if (local.resolution === null || id === undefined) return null;
   try {

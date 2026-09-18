@@ -2,9 +2,9 @@ import type { Event } from "@estoc/event-store/v3";
 import { describe, expect, it } from "vitest";
 import { v7 as uuidv7 } from "uuid";
 
-import { foldErasures, heldRoots, rawCidOfBytes, readState, retainedRoots, VaultEventSet, type Cid, type EventId, type MessageId } from "../../../src/v3/index.js";
+import { foldErasures, foldVault, foldVaultChecked, heldRoots, rawCidOfBytes, readState, retainedRoots, VaultEventSet, type Cid, type EventId, type MessageId } from "../../../src/v3/index.js";
 import { AUTHOR, expectOrderFree } from "./helpers.js";
-import { intent, packageOf, receipt, resolved, vaults } from "./scene.js";
+import { intent, noObjects, packageOf, receipt, resolved, vaults } from "./scene.js";
 
 const held = (events: readonly Event[]): Set<Cid> => heldRoots(VaultEventSet.of(events));
 
@@ -51,23 +51,39 @@ describe("held roots", () => {
     expect(held(scene.events)).toEqual(new Set([root.data.documentCid, foreign, broken]));
   });
 
-  it("hold a prepared envelope until its message erases it, whatever else the message's events say", async () => {
-    const { scene, a0, b0 } = await vaults();
+  it("hold a prepared envelope until its message is submitted, terminated or erased, and hold it under a conflict or a peer's acknowledgement alone", async () => {
+    const { scene, keys, a0, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
     const out = intent(scene, a0, b0);
     const first = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
-    const second = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
     receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1, overrides: { ack: [out.data.messageId] } });
-    scene.add("delivery.submitted", { messageId: out.data.messageId, packageId: first.data.packageId });
-    scene.add("delivery.failed", { messageId: out.data.messageId, code: "cancelled" });
-    const envelopes = [first.data.envelopeCid, second.data.envelopeCid];
-    expect([...held(scene.events)].filter((cid) => envelopes.includes(cid))).toEqual(envelopes);
+    const heldOf = async () => (await foldVaultChecked(scene.set(), keys, noObjects)).held;
+    expect((await heldOf()).has(first.data.envelopeCid)).toBe(true);
 
-    scene.add("message.erased", { messageId: out.data.messageId, dropCids: [first.data.envelopeCid], because: "user" });
-    expectOrderFree(scene.events, (set) => heldRoots(set));
-    const roots = held(scene.events);
+    const second = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    expect([...(await heldOf())].filter((cid) => cid === first.data.envelopeCid || cid === second.data.envelopeCid)).toHaveLength(2);
+
+    scene.add("delivery.submitted", { messageId: out.data.messageId, packageId: first.data.packageId });
+    let roots = await heldOf();
     expect(roots.has(first.data.envelopeCid)).toBe(false);
-    expect(roots.has(second.data.envelopeCid)).toBe(true);
+    expect(roots.has(second.data.envelopeCid)).toBe(false);
     expect(roots.has(out.data.bodyCid)).toBe(true);
+
+    const cancelled = intent(scene, a0, b0);
+    const unsent = packageOf(scene, cancelled, { sender: a0.didId, recipient: b0, resolution: root });
+    scene.add("delivery.failed", { messageId: cancelled.data.messageId, code: "cancelled" });
+    const never = intent(scene, a0, b0);
+    const waiting = packageOf(scene, never, { sender: a0.didId, recipient: b0, resolution: root });
+    scene.add("delivery.failed", { messageId: never.data.messageId, code: "expired" });
+    roots = await heldOf();
+    expect(roots.has(unsent.data.envelopeCid)).toBe(false);
+    expect(roots.has(waiting.data.envelopeCid)).toBe(true);
+
+    scene.add("message.erased", { messageId: never.data.messageId, dropCids: [waiting.data.envelopeCid], because: "user" });
+    roots = await heldOf();
+    expect(roots.has(waiting.data.envelopeCid)).toBe(false);
+    expect(roots.has(never.data.bodyCid)).toBe(true);
+    const checks = (await foldVaultChecked(scene.set(), keys, noObjects)).checks;
+    expectOrderFree(scene.events, (set) => foldVault(set, checks).held);
   });
 });
