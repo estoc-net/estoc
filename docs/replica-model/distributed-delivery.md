@@ -407,9 +407,17 @@ for the normalized innermost DIDComm plaintext of one package or one
 observation. Normalization omits a top-level member whose value is explicitly
 null when its name is one of `from`, `to`, `thid`, `pthid`, `created_time`,
 `expires_time`, `from_prior` or `attachments`; that set is closed and does not
-grow with the headers a library recognizes. Every other present member stays
-in the hash input, including `please_ack: null`, `ack: null`, null values in
-additional headers and null values inside `body` and `attachments`.
+grow with the headers a library recognizes. Every other present top-level
+member stays in the hash input, including `please_ack: null`, `ack: null` and
+null values in additional headers. `body` is unchanged, nested nulls included.
+
+Attachments are normalized as containers, not as JSON values. Each
+descriptor and its `data` object retain only the members the
+[stored attachment profile](vault-events.md#stored-message-document) admits;
+an admitted optional member whose value is null is omitted, and any other
+member is excluded. The JSON value inside a `json` carrier is unchanged,
+nested nulls included, and the ordinary attachment syntax rules still apply,
+including the required non-null `hash` of a `links` carrier.
 
 The sender hashes the normalized plaintext it encrypts; the receiver
 normalizes the accepted plaintext the same way before hashing. A hash helper
