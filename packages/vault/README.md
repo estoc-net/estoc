@@ -225,16 +225,47 @@ the ones it reads, and adds the retention edge by edge and the roots
 it holds; `checkVault` computes every verdict beside it in one motion,
 the seed's and the documents', `objectReader` reading the vault's
 objects with absence, damage and excess size each as no verdict;
-`scanVault` is one scan of a vault, the checks and the fold) and the
-procedures (`procedures.ts`: `vaultRetention` / `vaultHeldRoots` hand
-the event store the fold's retention for collection, export, validation
-and import, and `collectGarbage` is one pass; `eraseMessage` erases a
-message over every root its events and packages still name, in one
-commit, and `closeErasures` appends the equivalent erases a later
-observation or package made an erased message owed, `eraseDrafts` /
-`erasureClosure` being the decisions). The channel model's remaining
-folds — the views and the procedures over them — are being rebuilt on
-this base.
+`scanVault` is one scan of a vault, the checks and the fold), the views
+(`fold/views.ts`, reached as `fold.views`: a channel with its inputs in
+first-receipt order, the outbounds fixed to it, the problem reports
+peers sent beside the outbound each one's thread names when the carrier
+may answer it, and its send gate — the local DID live, the pair not
+denied, its continuity not in conflict, and for automatic work the
+peer not moved on, which `senderGate` / `channelPolicy` decide; and a
+contact, or several shown as one, as the channels it selected followed
+by the related history verified continuity connects to them, each
+message once and each in its own channel, with `writeTo` the distinct
+heads of the selected channels that take a new send now, a `useDid`
+preference matched to the heads at that DID or at a verified local
+successor of it on the way there, and `defaultWriteTo` only when one
+head is left, never a predecessor in place of an unusable head) and
+the procedures (`procedures.ts`: `vaultRetention` / `vaultHeldRoots`
+hand the event store the fold's retention for collection, export,
+validation and import, and `collectGarbage` is one pass;
+`eraseMessage` erases a message over every root its events and
+packages still name, in one commit, and `closeErasures` appends the
+equivalent erases a later observation or package made an erased
+message owed, `eraseDrafts` / `erasureClosure` being the decisions;
+`consumeInvitations` records the consumption each available one-use
+invitation is owed, the first candidate receipt that may be recorded
+now, refused and invalid ones passed over and a waiting one stopping
+the walk, `consumptionDrafts` being the decision; `unfinishedWork`
+lists what an open finds and dispatches nothing of — the outbounds
+still to prepare or dispatch, the pure ACKs and Ping replies
+established inputs may still be given, each a candidate the manual
+completion still holds to current policy and to what the body says,
+under `responseChannel`, the carrier's own channel while its local DID
+sends there and otherwise the unique verified local successor head
+keeping the peer, the notifications verified decisions permit while
+their source, an application input, stays eligible, the decisions
+whose notification intents disagree, the proofs waiting for issuer
+material, and the consumptions; `automaticIntent` names an
+operation's tuple over an input, its message ID and the intent already
+under it; `decisionFor` is the decision a rotation away from a pair
+reuses, defers on or refuses over, from its verified peer-only
+context; `blockChannels` denies pairs once each, `deleteContact`
+appends the tombstone with the denials and erasures the product chose
+alongside, `blockDrafts` / `deleteContactDrafts` being the decisions).
 Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned

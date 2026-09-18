@@ -216,5 +216,33 @@ export {
   foldOutbound,
 } from "./fold/outbound.js";
 export { type Erasures, type Released, type ReadState, foldErasures, erased, retainedRoots, heldRoots, readState } from "./fold/held.js";
+export { type ViewInputs, type SendGate, type RemoteError, type ChannelView, type ContactChannel, type Preference, type ContactView, type Views, senderGate, channelPolicy, foldViews, messageIdsOf } from "./fold/views.js";
 export { type VaultChecks, type VaultFold, type FoldOptions, type ScanOptions, MAX_READ_BYTES, foldVault, objectReader, checkVault, foldVaultChecked, scanVault } from "./fold/vault.js";
-export { type Committed, vaultRetention, vaultHeldRoots, collectGarbage, eraseDrafts, erasureClosure, eraseMessage, closeErasures } from "./procedures.js";
+export {
+  type Committed,
+  type AutomaticIntent,
+  type ResponseChannel,
+  type MissingResponse,
+  type MissingNotification,
+  type NotificationConflict,
+  type PendingWork,
+  type ExistingDecision,
+  type DeleteContactOptions,
+  vaultRetention,
+  vaultHeldRoots,
+  collectGarbage,
+  eraseDrafts,
+  erasureClosure,
+  eraseMessage,
+  closeErasures,
+  consumptionDrafts,
+  consumeInvitations,
+  automaticIntent,
+  responseChannel,
+  unfinishedWork,
+  decisionFor,
+  blockDrafts,
+  blockChannels,
+  deleteContactDrafts,
+  deleteContact,
+} from "./procedures.js";

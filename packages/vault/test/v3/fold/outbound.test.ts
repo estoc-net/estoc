@@ -16,6 +16,7 @@ import {
   executionId,
   foldVault,
   foldVaultChecked,
+  inboundMessageId,
   type DidId,
   type EventId,
   type Keys,
@@ -316,7 +317,7 @@ describe("an outbound message", () => {
     const wrongWire = acknowledged(scene, out, direct, b0, a0, { ackWireMessageId: uuidv7() as WireMessageId });
     const wrongKey = acknowledged(scene, out, direct, b0, a0, { peerPublicKey: b1.publicKey });
     const ofElsewhere = acknowledged(scene, out, elsewhere, b0, a1);
-    const ofNowhere = acknowledged(scene, out, direct, b0, a0, { ackMessageId: bySuccessor.data.messageId.replace(/^./, "f") as MessageId });
+    const ofNowhere = acknowledged(scene, out, direct, b0, a0, { ackMessageId: inboundMessageId(b1.did, a0.did, uuidv7() as WireMessageId) });
     vault = await fold(scene, keys);
     outbound = outboundOf(vault, out);
     expect(outbound.ackWitnesses.map(({ source }) => source.event.eventId)).toEqual([bySuccessor.eventId, direct.eventId]);
