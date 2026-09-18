@@ -199,12 +199,13 @@ intent that expires; the `ackWitnesses`, once a complete package is
 here, the complete witnesses whose `ack` names the message in its
 channel or over a verified role-preserving path, the recorded
 `delivery.acknowledged` checked against the carriers each names — any
-one under the peer's authorized keys matching in full — and `late` by
-the earliest witness against the expiry; an intent derived from an
-input has its `effect` checked against the input's execution, the
-source's witness, the output's channel — the source's, or a verified
-local successor keeping the peer, a path not verified yet being
-pending — and the built-in operation's shape — a pure ACK's frozen
+one under the peer's authorized keys matching in full, one still short
+of its own evidence keeping the record pending — and `late` by the
+earliest witness against the expiry; an intent derived from an input
+has its `effect` checked against the input's execution, the source's
+witness, the output's channel — the source's, or a verified local
+successor keeping the peer, a path not verified yet being pending
+unless continuity is in conflict — and the built-in operation's shape — a pure ACK's frozen
 targets each requested by the source and established for it — and a
 notification against its decision's continuity and selection, a
 control input triggering none; the `outcome` in the order conflict,

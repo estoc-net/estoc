@@ -316,7 +316,7 @@ function outboundOf(messageId: MessageId, events: readonly VaultEvent<"message.o
   if (effect.status === "conflict" && fault === null) fault = effect.because;
 
   const ackWitnesses: AckWitness[] = channel === null || packaged.status !== "complete" ? [] : inputs.witnesses.filter((source) => inputs.continuity.ackPath(channel, source.channel!)).map((source) => ({ source }));
-  const acknowledgements = inputs.acknowledgements.map((event) => acknowledgementOf(event, packaged, ackWitnesses, inputs.evidence));
+  const acknowledgements = inputs.acknowledgements.map((event) => acknowledgementOf(event, packaged, ackWitnesses, inputs.evidence, inputs.continuity));
   const acknowledged = ackWitnesses.length > 0;
   const late = acknowledged && data?.expiresTime != null && Math.min(...ackWitnesses.map(({ source }) => Date.parse(source.event.at))) >= data.expiresTime * 1000;
 
@@ -431,9 +431,11 @@ function terminationOf(event: VaultEvent<"delivery.failed">, data: MessageOut | 
  * one carrier's key, peer key and wire ID exactly. The witnesses of
  * one input under the peer's several authorized keys share its
  * message ID: any one of them matching in full carries the record,
- * and no two lend each other a field.
+ * and no two lend each other a field. One whose own evidence is still
+ * short, and whose fields so far do not refute the record, keeps it
+ * pending: another key's complete witness proves nothing about it.
  */
-function acknowledgementOf(event: VaultEvent<"delivery.acknowledged">, packaged: PackageStatus, witnesses: readonly AckWitness[], evidence: ChannelEvidence): Acknowledgement {
+function acknowledgementOf(event: VaultEvent<"delivery.acknowledged">, packaged: PackageStatus, witnesses: readonly AckWitness[], evidence: ChannelEvidence, continuity: Continuity): Acknowledgement {
   if (packaged.status !== "complete") return { event, status: packaged };
   const { data } = event;
   const carriers = witnesses.filter(({ source }) => source.event.data.messageId === data.ackMessageId);
@@ -449,6 +451,15 @@ function acknowledgementOf(event: VaultEvent<"delivery.acknowledged">, packaged:
     return null;
   });
   if (mismatches.includes(null)) return { event, status: { status: "complete" } };
+  for (const source of evidence.sources.values()) {
+    const carrier = source.event.data;
+    if (carrier.messageId !== data.ackMessageId || carriers.some((witness) => witness.source === source)) continue;
+    if (carrier.wireMessageId !== data.ackWireMessageId || carrier.localKeyName !== data.localKeyName || !carrier.ack.includes(data.messageId)) continue;
+    if (source.resolution !== null && source.resolution.data.peerPublicKey !== data.peerPublicKey) continue;
+    const witness = continuity.witness(source.event.eventId);
+    if (witness.status === "pending") return { event, status: { status: "pending", because: `the carrier it names is no complete witness yet: ${witness.because}` } };
+    if (witness.status === "complete") return { event, status: { status: "pending", because: "the carrier it names has no verified path to this message's channel yet" } };
+  }
   return { event, status: { status: "conflict", because: mismatches.length === 1 ? mismatches[0]! : `none of the ${mismatches.length} carriers with that message ID has the record's wire ID, local key and peer key` } };
 }
 
@@ -502,9 +513,10 @@ function effectOf(data: MessageOut, channel: Channel | null, inputs: Inputs): Ef
 /**
  * The output of an ACK or a Ping reply continues the source's channel,
  * or a verified role-preserving successor that keeps the peer. Another
- * peer is a contradiction; a path not verified here is one only when
- * a decision toward the output's sender is invalid or in conflict,
- * and otherwise still to arrive.
+ * peer, or continuity in conflict at either end, is a contradiction. A
+ * path not verified here is otherwise still to arrive: the intent
+ * names no decision, so one decision failing on its own proves nothing
+ * about the path another may yet establish.
  */
 function continues(data: MessageOut, source: Source, channel: Channel | null, inputs: Inputs): { status: "pending" | "conflict"; because: string } | null {
   if (channel === null || source.channel === null) return null;
@@ -512,10 +524,10 @@ function continues(data: MessageOut, source: Source, channel: Channel | null, in
   if (channel.peerDid !== source.channel.peerDid) return { status: "conflict", because: "the output's peer is not the source's" };
   if (inputs.continuity.ackPath(source.channel, channel)) return null;
   const because = "the output's channel does not continue the source's";
+  if (inputs.continuity.conflicted(source.channel) || inputs.continuity.conflicted(channel)) return { status: "conflict", because: `${because}: the continuity between them is in conflict` };
   const toward = [...inputs.evidence.decisions.values()]
     .filter((decision) => decision.event.data.peerDid === channel.peerDid && decision.event.data.toDidId === data.senderDidId)
     .map((decision) => inputs.continuity.status(decision.event.eventId));
-  for (const status of toward) if (status.status === "invalid" || status.status === "conflict") return { status: "conflict", because: `${because}: ${status.because}` };
   for (const status of toward) if (status.status === "pending-history") return { status: "pending", because: `${because} yet: ${status.because}` };
   return { status: "pending", because: `${because} yet: no verified rotation to the output's sender is here` };
 }

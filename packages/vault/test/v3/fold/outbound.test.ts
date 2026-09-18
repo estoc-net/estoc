@@ -515,13 +515,35 @@ describe("an outbound message", () => {
     expect(outboundOf(waiting, pongAtSuccessor).effect).toEqual(noPath);
     expectOrderFree(undecided.events, (set) => picture(foldVault(set, vault.checks)));
 
-    const broken = new Scene();
-    broken.events.push(...undecided.events);
-    await rotation(broken, keys, { from: a0, peer: b0, to: a1, source, fromPrior: await proof(keys, a0, a2) });
-    const contradicted = await fold(broken, keys);
-    const noContinuation = { status: "conflict", because: expect.stringMatching(/^the output's channel does not continue the source's: /) };
-    expect(outboundOf(contradicted, ackAtSuccessor)).toMatchObject({ effect: noContinuation, outcome: { status: "conflict" }, work: { kind: "none" } });
-    expect(outboundOf(contradicted, pongAtSuccessor).effect).toEqual(noContinuation);
+    const sidelong = new Scene();
+    sidelong.events.push(...undecided.events);
+    const invalid = await rotation(sidelong, keys, { from: a0, peer: b0, to: a1, source, fromPrior: await proof(keys, a0, a2) });
+    let beside = await fold(sidelong, keys);
+    expect(beside.continuity.status(invalid.eventId).status).toBe("invalid");
+    expect(beside.continuity.conflicts).toEqual([]);
+    expect(outboundOf(beside, ackAtSuccessor).effect).toEqual(noPath);
+    expect(outboundOf(beside, pongAtSuccessor).effect).toEqual(noPath);
+    const trigger = receipt(new Scene(), { local: a0, peer: b0, resolution: root, ordinal: 4 });
+    await rotation(sidelong, keys, { from: a0, peer: b0, to: a1, source: trigger });
+    beside = await fold(sidelong, keys);
+    const unsourced = { status: "pending", because: "the output's channel does not continue the source's yet: the source it names is not here" };
+    expect(outboundOf(beside, ackAtSuccessor)).toMatchObject({ effect: unsourced, work: { kind: "none", because: unsourced.because } });
+    expect(outboundOf(beside, pongAtSuccessor).effect).toEqual(unsourced);
+    sidelong.events.push(trigger);
+    beside = await fold(sidelong, keys);
+    expect(outboundOf(beside, ackAtSuccessor)).toMatchObject({ effect: { status: "complete" }, work: { kind: "prepare" } });
+    expect(outboundOf(beside, pongAtSuccessor).effect).toEqual({ status: "complete" });
+    expectOrderFree(sidelong.events, (set) => picture(foldVault(set, beside.checks)));
+
+    const forked = new Scene();
+    forked.events.push(...scene.events.filter((event) => event === ackAtSuccessor || !variants.includes(event as VaultEvent<"message.out">)));
+    receipt(forked, { local: a2, peer: b0, resolution: resolved(forked, a2.didId, b0), ordinal: 5 });
+    await rotation(forked, keys, { from: a0, peer: b0, to: a2, source: null });
+    const split = await fold(forked, keys);
+    expect(split.continuity.conflicted({ localDid: a0.did, peerDid: b0.did })).toBe(true);
+    const inConflict = { status: "conflict", because: "the output's channel does not continue the source's: the continuity between them is in conflict" };
+    expect(outboundOf(split, ackAtSuccessor)).toMatchObject({ effect: inConflict, outcome: { status: "conflict" }, work: { kind: "none" } });
+    expect(outboundOf(split, pongAtSuccessor).effect).toEqual(inConflict);
 
     receipt(scene, { local: a1, peer: b0, resolution: resolved(scene, a1.didId, b0), ordinal: 2 });
     const manual = await rotation(scene, keys, { from: a1, peer: b0, to: a2, source: null });
@@ -650,24 +672,37 @@ describe("an outbound message", () => {
     packageOf(scene, out, { sender: a0.didId, recipient: peer, resolution: root });
     const wire = uuidv7();
     const underFirst = receipt(scene, { local: a0, peer, resolution: root, ordinal: 1, wire, overrides: { ack: [out.data.messageId] } });
-    const underSecond = receipt(scene, { local: a0, peer, resolution: resolved(scene, a0.didId, peer, { peerPublicKey: b1.publicKey }), ordinal: 2, wire, overrides: { ack: [out.data.messageId] } });
+    const secondRoot = resolved(scene, a0.didId, peer, { peerPublicKey: b1.publicKey });
+    const underSecond = receipt(scene, { local: a0, peer, resolution: secondRoot, ordinal: 2, wire, overrides: { ack: [out.data.messageId] } });
     const ofSecond = acknowledged(scene, out, underSecond, peer, a0, { peerPublicKey: b1.publicKey });
     const ofFirst = acknowledged(scene, out, underFirst, peer, a0);
     const ofNeither = acknowledged(scene, out, underFirst, peer, a0, { peerPublicKey: b0.publicKey });
+    const ofOtherWire = acknowledged(scene, out, underSecond, peer, a0, { peerPublicKey: b1.publicKey, ackWireMessageId: uuidv7() as WireMessageId });
     const vault = await fold(scene, keys);
     expect(underSecond.data.messageId).toBe(underFirst.data.messageId);
     expect(outboundOf(vault, out)).toMatchObject({ ackWitnesses: [{ source: { event: underFirst } }, { source: { event: underSecond } }], acknowledged: true });
+    const none = { status: "conflict", because: "none of the 2 carriers with that message ID has the record's wire ID, local key and peer key" };
     expect(outboundOf(vault, out).acknowledgements.map((a) => [a.event.eventId, a.status])).toEqual([
       [ofSecond.eventId, { status: "complete" }],
       [ofFirst.eventId, { status: "complete" }],
-      [ofNeither.eventId, { status: "conflict", because: "none of the 2 carriers with that message ID has the record's wire ID, local key and peer key" }],
+      [ofNeither.eventId, none],
+      [ofOtherWire.eventId, none],
     ]);
     expectSameOverEveryOrder(scene, vault.checks);
 
     const alone = new Scene();
     alone.events.push(...scene.events.filter((event) => event !== underFirst));
     const second = outboundOf(foldVault(alone.set(), vault.checks), out);
-    expect(second.acknowledgements.map((a) => a.status)).toEqual([{ status: "complete" }, { status: "conflict", because: "the peer key is not the carrier's" }, { status: "conflict", because: "the peer key is not the carrier's" }]);
+    const otherKey = { status: "conflict", because: "the peer key is not the carrier's" };
+    expect(second.acknowledgements.map((a) => a.status)).toEqual([{ status: "complete" }, otherKey, otherKey, { status: "conflict", because: "the wire ID is not the carrier's" }]);
+
+    const unresolved = new Scene();
+    unresolved.events.push(...scene.events.filter((event) => event !== secondRoot));
+    const short = outboundOf(foldVault(unresolved.set(), vault.checks), out);
+    const unproven = { status: "pending", because: "the carrier it names is no complete witness yet: the resolution it names is not here" };
+    expect(short).toMatchObject({ ackWitnesses: [{ source: { event: underFirst } }], acknowledged: true, submitted: false, released: false });
+    expect(short.acknowledgements.map((a) => a.status)).toEqual([unproven, { status: "complete" }, unproven, { status: "conflict", because: "the wire ID is not the carrier's" }]);
+    expectOrderFree(unresolved.events, (set) => picture(foldVault(set, vault.checks)));
   });
 
   it("names a carrier's ACK targets: the established inputs its request names in its channel or a verified predecessor, unambiguous, not under a receipt conflict, in first-receipt order", async () => {
