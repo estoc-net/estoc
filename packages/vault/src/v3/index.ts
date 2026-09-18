@@ -186,6 +186,7 @@ export {
   verifyProofs,
 } from "./fold/channels.js";
 export { type Replaced, type ContinuityLink, type Conflict, type Status, type Witness, type Continuity, foldContinuity } from "./fold/continuity.js";
+export { EMPTY_MESSAGE_TYPE, PING_RESPONSE_TYPE, PROBLEM_REPORT_TYPE, EMPTY_CONTENT_CID, type InboundKind, kindOf, type Member, type ExecutionStatus, type Execution, type InboundFold, foldInbound } from "./fold/inbound.js";
 export { type ConsumptionStatus, type Consumption, type Eligibility, type Candidate, type InvitationStatus, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type Contact, type ContactFold, foldContacts } from "./fold/contacts.js";
 export { type Erasures, type ReadState, foldErasures, erased, retainedRoots, heldRoots, readState } from "./fold/held.js";

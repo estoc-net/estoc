@@ -19,6 +19,7 @@ import { foldContacts, type ContactFold } from "./contacts.js";
 import { foldContinuity, type Continuity } from "./continuity.js";
 import { verifyResolutions, type EvidenceCheck, type ReadObject } from "./evidence.js";
 import { foldErasures, heldRoots, retainedRoots, type Erasures } from "./held.js";
+import { foldInbound, type InboundFold } from "./inbound.js";
 import { foldInvitations, type InvitationFold } from "./invitations.js";
 import { foldMediations, verifyMediationKeys, type KeyCheck, type MediationFold } from "./mediation.js";
 import { foldRoutes, verifyDidKeys, type RouteFold } from "./routes.js";
@@ -41,6 +42,7 @@ export interface VaultFold {
   readonly routes: RouteFold;
   readonly channels: ChannelEvidence;
   readonly continuity: Continuity;
+  readonly inbound: InboundFold;
   readonly invitations: InvitationFold;
   readonly contacts: ContactFold;
   readonly erasures: Erasures;
@@ -62,6 +64,7 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}): VaultFo
   const channels = foldChannelEvidence(set, routes, all);
   const continuity = foldContinuity(set, channels);
   const erasures = foldErasures(set);
+  const inbound = foldInbound(channels, continuity, erasures);
   return {
     set,
     checks: all,
@@ -71,7 +74,8 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}): VaultFo
     routes,
     channels,
     continuity,
-    invitations: foldInvitations(set, routes, channels, continuity, erasures),
+    inbound,
+    invitations: foldInvitations(set, routes, channels, continuity, inbound, erasures),
     contacts: foldContacts(set),
     erasures,
     retained: retainedRoots(set, erasures),
