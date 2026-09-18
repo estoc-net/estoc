@@ -24,6 +24,18 @@
   disclosed only once its registration is verified, an `oob` disclosure
   carried by an invitation with the long form. The shared protocol
   constants gain `RECIPIENT_QUERY` and `RECIPIENT`.
+- **The rotation proof is the vault's to judge.** The didcomm binding is
+  now Estoc's build of didcomm-rust, `@estoc/didcomm` (peer, types) and
+  `@estoc/didcomm-node`, whose `unpack` can leave a `from_prior` header
+  unverified. `unpack` under `@estoc/agent-core/v3` opens an inbound
+  envelope that way: the binding checks the envelope's integrity, the
+  recipient key and the sealer's authorization, and hands back the
+  plaintext, the sealer as `sender` (null for an anonymous envelope,
+  signed or not) and the proof as the string it came as, unresolved and
+  unverified. An envelope that is not encrypted, or a proof that is not
+  a string, is `EnvelopeRefused`; a binding that verified the proof on
+  its own is refused as the wrong build. The mediator link is unchanged
+  and still verifies a proof at unpack.
 - **Realigned to the channel model** with `@estoc/vault/v3`: `send`,
   `prepare`, `submit`, the `Outbox`, the acceptance ledger and the
   receive gate, receiver and resolution accounting were built on

@@ -221,13 +221,21 @@ await bobAgent.acceptInvitation(url, "Alice");               // adds her, introd
 ### Didcomm API
 
 The agent takes `{ Message, FromPrior }` from whichever didcomm-rust build
-your runtime loads — `didcomm` (browser/workerd WASM, instantiated your way)
-or `didcomm-node`. Both export the same classes. This package refuses to
-know how the WASM is instantiated, because every bundler and runtime does it
-differently.
+your runtime loads — `@estoc/didcomm` (browser/workerd WASM, instantiated
+your way) or `@estoc/didcomm-node`. Both export the same classes. This
+package refuses to know how the WASM is instantiated, because every bundler
+and runtime does it differently.
 
-`didcomm` is a peer dependency for its types only; install the build you
-inject.
+The Estoc builds are didcomm-rust with one option added: `unpack` can leave
+a `from_prior` header unverified, so that a rotation proof whose issuer is
+out of reach does not stop the message it rides from being received. The v3
+agent opens inbound envelopes that way and has the vault judge the proof
+from the evidence it records; the upstream builds cannot open them so, and
+the v3 `unpack` refuses one. The mediator link still verifies the proof at
+unpack.
+
+`@estoc/didcomm` is a peer dependency for its types only; install the build
+you inject.
 
 `fetch`, `WebSocket` and `resolveDid` are injectable too; the tests run two
 agents against an in-process fake mediator that way (`test/fake-mediator.ts`).

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Message } from "didcomm-node";
+import { Message } from "@estoc/didcomm-node";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 

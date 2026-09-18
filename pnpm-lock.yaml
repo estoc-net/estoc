@@ -111,6 +111,12 @@ importers:
         specifier: ^2.0.32
         version: 2.0.32
     devDependencies:
+      '@estoc/didcomm':
+        specifier: ^0.4.1-estoc.1
+        version: 0.4.1-estoc.1
+      '@estoc/didcomm-node':
+        specifier: ^0.4.1-estoc.1
+        version: 0.4.1-estoc.1
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
@@ -1327,6 +1333,12 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@estoc/didcomm-node@0.4.1-estoc.1':
+    resolution: {integrity: sha512-u/iPIGrMicOztyxRRvs1V89CZ2f9a5nld8RPz97eDuRoQ/eP+ZNjExTNA2Pk6x6cTr9Nv34J2FvgKBlcfE2+rw==}
+
+  '@estoc/didcomm@0.4.1-estoc.1':
+    resolution: {integrity: sha512-cK0GtJL2SpO4zYjvbNhg6AVTqIQhWOix4f2lJbJWEwQ4D/Vt9wZ4wpwEODOGYBGKlNputIETvMFstG8z4DxDVQ==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -4130,6 +4142,10 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.1':
     optional: true
+
+  '@estoc/didcomm-node@0.4.1-estoc.1': {}
+
+  '@estoc/didcomm@0.4.1-estoc.1': {}
 
   '@img/colour@1.1.0': {}
 

@@ -11,8 +11,11 @@
  * evidence committed, read back and handed to didcomm under the
  * spelling it asks for (`evidence`). The protocols themselves —
  * message types and shapes — are shared with the package root under
- * `protocol/`.
+ * `protocol/`; `unpack` opens an inbound envelope there with its
+ * rotation proof left for the vault to judge.
  */
+
+export { EnvelopeRefused, unpack, type Unpacked } from "../protocol/didcomm.js";
 
 export { EntityConflict, MediatorRefused, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
