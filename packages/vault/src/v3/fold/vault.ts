@@ -1,7 +1,8 @@
 /**
  * The whole fold: every fold of the package over one event set, each
- * fed the ones it reads, and what the runtime asks of them together —
- * the retention edge by edge and the roots they hold. What needs the
+ * fed the ones it reads, the views over them, and what the runtime
+ * asks of them together — the retention edge by edge and the roots
+ * they hold. What needs the
  * seed or the retained objects is checked once beside the fold and the
  * verdicts handed in, so the fold itself stays a pure function of the
  * set and its checks: the same set and checks give the same fold in
@@ -25,6 +26,7 @@ import { foldMediations, verifyMediationKeys, type KeyCheck, type MediationFold 
 import { foldOutbound, type OutboundFold, type OutboundFoldOptions } from "./outbound.js";
 import { foldRoutes, verifyDidKeys, type RouteFold } from "./routes.js";
 import { VaultEventSet } from "./set.js";
+import { foldViews, type Views } from "./views.js";
 
 /** The verdicts a fold cannot reach on its own: the seed's on each entity, the retained documents' on each snapshot and on each proof. */
 export type VaultChecks = {
@@ -48,6 +50,8 @@ export interface VaultFold {
   readonly contacts: ContactFold;
   readonly outbound: OutboundFold;
   readonly erasures: Erasures;
+  /** what a person browses over the folds above, built as asked */
+  readonly views: Views;
   /** each accepted event with each root it still retains */
   readonly retained: readonly Retained[];
   /** the roots `retained` holds: what collection keeps and an export copies */
@@ -70,6 +74,7 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}, options:
   const erasures = foldErasures(set);
   const inbound = foldInbound(channels, continuity, erasures);
   const outbound = foldOutbound(set, routes, channels, continuity, inbound, erasures, all.resolutionChecks, options);
+  const contacts = foldContacts(set);
   return {
     set,
     checks: all,
@@ -81,9 +86,10 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}, options:
     continuity,
     inbound,
     invitations: foldInvitations(set, routes, channels, continuity, inbound, erasures),
-    contacts: foldContacts(set),
+    contacts,
     outbound,
     erasures,
+    views: foldViews({ routes, continuity, inbound, outbound, contacts }),
     retained: retainedRoots(set, erasures, outbound.released),
     held: heldRoots(set, erasures, outbound.released),
   };
