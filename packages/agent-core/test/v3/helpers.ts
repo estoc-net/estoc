@@ -1,4 +1,4 @@
-import { FromPrior, Message } from "didcomm-node";
+import { FromPrior, Message } from "@estoc/didcomm-node";
 
 import { resolveDIDCommDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
 import { openNodeSqlite } from "@estoc/event-store/node";

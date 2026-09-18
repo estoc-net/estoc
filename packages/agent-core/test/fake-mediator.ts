@@ -1,5 +1,5 @@
-import { Message } from "didcomm-node";
-import type { IMessage } from "didcomm-node";
+import { Message } from "@estoc/didcomm-node";
+import type { IMessage } from "@estoc/didcomm-node";
 import { encodeLongForm, resolveDIDCommDoc } from "@estoc/did-peer";
 import type { Secret } from "@estoc/did-peer";
 import bs58 from "bs58";

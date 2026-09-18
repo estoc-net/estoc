@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FromPrior, Message } from "didcomm-node";
+import { FromPrior, Message } from "@estoc/didcomm-node";
 
 import { resolveDIDCommDoc, type DIDDoc, type Secret, type VerificationMethod } from "@estoc/did-peer";
 import { MemoryBackend, compareEvents, type Event } from "@estoc/event-store";

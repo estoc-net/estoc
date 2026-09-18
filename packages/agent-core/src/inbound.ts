@@ -161,7 +161,7 @@ export class Inbound {
   /** One opened envelope, through every step; throws when a step fails — a document that does not resolve now, a disk that will not take the body. */
   async handle(opened: Opened): Promise<Handled> {
     const { msg, metadata, sender, recipient, documents } = opened;
-    // 1. the channel it proves: the keys didcomm verified against, and the key of ours it found a secret for
+    // the channel it proves: the keys didcomm verified against, and the key of ours it found a secret for
     const senderDoc = await this.document(sender, documents);
     const signer = signerOf(metadata);
     const signerDoc = signer === null || signer === sender ? null : await this.document(signer, documents);
@@ -171,13 +171,13 @@ export class Inbound {
       return { outcome: "ignored" };
     }
     const { pair } = proved;
-    // 2. seen before: recorded, so everything before the record was done too
+    // seen before: recorded, so everything before the record was done too
     const key = seenKey(pair.peerKey, msg.id);
     if (this.seen.has(key)) {
       this.log(`${msg.type} ${msg.id} arrived again; recorded already`);
       return { outcome: "duplicate" };
     }
-    // 3. what a device writes on sight
+    // what a device writes on sight
     await noteFirstSeen(this.events, this.fold, {
       ...pair,
       kind: proved.kind,
@@ -187,16 +187,14 @@ export class Inbound {
     if (sender !== null && senderDoc !== null) {
       await notePeerResolved(this.events, this.fold, resolvedOf(pair, sender, senderDoc));
     }
-    // 4. the rotation it vouched for (`peer.rotated`), before anything asks who the channel belongs to
+    // the rotation it vouched for (`peer.rotated`), before anything asks who the channel belongs to
     const mid = await this.noteRotation(opened, pair, this.mint());
-    // 5. an invitation of ours
     const refusal = await this.takeInvitation(pair, sender);
-    // 6. whose it is
     const homed = await this.home(pair, sender, msg.type, refusal);
-    // 7. what the message carries, lifted out (`lift.ts`): a share's blocks to `blobs/`, its body stored without them
+    // what the message carries, lifted out (`lift.ts`): a share's blocks to `blobs/`, its body stored without them
     const lifted: Lifted =
       msg.type === OBJECT_SHARE ? await keepShare(msg as PlainMessage, this.opened.vault.blobs, (line) => this.log(line)) : { plaintext: msg as PlainMessage, attachments: [] };
-    // 8. the message, body first: the last event, and the one a redelivery is told apart by
+    // the message, body first: the last event, and the one a redelivery is told apart by
     await recordMessage(this.opened.vault, this.fold, "in", utf8.encode(JSON.stringify(lifted.plaintext)), skeletonOf(proved, sender, msg, mid, lifted.attachments));
     this.seen.add(key);
     const found = await messageRecord(this.fold, this.opened.vault.blobs, mid);
@@ -204,7 +202,6 @@ export class Inbound {
       throw new Error(`${mid} was recorded and is not in the fold`);
     }
     const contact = homed === null ? null : this.contactOf(homed.cid);
-    // 9. the answer
     await this.answer(found, contact, sender);
     if (homed === null) {
       return { outcome: "recorded", record: found, contact: null };

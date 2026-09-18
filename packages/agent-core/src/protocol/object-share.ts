@@ -17,6 +17,7 @@ import {
   type TreeFiles,
   type VerifiedTree,
 } from "@estoc/folder-object";
+import { base64url } from "multiformats/bases/base64";
 
 import type { PlainMessage } from "../records.js";
 import { AES256_GCM_HKDF_1MB, decryptStream } from "./streaming-aead.js";
@@ -465,19 +466,9 @@ export function missingBytes(tree: VerifiedTree): number {
 }
 
 export function bytesToBase64url(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return base64url.baseEncode(bytes);
 }
 
 function base64urlToBytes(text: string): Uint8Array {
-  const b64 = text.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
+  return base64url.baseDecode(text);
 }

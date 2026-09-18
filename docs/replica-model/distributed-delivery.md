@@ -403,9 +403,35 @@ this projection.
 ### 5.3 Exact plaintext hash
 
 `plaintextHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON
-for the complete innermost DIDComm plaintext actually encrypted by one
-package or received in one observation. It includes `from`, `to`, `from_prior`
-and every present header.
+for the normalized innermost DIDComm plaintext of one package or one
+observation. Normalization omits a top-level member whose value is explicitly
+null when its name is one of `from`, `to`, `thid`, `pthid`, `created_time`,
+`expires_time`, `from_prior` or `attachments`; that set is closed and does not
+grow with the headers a library recognizes. Every other present top-level
+member stays in the hash input, including `please_ack: null`, `ack: null` and
+null values in additional headers. `body` is unchanged, nested nulls included.
+
+Attachments are normalized as containers, not as JSON values. Each
+descriptor and its `data` object retain only the members the
+[stored attachment profile](vault-events.md#stored-message-document) admits;
+an admitted optional member whose value is null is omitted, and any other
+member is excluded. The JSON value inside a `json` carrier is unchanged,
+nested nulls included, and the ordinary attachment syntax rules still apply,
+including the required non-null `hash` of a `links` carrier.
+
+The single-carrier rule of that profile is checked on the decrypted `data`
+object as received, before it is projected onto a typed carrier and before
+any member is discarded: exactly one of `base64`, `json` and `links` is
+present, counted by presence, so `json: null` is a present carrier. A second
+recognized carrier is not unsupported metadata and is never dropped to make
+the attachment valid. A library that projects attachment data onto one
+carrier must therefore reject an ambiguous object itself, or hand the
+receiver enough of the original to reject it before acceptance.
+
+The sender hashes the normalized plaintext it encrypts; the receiver
+normalizes the accepted plaintext the same way before hashing. A hash helper
+that hashes its input unchanged requires that normalization to have happened
+before the call.
 
 An outbound `messageId` has one fixed package. Its intent hash matches the
 intent; its plaintext hash preserves the exact prepared addressing and proof.

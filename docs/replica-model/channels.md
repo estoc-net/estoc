@@ -111,7 +111,8 @@ authenticated unpack independently of `from_prior` verification. It MUST return
 the original string-valued `from_prior` unchanged and distinguish an unverified
 claim from verified proof metadata. Missing predecessor material, a malformed
 JWT or an invalid proof MUST NOT prevent otherwise valid authenticated receipt
-and its pickup ACK. A non-string header still fails ordinary wire syntax checks.
+and its pickup ACK. An absent or explicitly null `from_prior` header denotes no
+carried proof; any other non-string value fails ordinary wire syntax checks.
 
 The adapter MUST retain all envelope integrity, current-sender authorization,
 recipient and cross-layer addressing checks. Failure of those checks follows
@@ -122,6 +123,18 @@ DIDComm/JOSE verification and encoding APIs against the exact predecessor
 document. Never strip the proof or treat decoding as verification. A library
 that couples proof verification to unpack needs an explicit deferred-proof
 mode; waiting unopened for continuity is not a phase-1 fallback.
+
+The authenticated recipient is the local key-agreement method that
+successfully decrypts the authcrypt layer. Recipient identifiers from an
+anonymous wrapper MUST NOT be attributed to that layer; a phase-1 receiver
+whose library does not report the authcrypt layer's own recipients MUST
+refuse an authcrypt layer wrapped in an anonymous one, sender protection
+included. The plaintext `to` header is retained as audience information and
+MUST NOT replace envelope-derived recipient evidence. Its absence, or its
+failure to name the local recipient, does not by itself fail the phase-1
+receive gate; an implementation MAY record a bounded diagnostic. This
+profile follows the DIDComm Message Headers acceptance rule for `to` where
+it conflicts with the Message Layer Addressing Consistency rule.
 
 Save the message in its actual authenticated sender/recipient channel while
 continuity is pending or invalid. Invalid proof authorizes no operation based

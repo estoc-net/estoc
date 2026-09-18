@@ -23,6 +23,9 @@ importers:
       '@estoc/daemon':
         specifier: workspace:^
         version: link:../packages/daemon
+      '@estoc/didcomm':
+        specifier: ^0.4.1-estoc.3
+        version: 0.4.1-estoc.3
       '@estoc/event-store':
         specifier: workspace:^
         version: link:../packages/event-store
@@ -41,9 +44,6 @@ importers:
       '@vitejs/plugin-vue':
         specifier: ^5.2.0
         version: 5.2.4(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(vue@3.5.41(typescript@5.8.3))
-      didcomm:
-        specifier: ^0.4.1
-        version: 0.4.1
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
@@ -111,15 +111,21 @@ importers:
         specifier: ^2.0.32
         version: 2.0.32
     devDependencies:
+      '@estoc/didcomm':
+        specifier: ^0.4.1-estoc.3
+        version: 0.4.1-estoc.3
+      '@estoc/didcomm-node':
+        specifier: ^0.4.1-estoc.3
+        version: 0.4.1-estoc.3
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
-      didcomm:
-        specifier: ^0.4.1
-        version: 0.4.1
       didcomm-node:
         specifier: ^0.4.1
         version: 0.4.1
+      jose:
+        specifier: ^6.0.0
+        version: 6.2.9
       typescript:
         specifier: ~5.8.0
         version: 5.8.3
@@ -1328,6 +1334,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@estoc/didcomm-node@0.4.1-estoc.3':
+    resolution: {integrity: sha512-EoAZHCUlAsjOcSTBK84o55WidCf7rOmjtt4yB9CUB7Brfa/4sWG1s5a5pfq+zX7yIKgjG120UlcbBTQeaQnQHw==}
+
+  '@estoc/didcomm@0.4.1-estoc.3':
+    resolution: {integrity: sha512-uyf6f+XXt1kbWFrSx6VC9xzpTzBqVPOapKpkOU1vhp7fRGM9YmOTCEkDYTFntwuwUC3TBXOz7KfIElATXVb8iQ==}
+
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
     engines: {node: '>=18'}
@@ -2063,9 +2075,6 @@ packages:
 
   didcomm-node@0.4.1:
     resolution: {integrity: sha512-5vR2T6AyFhw20LI3Hu7Xps1nYimpooEIbefweIAsZ964p8sSnWW07qulvnRwd1fMihtUaAK+DlwGkR4jZIf6Mg==}
-
-  didcomm@0.4.1:
-    resolution: {integrity: sha512-fcGSfLL5ri18vbbjRexHWVk2RAxZ/eBlyKeLCzS/3k5RdogqJbnUEcNsq64at1nA1u16ENa1bsZodGeRoq84ZA==}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -4131,6 +4140,10 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
+  '@estoc/didcomm-node@0.4.1-estoc.3': {}
+
+  '@estoc/didcomm@0.4.1-estoc.3': {}
+
   '@img/colour@1.1.0': {}
 
   '@img/sharp-darwin-arm64@0.35.2':
@@ -4853,8 +4866,6 @@ snapshots:
   did-resolver@4.1.0: {}
 
   didcomm-node@0.4.1: {}
-
-  didcomm@0.4.1: {}
 
   dunder-proto@1.0.1:
     dependencies:

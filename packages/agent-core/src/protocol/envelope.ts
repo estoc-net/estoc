@@ -1,3 +1,5 @@
+import { base64url } from "multiformats/bases/base64";
+
 /**
  * What a packed envelope says about itself before it is opened: the
  * protected header of a JWE or JWS, or the `typ` of a plaintext. Read
@@ -18,9 +20,7 @@ export interface EnvelopeHeader {
 
 function base64urlJson(text: string): Record<string, unknown> | null {
   try {
-    const bin = atob(text.replace(/-/g, "+").replace(/_/g, "/"));
-    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(base64url.baseDecode(text)));
     return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;

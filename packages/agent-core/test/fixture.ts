@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { FromPrior, Message } from "didcomm-node";
+import { FromPrior, Message } from "@estoc/didcomm-node";
 
 import { resolveDIDCommDoc, type DIDDoc } from "@estoc/did-peer";
 import { MemoryBackend } from "@estoc/event-store";

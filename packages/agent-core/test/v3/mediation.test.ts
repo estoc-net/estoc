@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { longToShort } from "@estoc/did-peer";
 import { mediationKeyName, scanVault, type Did, type MediationId } from "@estoc/vault/v3";
 
-import { Message } from "didcomm-node";
+import { Message } from "@estoc/didcomm-node";
 
 import { resolveDIDCommDoc, type Secret } from "@estoc/did-peer";
 
