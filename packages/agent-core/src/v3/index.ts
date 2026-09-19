@@ -106,6 +106,8 @@ export {
   DISCARDED_KEPT,
   ENDED_KEPT,
   MAX_HELD_BYTES,
+  MAX_WAITING,
+  REASON_KEPT,
   Receiver,
   deliveryKey,
   type Authenticated,
@@ -118,4 +120,5 @@ export {
   type ReceiverOptions,
   type Source,
   type WaitingDelivery,
+  type Watch,
 } from "./receive/receiver.js";

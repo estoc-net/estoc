@@ -1,15 +1,10 @@
 /**
  * The hard gate before the vault, as pure decisions over the fold and
- * the envelope. Before anything is decrypted, the recipients an
- * envelope names decide whether this vault may open it at all: the
- * exact key-agreement method of a DID of its own whose route still
- * takes input. The sender named on the outside is then resolved from
- * what the vault holds, never from the network: a numalgo-4 long form
- * derives its own document, a short form has one only when its long
- * form is in evidence, and anything else cannot be authenticated. After
- * the envelope opens, what it proves of its sender is checked against
- * that document: the key that sealed it authorized there for key
- * agreement, and the outer header naming that same key twice.
+ * the envelope: which key of this vault an envelope may be opened with,
+ * decided before anything is decrypted; the sender's document, from
+ * what the vault holds and never from the network; and, once the
+ * envelope is open, whether what it proves of its sender matches that
+ * document.
  */
 
 import { base64urlToUtf8, isPeerDID4, isShortForm } from "@estoc/did-peer";
@@ -22,8 +17,8 @@ import { sameDid } from "../same-did.js";
 
 export type Recipients =
   | { verdict: "eligible"; kid: DidUrl; didId: DidId; did: Did; localKeyName: KeyName }
-  /** a recipient of this vault lacks only something recoverable: the delivery waits, unopened */
-  | { verdict: "pending"; reason: string }
+  /** a recipient of this vault lacks only something recoverable: the delivery waits, unopened, on those entities */
+  | { verdict: "pending"; reason: string; waitingOn: DidId[] }
   | { verdict: "terminal"; reason: string };
 
 /**
@@ -31,27 +26,30 @@ export type Recipients =
  * recipient, in the envelope's order, naming the exact key-agreement
  * method of an entity that may receive — live, or retired with its
  * route intact, since retirement ends new sending but not the draining
- * of what was addressed here. Short of one, a recipient whose entity
- * lacks only something recoverable — its route's configuration, a
- * grant, the key check — keeps the delivery pending. Everything else
- * is terminal: a method the document does not have or authorizes only
- * for authentication, a route or mediation retired or in conflict, and
- * an envelope naming no key of this vault at all, which is told apart
- * so that a vault restored to before one of its DIDs was created shows
- * what it lacks without claiming why.
+ * of what was addressed here. A method is named by whatever follows
+ * the DID in the document's own `id`, a fragment or a query with one.
+ * Short of an eligible recipient, one whose entity lacks only something
+ * recoverable — its route's configuration, a grant, the key check —
+ * keeps the delivery pending. Everything else is terminal: a method the
+ * document does not have or authorizes only for authentication, a
+ * route or mediation retired or in conflict, and an envelope naming no
+ * key of this vault at all, which is told apart so that a vault
+ * restored to before one of its DIDs was created shows what it lacks
+ * without claiming why.
  */
 export function classifyRecipients(fold: VaultFold, kids: readonly string[]): Recipients {
   if (kids.length === 0) return { verdict: "terminal", reason: "the envelope names no recipient key" };
   const refused: string[] = [];
   const pending: string[] = [];
+  const waitingOn: DidId[] = [];
   let anyOfOurs = false;
   for (const kid of kids) {
-    const [did, fragment] = splitDidUrl(kid);
-    const didId = fragment.startsWith("#") ? fold.routes.entityOfDid(did) : null;
+    const [did, reference] = splitDidUrl(kid);
+    const didId = fold.routes.entityOfDid(did);
     const entity = didId === null ? undefined : fold.routes.dids.get(didId);
     if (didId === null || entity === undefined || entity.created === null) continue;
     anyOfOurs = true;
-    const named = (ids: readonly DidUrl[]): boolean => ids.some((id) => splitDidUrl(id)[1] === fragment);
+    const named = (ids: readonly DidUrl[]): boolean => ids.some((id) => splitDidUrl(id)[1] === reference);
     if (!named(entity.methodIds.keyAgreement)) {
       refused.push(named(entity.methodIds.authentication) ? `${kid} is an authentication method, not a key-agreement one` : `${kid} names no method of ${did}`);
       continue;
@@ -61,13 +59,14 @@ export function classifyRecipients(fold: VaultFold, kids: readonly string[]): Re
         return { verdict: "eligible", kid: kid as DidUrl, didId, did: entity.created.did, localKeyName: entity.keyNames.keyAgreement };
       case "pending":
         pending.push(`${kid}: ${entity.faults.join("; ")}`);
+        waitingOn.push(didId);
         break;
       case "terminal":
         refused.push(`${kid}: its route or mediation is retired or in conflict`);
         break;
     }
   }
-  if (pending.length > 0) return { verdict: "pending", reason: pending.join("; ") };
+  if (pending.length > 0) return { verdict: "pending", reason: pending.join("; "), waitingOn };
   if (!anyOfOurs) return { verdict: "terminal", reason: `local recipient material is unavailable for ${kids.join(", ")}; the delivery was discarded` };
   return { verdict: "terminal", reason: refused.join("; ") };
 }
@@ -91,13 +90,11 @@ export function sealingOf(packed: string): Sealing {
 
 /**
  * The document of the sender the outer header names, from what the
- * vault holds alone. Null for an anonymous seal. A sender that cannot
- * be resolved here cannot be authenticated, which is terminal: another
- * DID method, since every channel endpoint is a numalgo-4 peer; a long
- * form that does not derive its document; and a short form whose long
- * form is not in evidence, which is told without naming the claimed
- * sender as anyone in particular — a vault restored to before that long
- * form arrived sees exactly this.
+ * vault holds alone; null for an anonymous seal. A sender that cannot
+ * be resolved here cannot be authenticated, which is terminal. A short
+ * form whose long form is not in evidence is told without naming the
+ * claimed sender as anyone in particular: a vault restored to before
+ * that long form arrived sees exactly this.
  */
 export async function senderEvidence(fold: VaultFold, skid: string | null): Promise<{ resolution: Resolution | null } | { terminal: string }> {
   if (skid === null) return { resolution: null };
@@ -124,11 +121,8 @@ export type SenderProof = { sender: AuthenticatedSender | null } | { refused: st
 /**
  * What an opened envelope proves of its sender: null when no one sealed
  * it, in which case the plaintext may not claim a sender either, since
- * nothing would authenticate the claim. When someone did, the header
- * names the sealer's key as `skid` and repeats it as `apu`, and the
- * key is one the sender's document authorizes for key agreement. A
- * signature inside the envelope proves nothing about the sender here
- * and is not looked at.
+ * nothing would authenticate the claim. A signature inside the envelope
+ * proves nothing about the sender here and is not looked at.
  */
 export function senderProof(unpacked: Unpacked, sealing: Sealing, resolution: Resolution | null): SenderProof {
   const { sender, plaintext } = unpacked;
@@ -146,10 +140,10 @@ export function senderProof(unpacked: Unpacked, sealing: Sealing, resolution: Re
 
 /** The key the document authorizes for key agreement under the method `kid` names, whichever spelling of the DID the two are written in. */
 function methodKey(resolution: Resolution, kid: string): PublicKey | null {
-  const [did, fragment] = splitDidUrl(kid);
+  const [did, reference] = splitDidUrl(kid);
   for (const [id, key] of authorizedKeys(resolution, "keyAgreement")) {
     const [owner, own] = splitDidUrl(id);
-    if (own === fragment && sameDid(owner, did)) return key;
+    if (own === reference && sameDid(owner, did)) return key;
   }
   return null;
 }
