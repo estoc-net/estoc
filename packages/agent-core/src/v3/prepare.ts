@@ -5,11 +5,13 @@
  * needs on the wire: the sender under its long form until the peer has
  * written to that address and under its short form after, with the
  * frozen proof of the rotation that made it a successor while that
- * address is unconfirmed; the recipient in the spelling the intent
- * kept, at a key-agreement key its retained document authorizes and
- * the sender's key can agree with. Nothing is asked of the network: a
- * numalgo-4 peer resolves from its long form, and a short form whose
- * long form is not in evidence waits, which is not a key change.
+ * address is unconfirmed; the recipient under its short form, at a
+ * key-agreement key its retained document authorizes and the sender's
+ * key can agree with. The intent keeps the spelling it was given so
+ * that a long form resolves offline; once resolved, the wire names the
+ * canonical DID. Nothing is asked of the network: a numalgo-4 peer
+ * resolves from its long form, and a short form whose long form is not
+ * in evidence waits, which is not a key change.
  * Everything is decided under the writer lock over the fold read
  * there, and the envelope object, the resolution evidence and the
  * package are committed in that one lock; the fold holds the package
@@ -21,6 +23,7 @@ import { v7 as uuidv7 } from "uuid";
 import { isShortForm } from "@estoc/did-peer";
 import { canonicalize, isJsonObject, parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store/v3";
 import {
+  InvalidPublicKey,
   agreementKey,
   intentOfOutbound,
   objectReader,
@@ -36,6 +39,7 @@ import {
   type Channel,
   type Cid,
   type Decision,
+  type DecodedPublicKey,
   type Did,
   type DidKeys,
   type DidUrl,
@@ -88,17 +92,11 @@ export function outboundWorkKey(messageId: MessageId): string {
   return `outbound ${messageId}`;
 }
 
-/** Has the intent's expiry passed on this clock: at equality it has. */
 export function hasExpired(intent: MessageOut, now: () => number): boolean {
   return intent.expiresTime !== null && now() >= intent.expiresTime * 1000;
 }
 
-/**
- * The package the fold says a queued outbound needs, made and
- * committed under the lock from the fold read there. A package the
- * fold holds already is returned as it is, whatever it was made from.
- * One message is prepared by one caller at a time.
- */
+/** The package of one queued outbound: made here, or the one the fold already holds. */
 export function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
   return serially(runtime, outboundWorkKey(messageId), async () => {
     const { result, notes } = await runtime.locked((held) => settle(held, keys, messageId, options));
@@ -140,7 +138,7 @@ async function settle(held: Held, keys: Keys, messageId: MessageId, options: Pre
   if ("because" in ends) return { result: { outcome: "none", messageId, because: ends.because }, notes };
   const content = await readContent(held, intent);
   if ("pending" in content) return { result: { outcome: "pending", messageId, because: content.pending }, notes };
-  const plaintext = wirePlaintext(intentOfOutbound(intent, content.document), { from: ends.from, to: [intent.recipientDid], fromPrior: ends.fromPrior }, (root) => content.payloads.get(root) as Uint8Array);
+  const plaintext = wirePlaintext(intentOfOutbound(intent, content.document), { from: ends.from, to: [channel.peerDid], fromPrior: ends.fromPrior }, (root) => content.payloads.get(root) as Uint8Array);
   const packed = await pack(fold, sender, ends, plaintext, options.didcomm);
   const envelope = parseStrict(packed);
   if (!isJsonObject(envelope)) throw new TypeError("the encrypted envelope is a JSON object");
@@ -157,7 +155,7 @@ async function settle(held: Held, keys: Keys, messageId: MessageId, options: Pre
           packageId,
           senderDidId: sender.didId,
           localKeyName: sender.keyNames.keyAgreement,
-          recipientDid: intent.recipientDid,
+          recipientDid: channel.peerDid,
           peerResolutionEventId: resolved.eventId as EventReference<"peer.resolved">,
           fromPrior: ends.fromPrior,
           intentHash: intent.intentHash,
@@ -215,10 +213,12 @@ async function endsOf(fold: VaultFold, keys: Keys, sender: LocalDidEntity, chann
  * Null when no decision made the sender a successor here. A decision
  * that is refused, contradicted or still waiting for its evidence
  * stops the package: the proof it holds is not one to send, and the
- * sender is not to go out proof-free either.
+ * sender is not to go out proof-free either. Which decisions concern
+ * the sender is read off their own fields, since one waiting for its
+ * predecessor's creation has no channel in the fold yet.
  */
 function proofOf(fold: VaultFold, sender: LocalDidEntity, channel: Channel): string | null | { pending: string } | { because: string } {
-  const decisions = [...fold.channels.decisions.values()].filter((decision) => decision.event.data.toDidId === sender.didId && decision.channel !== null && leadsTo(fold, decision, channel));
+  const decisions = [...fold.channels.decisions.values()].filter((decision) => decision.event.data.toDidId === sender.didId && leadsTo(fold, decision, channel));
   if (decisions.length === 0) return null;
   for (const decision of decisions) {
     const { status } = decision;
@@ -232,7 +232,7 @@ function proofOf(fold: VaultFold, sender: LocalDidEntity, channel: Channel): str
 
 /** Does the decision's rotation land in `channel`: its successor's pair with the same peer, or a pair a verified path from there preserves the roles into. */
 function leadsTo(fold: VaultFold, decision: Decision, channel: Channel): boolean {
-  const landed: Channel = { localDid: channel.localDid, peerDid: (decision.channel as Channel).peerDid };
+  const landed: Channel = { localDid: channel.localDid, peerDid: decision.event.data.peerDid };
   return sameChannel(landed, channel) || fold.continuity.ackPath(landed, channel);
 }
 
@@ -241,14 +241,24 @@ function leadsTo(fold: VaultFold, decision: Decision, channel: Channel): boolean
  * `sender` can seal to, in the document's order. The document may
  * authorize more: a method of a suite didcomm does not pack with, which
  * its projection marks `Other`, or a key on another curve than the
- * sender's, since didcomm agrees both ends over one curve. Either is
+ * sender's, since didcomm agrees both ends over one curve; or a key
+ * that agrees nothing, a signing key or a low-order point. Each is
  * authorized and still unusable here, and naming it as the recipient
  * key ID would fail the seal.
  */
 function sealable(resolution: Resolution, sender: DidKeys): [DidUrl, PublicKey][] {
   const projected = didcommDocumentOf(resolution, resolution.document["id"] as string);
   const packable = new Set(projected.verificationMethod.filter((method) => method.type !== "Other").map((method) => method.id));
-  return [...authorizedKeys(resolution, "keyAgreement")].filter(([id, key]) => packable.has(id) && agreementKey(key).type === sender.keyAgreement.type);
+  return [...authorizedKeys(resolution, "keyAgreement")].filter(([id, key]) => packable.has(id) && agrees(key, sender.keyAgreement.type));
+}
+
+function agrees(key: PublicKey, type: DecodedPublicKey["type"]): boolean {
+  try {
+    return agreementKey(key).type === type;
+  } catch (err) {
+    if (err instanceof InvalidPublicKey) return false;
+    throw err;
+  }
 }
 
 type Content = { document: StoredMessageDocument; payloads: Map<Cid, Uint8Array> };
