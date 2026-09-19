@@ -16,7 +16,11 @@
  * committed with its envelope (`prepare`); and that package's one
  * transport call under a live action, its acceptance recorded, its
  * cancellation, and the dispatcher that waits out a prerequisite for
- * as long as the action lives (`action`, `dispatch`, `dispatcher`).
+ * as long as the action lives (`action`, `dispatch`, `dispatcher`);
+ * and every delivery handed to this runtime taken through the gate
+ * before the vault — its recipient one of ours, its sender read from
+ * what the vault holds, the envelope opened and what it proves checked
+ * — and handed on to the receipt or refused (`receive/`).
  * The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`; `unpack` opens an inbound envelope there with its
@@ -25,7 +29,7 @@
 
 export { EnvelopeRefused, unpack, type Unpacked } from "../protocol/didcomm.js";
 
-export { AmbiguousTarget, EntityConflict, MediatorRefused, NoTarget, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
+export { AmbiguousTarget, EntityConflict, MediatorRefused, NoTarget, ReceiverClosed, ReceiverInUse, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
   createVault,
   inspectRuntime,
@@ -97,3 +101,21 @@ export { MAX_CONTENT_BYTES, hasExpired, outboundWorkKey, prepare, prepareAll, ty
 export { LiveAction, type ActionKind } from "./action.js";
 export { DISPATCH_TIMEOUT_MS, MAX_ENVELOPE_BYTES, cancel, dispatch, type Cancelled, type DispatchOptions, type Dispatched } from "./dispatch.js";
 export { Dispatcher, GLOBAL_TIMERS, LONGEST_TIMER_MS, RETRY_POLICY, type DispatcherOptions, type PendingOutbound, type RetryPolicy, type Timers, type Waiting } from "./dispatcher.js";
+export { classifyRecipients, sealingOf, senderEvidence, senderProof, type AuthenticatedSender, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
+export {
+  DISCARDED_KEPT,
+  ENDED_KEPT,
+  MAX_HELD_BYTES,
+  Receiver,
+  deliveryKey,
+  type Authenticated,
+  type Delivery,
+  type Discarded,
+  type Ingress,
+  type Receipt,
+  type ReceiptOutcome,
+  type Received,
+  type ReceiverOptions,
+  type Source,
+  type WaitingDelivery,
+} from "./receive/receiver.js";
