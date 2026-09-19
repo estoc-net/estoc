@@ -48,13 +48,17 @@
   written to is first made to be held by its mediator over `links`, the
   envelope goes as it is to a direct endpoint or inside a Routing 2.0
   forward under the package's ID to the mediator the recipient's
-  document names, the fold is read again under the lock where the
-  action is consumed, and acceptance is committed as
+  document names, the fold is read again under the lock, the action is
+  consumed as the transport is called, and acceptance is committed as
   `delivery.submitted` (an acceptance the disk would not record is owed
   and recorded before the message is worked on again). Any other
   answer, or none, is traced and spends the action; only a fresh manual
   action calls again. `cancel` terminates an unsubmitted message with
-  `delivery.failed { cancelled }`, serially with its dispatch. The
+  `delivery.failed { cancelled }`, serially with its dispatch. An expiry
+  that has come terminates the message before whatever else holds it
+  up, a blocked channel or evidence not here included. A mediator whose
+  recipient-query pages make no progress or run past a hundred is
+  refused rather than waited on. The
   `Dispatcher` keeps a live action while a prerequisite is waited for,
   trying again after thirty seconds doubling up to six hours, lists what
   the fold leaves for manual action with the wait on it (`pending`),

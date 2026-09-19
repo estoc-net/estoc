@@ -9,9 +9,13 @@
  * Before the call: the message is prepared when it still needs a
  * package, a mediated sender the peer has not written to is made to be
  * held by its mediator so that an answer has somewhere to arrive, and
- * the fold is read again under the lock — a package retired, a message
- * submitted, terminated or expired meanwhile is not sent — where the
- * action's one invocation is consumed. Acceptance is committed as
+ * the fold is read again under the lock, where a message submitted or
+ * terminated meanwhile, one whose expiry has come, whose sender or
+ * route was retired, whose channel was blocked or whose envelope is no
+ * longer here is not sent. The action's one invocation is consumed in
+ * the same step that invokes the transport, once the lock is released:
+ * a deadline that passed while the lock was waited for finds the
+ * action live and nothing called. Acceptance is committed as
  * `delivery.submitted` and closes the message; any other answer, or
  * none, is traced and nothing else: the message stays prepared, the
  * action is spent, and only a fresh manual action calls again. No
@@ -45,7 +49,7 @@ import { UnknownEntity } from "./errors.js";
 import { didcommDocumentOf } from "./evidence.js";
 import { bounded, sealData, type MediatorLink } from "./link.js";
 import { reconcile, registered } from "./mediation.js";
-import { expireUnderLock, hasExpired, outboundWorkKey, prepareUnderLock, type Settled } from "./prepare.js";
+import { closedBecause, expireUnderLock, expiryPhase, hasExpired, outboundWorkKey, prepareUnderLock, type Settled } from "./prepare.js";
 import { serially } from "./procedure.js";
 import { knownLongForms, resolve, type ResolverOptions, type Resolved } from "./resolver.js";
 import { note, noteAll, type AgentTrace, type Note } from "./trace.js";
@@ -76,7 +80,7 @@ export type Dispatched =
   | { outcome: "submitted"; messageId: MessageId; packageId: PackageId; submitted: VaultEvent<"delivery.submitted"> }
   /** the fold asks for no call: the message is closed, in conflict, or not the sender's to send now */
   | { outcome: "none"; messageId: MessageId; because: string }
-  /** a prerequisite is missing and may still come: nothing was called, the action is still live */
+  /** nothing was called and the action is still live: a prerequisite is missing and may still come, or the attempt's deadline passed before the call */
   | { outcome: "pending"; messageId: MessageId; because: string }
   /** the expiry passed before the call: the message is terminated */
   | { outcome: "expired"; messageId: MessageId; failed: VaultEvent<"delivery.failed"> }
@@ -102,7 +106,7 @@ async function attempt(runtime: VaultRuntime, keys: Keys, action: LiveAction, op
   const readied = await runtime.locked((held) => ready(held, keys, messageId, options));
   await noteAll(trace, readied.notes);
   if ("outcome" in readied.result) return readied.result;
-  const { fold, pkg, intent, envelope, service, registerWith } = readied.result;
+  const { fold, pkg, envelope, service, registerWith } = readied.result;
   const { packageId } = pkg.event.data;
   const pending = async (phase: string, reason: string): Promise<Dispatched> => {
     await note(trace, { stream: "diag", what: "delivery", data: { messageId, packageId, phase, reason } });
@@ -116,10 +120,11 @@ async function attempt(runtime: VaultRuntime, keys: Keys, action: LiveAction, op
   const carried = await carry(fold, pkg, envelope, service, options, deadline);
   if ("because" in carried) return { outcome: "none", messageId, because: carried.because };
   if ("reason" in carried) return pending("route", carried.reason);
-  const consumed = await runtime.locked((held) => consume(held, keys, action, packageId, intent, now));
-  await noteAll(trace, consumed.notes);
-  if (consumed.result !== null) return consumed.result;
-  const answer = await call(options.fetch, carried, deadline);
+  const rechecked = await runtime.locked((held) => recheck(held, keys, action, packageId, now));
+  await noteAll(trace, rechecked.notes);
+  if (rechecked.result !== null) return rechecked.result;
+  const answer = await call(options.fetch, carried, deadline, action);
+  if ("uncalled" in answer) return answer.uncalled === "spent" ? { outcome: "spent", messageId } : pending("call", "the deadline passed before the call");
   await noteAttempt(trace, messageId, packageId, carried, answer);
   if ("status" in answer && answer.status >= 200 && answer.status < 300) {
     const submitted = await recordAcceptance(runtime, messageId, packageId);
@@ -133,7 +138,6 @@ async function attempt(runtime: VaultRuntime, keys: Keys, action: LiveAction, op
 interface Ready {
   fold: VaultFold;
   pkg: Package;
-  intent: MessageOut;
   envelope: string;
   /** the DIDComm service the recipient's resolved document names */
   service: string | null;
@@ -144,7 +148,8 @@ interface Ready {
 /**
  * Under the lock: the message prepared when it still needs a package,
  * then what its one package needs for the wire read off the fold and
- * the object store. Expiry is observed here, before either.
+ * the object store. Expiry is observed first, before whatever else
+ * holds the message up.
  */
 async function ready(held: Held, keys: Keys, messageId: MessageId, options: DispatchOptions): Promise<Settled<Dispatched | Ready>> {
   const notes: Note[] = [];
@@ -152,6 +157,10 @@ async function ready(held: Held, keys: Keys, messageId: MessageId, options: Disp
   let fold = await scanVault(held, keys);
   let outbound = fold.outbound.outbounds.get(messageId);
   if (outbound === undefined) throw new UnknownEntity("message", messageId);
+  const closed = closedBecause(outbound);
+  if (closed !== null) return done({ outcome: "none", messageId, because: closed });
+  const intent = (outbound.intent as { data: MessageOut }).data;
+  if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
   if (outbound.work.kind === "prepare") {
     const prepared = await prepareUnderLock(held, keys, messageId, options);
     notes.push(...prepared.notes);
@@ -163,15 +172,13 @@ async function ready(held: Held, keys: Keys, messageId: MessageId, options: Disp
   const { work } = outbound;
   if (work.kind === "none") return done({ outcome: "none", messageId, because: work.because });
   if (work.kind === "prepare") return done({ outcome: "pending", messageId, because: "no package is prepared" });
-  const intent = (outbound.intent as { data: MessageOut }).data;
-  if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, "dispatch");
   const pkg = work.package;
   const resolved = fold.set.resolve(pkg.event.data.peerResolutionEventId, "peer.resolved");
   if (resolved.status !== "present") return done({ outcome: "pending", messageId, because: "the resolution the package names is not here" });
   const bytes = await objectReader(held.objects, MAX_ENVELOPE_BYTES)(pkg.event.data.envelopeCid);
   if (bytes === null) return done({ outcome: "pending", messageId, because: `the envelope ${pkg.event.data.envelopeCid} is not here` });
   const registerWith = unconfirmedMediatedSender(fold, outbound.sender as LocalDidEntity, outbound.channel as Channel);
-  return { result: { fold, pkg, intent, envelope: new TextDecoder().decode(bytes), service: resolved.event.data.service, registerWith }, notes };
+  return { result: { fold, pkg, envelope: new TextDecoder().decode(bytes), service: resolved.event.data.service, registerWith }, notes };
 }
 
 /**
@@ -201,20 +208,24 @@ async function confirmRegistration(runtime: VaultRuntime, keys: Keys, { mediatio
 }
 
 /**
- * Under the lock again, right before the call: the fold must still
- * say the same package is what the message needs, the expiry must not
- * have come, and the action must still carry its invocation, which is
- * consumed here. Null when the call may go ahead.
+ * Under the lock again, right before the call: the message must still
+ * be open with its expiry to come, the fold must still say the same
+ * package is what it needs, and the action must still carry its
+ * invocation. Null when the call may go ahead; the invocation is
+ * consumed at the call itself, not here, so that a deadline passed
+ * while this lock was waited for costs the action nothing.
  */
-async function consume(held: Held, keys: Keys, action: LiveAction, packageId: PackageId, intent: MessageOut, now: () => number): Promise<Settled<Dispatched | null>> {
+async function recheck(held: Held, keys: Keys, action: LiveAction, packageId: PackageId, now: () => number): Promise<Settled<Dispatched | null>> {
   const { messageId } = action;
   const outbound = (await scanVault(held, keys)).outbound.outbounds.get(messageId)!;
+  const closed = closedBecause(outbound);
+  if (closed !== null) return { result: { outcome: "none", messageId, because: closed }, notes: [] };
+  if (hasExpired((outbound.intent as { data: MessageOut }).data, now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
   const { work } = outbound;
   if (work.kind === "none") return { result: { outcome: "none", messageId, because: work.because }, notes: [] };
   if (work.kind === "prepare") return { result: { outcome: "pending", messageId, because: "the package is no longer here" }, notes: [] };
   if (work.package.event.data.packageId !== packageId) return { result: { outcome: "none", messageId, because: `the package is now ${work.package.event.data.packageId}` }, notes: [] };
-  if (hasExpired(intent, now)) return expireUnderLock(held, messageId, "dispatch");
-  if (!action.consume()) return { result: { outcome: "spent", messageId }, notes: [] };
+  if (action.spent) return { result: { outcome: "spent", messageId }, notes: [] };
   return { result: null, notes: [] };
 }
 
@@ -282,9 +293,20 @@ function hopOf(service: string | null): Hop | null {
 }
 
 type Answer = { status: number; ms: number } | { error: string; ms: number };
+/** nothing was called: the deadline had passed, or the action had been spent, when the call was about to be made */
+type Uncalled = { uncalled: "deadline" | "spent" };
 
-/** The body carried as an encrypted DIDComm message, following no redirect and answered from no cache. The status is the answer; the body is not read. */
-async function call(fetch: typeof globalThis.fetch, { endpoint, body }: Carried, deadline: AbortSignal): Promise<Answer> {
+/**
+ * The body carried as an encrypted DIDComm message, following no
+ * redirect and answered from no cache. The status is the answer; the
+ * body is not read. The action's invocation is consumed in the same
+ * synchronous step that invokes `fetch`, after the deadline is looked
+ * at: a deadline passed before this point has cost nothing, and one
+ * passing from here on is a call whose outcome is unknown.
+ */
+async function call(fetch: typeof globalThis.fetch, { endpoint, body }: Carried, deadline: AbortSignal, action: LiveAction): Promise<Answer | Uncalled> {
+  if (deadline.aborted) return { uncalled: "deadline" };
+  if (!action.consume()) return { uncalled: "spent" };
   const started = Date.now();
   try {
     const response = await bounded(deadline, () => fetch(endpoint, { method: "POST", headers: { "Content-Type": ENCRYPTED_MIME }, body, redirect: "manual", cache: "no-store", signal: deadline }));
@@ -324,9 +346,8 @@ export function cancel(runtime: VaultRuntime, keys: Keys, messageId: MessageId, 
     const result = await runtime.locked(async (held): Promise<Cancelled> => {
       const outbound = (await scanVault(held, keys)).outbound.outbounds.get(messageId);
       if (outbound === undefined) throw new UnknownEntity("message", messageId);
-      if (outbound.intent.status === "conflict") return { outcome: "none", messageId, because: outbound.intent.because };
-      if (outbound.submitted) return { outcome: "none", messageId, because: "submitted" };
-      if (outbound.terminal !== null) return { outcome: "none", messageId, because: `terminated: ${outbound.terminal.event.data.code}` };
+      const closed = closedBecause(outbound);
+      if (closed !== null) return { outcome: "none", messageId, because: closed };
       const [event] = (await held.commit([], [vaultDraft("delivery.failed", { messageId, code: "cancelled" })])).map(readVaultEvent);
       return { outcome: "cancelled", messageId, failed: event as VaultEvent<"delivery.failed"> };
     });

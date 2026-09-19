@@ -131,7 +131,7 @@ describe("prepare", () => {
     expect(outbound.work).toEqual({ kind: "dispatch", package: outbound.package });
     expect((await trace.read({ stream: "envelope" })).map((entry) => [entry.type, entry.data.messageId, entry.data.packageId])).toEqual([["envelope.seal", MESSAGE, result.packageId]]);
 
-    const again = await prepare(alice.runtime, alice.keys, MESSAGE, options());
+    const again = await prepare(alice.runtime, alice.keys, MESSAGE, options({ now: () => 1_999_999 }));
     expect(again).toMatchObject({ outcome: "reused", messageId: MESSAGE, package: { event: { eventId: result.prepared.eventId } } });
     expect(await prepareAll(alice.runtime, alice.keys, options())).toEqual([]);
     f = await fold(alice);

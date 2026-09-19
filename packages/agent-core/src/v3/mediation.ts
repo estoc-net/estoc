@@ -160,21 +160,38 @@ export async function reconcileNow(link: MediatorLink, fold: VaultFold, mediatio
   return reconciled;
 }
 
-/** Every recipient DID the mediator holds for this account, page by page. */
+/** How many recipients one recipient-query page asks for, and how many pages one query reads before it is refused. */
+export const RECIPIENT_PAGE = { limit: 100, mostPages: 100 };
+
+/**
+ * Every recipient DID the mediator holds for this account, page by
+ * page. Each page has to move the listing on — a DID listed already,
+ * or a page naming none, is no progress — and the listing ends within
+ * `RECIPIENT_PAGE.mostPages`; a mediator that pages otherwise is
+ * refused, so that it holds neither the account's turn nor a message
+ * whose call waits on the registration.
+ */
 async function queryRecipients(link: MediatorLink): Promise<Did[]> {
-  const dids: Did[] = [];
-  for (let offset = 0; ; ) {
-    const answer = await link.roundTrip(RECIPIENT_QUERY, { paginate: { limit: 100, offset } });
+  const dids = new Set<Did>();
+  for (let offset = 0, pages = 0; ; ) {
+    if (pages >= RECIPIENT_PAGE.mostPages) throw new MediatorRefused(`recipient-query lists more than ${RECIPIENT_PAGE.mostPages} pages`);
+    const answer = await link.roundTrip(RECIPIENT_QUERY, { paginate: { limit: RECIPIENT_PAGE.limit, offset } });
+    pages++;
     if (answer.type !== RECIPIENT) throw new MediatorRefused(`expected recipient, got ${answer.type}`);
     const page = answer.body["dids"];
     const entries = Array.isArray(page) ? page : [];
+    let listed = 0;
     for (const entry of entries) {
       const did = (entry as { recipient_did?: unknown })?.recipient_did;
-      if (typeof did === "string") dids.push(did as Did);
+      if (typeof did !== "string") continue;
+      if (dids.has(did as Did)) throw new MediatorRefused(`recipient-query lists ${did} again at offset ${offset}`);
+      dids.add(did as Did);
+      listed++;
     }
     const pagination = answer.body["pagination"] as { remaining?: unknown } | undefined;
     const remaining = typeof pagination?.remaining === "number" ? pagination.remaining : 0;
-    if (entries.length === 0 || remaining <= 0) return dids;
+    if (entries.length === 0 || remaining <= 0) return [...dids];
+    if (listed === 0) throw new MediatorRefused(`recipient-query names no recipient at offset ${offset} and says ${remaining} remain`);
     offset += entries.length;
   }
 }

@@ -1,15 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DIDDoc } from "@estoc/did-peer";
-import { parseStrict, type JsonObject } from "@estoc/event-store/v3";
-import { scanVault, type DidId, type MessageId, type VaultFold } from "@estoc/vault/v3";
+import { parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store/v3";
+import { scanVault, vaultDraft, type DidId, type MessageId, type VaultEvent, type VaultFold } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import { ENCRYPTED_MIME, secretsResolverFor } from "../../src/protocol/didcomm.js";
+import { ENCRYPTED_MIME, secretsResolverFor, type IMessage } from "../../src/protocol/didcomm.js";
 import { FORWARD } from "../../src/protocol/spec.js";
-import { AgentTrace, Keyring, LiveAction, UnknownEntity, cancel, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../../src/v3/index.js";
+import { RECIPIENT, RECIPIENT_QUERY } from "../../src/protocol/mediation.js";
+import { AgentTrace, Keyring, LiveAction, UnknownEntity, cancel, createVault, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../../src/v3/index.js";
 import { MEDIATOR_HTTP } from "../fake-mediator.js";
-import { didcomm, directParty, mediatedParty, newMediator, posting, received, refuseSubmissions, type DirectParty, type MediatedParty } from "./helpers.js";
+import { didcomm, directParty, mediatedParty, memoryDriver, newMediator, posting, received, refuseSubmissions, ticking, type DirectParty, type MediatedParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
@@ -222,6 +223,78 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
+  it("an expiry that has come terminates the message whatever else holds it up — a blocked channel, a resolution not here — and leaves a submitted or terminated message as it is", async () => {
+    const { alice, bob } = await parties();
+    const carol = await directParty(3, "https://carol.example/didcomm", CAROL);
+    const wire = posting(accepted);
+    const timed: Content = { ...HELLO, createdTime: 1_000, expiresTime: 2_000 };
+    const before = { didcomm, fetch: wire.fetch, now: () => 1_999_999 };
+    const after = { didcomm, fetch: wire.fetch, now: () => 2_000_000 };
+
+    const blocked = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, timed, { messageId: MESSAGE });
+    await prepare(alice.runtime, alice.keys, MESSAGE, before);
+    const envelopeCid = (await fold(alice)).outbound.outbounds.get(MESSAGE)!.package!.event.data.envelopeCid;
+    await alice.runtime.vault.commit([], [vaultDraft("channel.blocked", { localDid: alice.did, peerDid: bob.did, includeSuccessors: false })]);
+    expect(await dispatch(alice.runtime, alice.keys, blocked.action, before)).toEqual({ outcome: "none", messageId: MESSAGE, because: "the channel is blocked" });
+    expect(await dispatch(alice.runtime, alice.keys, blocked.action, after)).toMatchObject({ outcome: "expired", messageId: MESSAGE, failed: { data: { code: "expired" } } });
+    expect(await dispatch(alice.runtime, alice.keys, blocked.action, after)).toEqual({ outcome: "none", messageId: MESSAGE, because: "terminated: expired" });
+    let f = await fold(alice);
+    expect(f.outbound.outbounds.get(MESSAGE)).toMatchObject({ outcome: { status: "terminal", code: "expired" }, released: true });
+    expect(f.held.has(envelopeCid)).toBe(false);
+
+    await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: carol.longFormDid } }, timed, { messageId: SECOND });
+    const packaged = await prepare(alice.runtime, alice.keys, SECOND, before);
+    if (packaged.outcome !== "prepared") throw new Error(`not prepared: ${JSON.stringify(packaged)}`);
+    const events: VaultEvent[] = [];
+    for await (const event of alice.runtime.vault.events.scan()) events.push(event as VaultEvent);
+    const partial = events.filter((event) => event.eventId !== packaged.resolved.eventId);
+    const copy = await createVault(memoryDriver(), { seedKey: alice.seedKey, wrapped: alice.keystore, label: "without the resolution", now: ticking() });
+    const ingested = await copy.runtime.locked((held) =>
+      held.ingest(partial, async (stage) => {
+        for (const root of new Set(partial.flatMap((event) => event.roots))) await stage.putObject(root, (await alice.runtime.vault.objects.read(root, 1 << 20)) as Uint8Array);
+      })
+    );
+    expect(ingested.rejected).toEqual([]);
+    const manual = new LiveAction(SECOND, "manual");
+    expect(await dispatch(copy.runtime, copy.keys, manual, before)).toEqual({ outcome: "none", messageId: SECOND, because: "the resolution it names is not here" });
+    expect(await dispatch(copy.runtime, copy.keys, manual, after)).toMatchObject({ outcome: "expired", messageId: SECOND });
+    expect((await scanVault(copy.runtime.vault, copy.keys)).outbound.outbounds.get(SECOND)).toMatchObject({ outcome: { status: "terminal", code: "expired" }, released: true });
+    expect(manual.spent).toBe(false);
+
+    const carried = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: carol.longFormDid } }, timed, { messageId: THIRD });
+    submitted(await dispatch(alice.runtime, alice.keys, carried.action, before));
+    expect(await dispatch(alice.runtime, alice.keys, new LiveAction(THIRD, "manual"), after)).toEqual({ outcome: "none", messageId: THIRD, because: "submitted" });
+    expect(await cancel(alice.runtime, alice.keys, THIRD)).toEqual({ outcome: "none", messageId: THIRD, because: "submitted" });
+    f = await fold(alice);
+    expect(f.set.of("delivery.failed").map((event) => event.data.messageId)).toEqual([MESSAGE]);
+    expect(wire.posts).toHaveLength(1);
+    await copy.runtime.close();
+    await closeAll(alice, bob, carol);
+  });
+
+  it("a deadline that passes while the lock is waited for costs the action nothing: nothing is called, and the same action calls once the lock is free", async () => {
+    const { alice, bob } = await parties();
+    const wire = posting(accepted);
+    const sent = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
+    await prepare(alice.runtime, alice.keys, MESSAGE, { didcomm });
+    const locked = alice.runtime.locked.bind(alice.runtime);
+    let holding: Promise<void> | null = null;
+    vi.spyOn(alice.runtime, "locked").mockImplementation((async (work: (held: Held) => Promise<unknown>) => {
+      const value = await locked(work);
+      holding ??= locked(() => new Promise((resolve) => setTimeout(resolve, 80)));
+      return value;
+    }) as VaultRuntime["locked"]);
+    expect(await dispatch(alice.runtime, alice.keys, sent.action, { didcomm, fetch: wire.fetch, timeoutMs: 10 })).toEqual({ outcome: "pending", messageId: MESSAGE, because: "the deadline passed before the call" });
+    expect(wire.posts).toEqual([]);
+    expect(sent.action.spent).toBe(false);
+    await holding;
+    vi.restoreAllMocks();
+    submitted(await dispatch(alice.runtime, alice.keys, sent.action, { didcomm, fetch: wire.fetch }));
+    expect(wire.posts).toHaveLength(1);
+    expect(sent.action.spent).toBe(true);
+    await closeAll(alice, bob);
+  });
+
   it("cancels an unsubmitted message, before or after preparation, keeping its content and releasing its envelope; a submitted one is not cancelled", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
@@ -319,5 +392,26 @@ describe("dispatch through a mediator", () => {
     expect(wire.posts).toHaveLength(2);
     expect(mediator.recipients.has(carol.did)).toBe(false);
     await closeAll(alice, carol, bob);
+  });
+
+  it("a mediator that pages its recipients without end holds up neither the message nor its cancellation: the attempt is refused after the page that made no progress, the action stays live, and the cancel goes through", async () => {
+    const mediator = await newMediator();
+    const alice = await mediatedParty(mediator, 1, ALICE);
+    const bob = await directParty(2, BOB_ENDPOINT, BOB);
+    const wire = posting(accepted);
+    const sent = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
+    const established = mediator.seenTypes.filter((type) => type === RECIPIENT_QUERY).length;
+    mediator.intercept = (msg: IMessage, from) =>
+      msg.type === RECIPIENT_QUERY ? mediator.reply(RECIPIENT, from!, { dids: [{ recipient_did: alice.did }], pagination: { count: 1, offset: (msg.body as { paginate: { offset: number } }).paginate.offset, remaining: 1 } }, msg.id) : undefined;
+    const attempt = dispatch(alice.runtime, alice.keys, sent.action, { didcomm, fetch: wire.fetch, links: () => alice.link });
+    const cancelling = cancel(alice.runtime, alice.keys, MESSAGE);
+    const refused = await attempt;
+    expect(refused).toMatchObject({ outcome: "pending", messageId: MESSAGE });
+    expect((refused as { because: string }).because).toMatch(/could not be asked to hold .*recipient-query lists .* again at offset 1/);
+    expect(mediator.seenTypes.filter((type) => type === RECIPIENT_QUERY)).toHaveLength(established + 2);
+    expect(sent.action.spent).toBe(false);
+    expect(await cancelling).toMatchObject({ outcome: "cancelled", messageId: MESSAGE });
+    expect(wire.posts).toEqual([]);
+    await closeAll(alice, bob);
   });
 });

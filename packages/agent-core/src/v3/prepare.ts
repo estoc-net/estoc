@@ -48,6 +48,7 @@ import {
   type LocalDidEntity,
   type MessageId,
   type MessageOut,
+  type Outbound,
   type Package,
   type PackageId,
   type PublicKey,
@@ -96,6 +97,26 @@ export function hasExpired(intent: MessageOut, now: () => number): boolean {
   return intent.expiresTime !== null && now() >= intent.expiresTime * 1000;
 }
 
+/**
+ * Why a message takes no more work whatever holds it up otherwise: its
+ * intent is in conflict, it is submitted, or it is terminated. Null
+ * while it is open. What makes the message wait — a blocked channel,
+ * a package whose evidence is not here — comes after this, and after
+ * its expiry: an expiry that has come terminates the intent itself,
+ * without a package and whatever else the fold says.
+ */
+export function closedBecause(outbound: Outbound): string | null {
+  if (outbound.intent.status === "conflict") return outbound.intent.because;
+  if (outbound.submitted) return "submitted";
+  if (outbound.terminal !== null) return `terminated: ${outbound.terminal.event.data.code}`;
+  return null;
+}
+
+/** What the expiry of an open message came before, for the trace: the package it has none of, or the call of the one it has. */
+export function expiryPhase(outbound: Outbound): "preparation" | "dispatch" {
+  return outbound.package === null ? "preparation" : "dispatch";
+}
+
 /** The package of one queued outbound: made here, or the one the fold already holds. */
 export function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
   return serially(runtime, outboundWorkKey(messageId), async () => {
@@ -131,11 +152,13 @@ export async function prepareUnderLock(held: Held, keys: Keys, messageId: Messag
   const fold = await scanVault(held, keys);
   const outbound = fold.outbound.outbounds.get(messageId);
   if (outbound === undefined) throw new UnknownEntity("message", messageId);
+  const closed = closedBecause(outbound);
+  if (closed !== null) return { result: { outcome: "none", messageId, because: closed }, notes };
+  const intent = (outbound.intent as { data: MessageOut }).data;
+  if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
   const { work } = outbound;
   if (work.kind === "none") return { result: { outcome: "none", messageId, because: work.because }, notes };
   if (work.kind === "dispatch") return { result: { outcome: "reused", messageId, package: work.package }, notes };
-  const intent = (outbound.intent as { data: MessageOut }).data;
-  if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, "preparation");
   const sender = outbound.sender as LocalDidEntity;
   const channel = outbound.channel as Channel;
   const ends = await endsOf(fold, keys, sender, channel, intent.recipientDid);
