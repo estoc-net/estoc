@@ -20,7 +20,10 @@
  * and every delivery handed to this runtime taken through the gate
  * before the vault — its recipient one of ours, its sender read from
  * what the vault holds, the envelope opened and what it proves checked
- * — and handed on to the receipt or refused (`receive/`).
+ * — and handed on to the receipt or refused; and that delivery
+ * recorded as one observation in the vault, under the lock, with its
+ * resolution evidence and its content, and nothing of the peer looked
+ * up (`receive/`).
  * The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`; `unpack` opens an inbound envelope there with its
@@ -110,6 +113,7 @@ export {
   REASON_KEPT,
   Receiver,
   deliveryKey,
+  recipientWatch,
   type Authenticated,
   type Delivery,
   type Discarded,
@@ -122,3 +126,4 @@ export {
   type WaitingDelivery,
   type Watch,
 } from "./receive/receiver.js";
+export { receiptOf, recordReceipt } from "./receive/receipt.js";

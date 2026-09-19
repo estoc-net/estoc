@@ -19,10 +19,30 @@ import {
   type PublicKey,
   type ReceiptOrdinal,
   type VaultEvent,
+  type VaultEventType,
   type WireMessageId,
 } from "@estoc/vault/v3";
 
-import { AgentTrace, Keyring, MediatorLink, authorizedKeys, commitResolution, configureRoute, createDid, createMediation, createVault, ensureRoute, establish, resolve, type LinkOptions, type OpenedVault, type Timers } from "../../src/v3/index.js";
+import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
+import { PLAIN_TYP, packEncrypted, secretsResolverFor, type DIDResolver, type IMessage } from "../../src/protocol/didcomm.js";
+import {
+  AgentTrace,
+  Keyring,
+  MediatorLink,
+  authorizedKeys,
+  commitResolution,
+  configureRoute,
+  createDid,
+  createMediation,
+  createVault,
+  ensureRoute,
+  establish,
+  pinnedResolver,
+  resolve,
+  type LinkOptions,
+  type OpenedVault,
+  type Timers,
+} from "../../src/v3/index.js";
 import { FakeMediator, MEDIATOR_HTTP } from "../fake-mediator.js";
 
 export const didcomm = { Message, FromPrior };
@@ -168,6 +188,29 @@ export async function directParty(fill: number, endpoint: string, didId: DidId, 
   return { ...fresh, didId, did: minted.did, longFormDid: minted.longFormDid };
 }
 
+/** Someone who seals: the DID they write as, their secrets, and how the documents they seal against resolve. */
+export interface Sealer {
+  did: string;
+  secrets: Secret[];
+  resolver: DIDResolver;
+}
+
+/** A peer party sealing as `as` — its long form unless told otherwise — against the documents its own vault answers, which include every numalgo-4 long form. */
+export async function peerSealer(holder: DirectParty, as: string = holder.longFormDid): Promise<Sealer> {
+  const fold = await scanVault(holder.runtime.vault, holder.keys);
+  const ring = await Keyring.load(holder.keys, fold);
+  return { did: as, secrets: ring.secrets(), resolver: pinnedResolver(fold) };
+}
+
+/** A basic message sealed to `to`: authcrypt from the sealer, anoncrypt without one. */
+export async function sealed(from: Sealer | null, to: string, extra: Partial<IMessage> = {}): Promise<string> {
+  const plain = { id: crypto.randomUUID(), typ: PLAIN_TYP, type: BASIC_MESSAGE, ...(from === null ? {} : { from: from.did }), to: [to], body: { content: "hello" }, ...extra } as IMessage;
+  const [packed] = await packEncrypted(didcomm, plain, to, from?.did ?? null, null, from?.resolver ?? { resolve: resolveDIDCommDoc }, secretsResolverFor(from?.secrets ?? []), { forward: false });
+  return packed;
+}
+
+export const kidOf = (packed: string): string => (JSON.parse(packed) as { recipients: { header: { kid: string } }[] }).recipients[0]!.header.kid;
+
 /** The peer's message received at one of `party`'s DIDs: the peer's document pinned, the body stored, the observation committed — a complete witness of the peer writing to exactly that address. */
 export async function received(party: DirectParty, peer: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = party): Promise<EventReference<"message.in">> {
   const outcome = await resolve(peer.longFormDid, () => null);
@@ -260,6 +303,11 @@ export function handTimers(): Timers & { waits: HandWait[] } {
 
 /** The next `times` commits of a `delivery.submitted` under `runtime` throw: the disk refusing the record of an acceptance the wire gave. */
 export function refuseSubmissions(runtime: VaultRuntime, times: number): void {
+  refuseCommits(runtime, "delivery.submitted", times);
+}
+
+/** The next `times` commits of an event of `type` under `runtime`'s lock throw, as a disk refusing the record would. */
+export function refuseCommits(runtime: VaultRuntime, type: VaultEventType, times: number): void {
   const locked = runtime.locked.bind(runtime);
   let left = times;
   const refusing = (held: Held): Held =>
@@ -267,7 +315,7 @@ export function refuseSubmissions(runtime: VaultRuntime, times: number): void {
       get(target, key) {
         if (key === "commit") {
           return async (...args: Parameters<Held["commit"]>) => {
-            if (left > 0 && args[1].some((draft) => draft.type === "delivery.submitted")) {
+            if (left > 0 && args[1].some((draft) => draft.type === type)) {
               left--;
               throw new Error("the disk is full for now");
             }

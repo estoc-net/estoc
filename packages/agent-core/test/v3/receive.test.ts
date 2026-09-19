@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { encodeLongForm, longToShort, resolveDIDCommDoc, toDIDCommDIDDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
+import { encodeLongForm, longToShort, resolveDIDCommDoc, toDIDCommDIDDoc, type DIDDoc } from "@estoc/did-peer";
 import type { JsonObject, VaultRuntime } from "@estoc/event-store/v3";
-import { didKeyName, inputDocumentOf, scanVault, signFromPrior, splitDidUrl, vaultDraft, type Did, type DidId, type MediationId, type PublicKey, type RouteId } from "@estoc/vault/v3";
+import { didKeyName, inputDocumentOf, scanVault, signFromPrior, splitDidUrl, vaultDraft, type Did, type DidId, type EventReference, type MediationId, type PublicKey, type RouteId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import { PLAIN_TYP, packEncrypted, secretsResolverFor, type DIDResolver, type IMessage, type Unpacked } from "../../src/protocol/didcomm.js";
+import { PLAIN_TYP, type IMessage, type Unpacked } from "../../src/protocol/didcomm.js";
 import { MESSAGES_RECEIVED } from "../../src/protocol/mediation.js";
 import {
   AgentTrace,
@@ -23,7 +23,6 @@ import {
   disclose,
   ensureRoute,
   establish,
-  pinnedResolver,
   reconcile,
   resolve,
   retireDid,
@@ -35,7 +34,7 @@ import {
   type Resolution,
   type Source,
 } from "../../src/v3/index.js";
-import { didcomm, directParty, freshVault, newMediator, party, reloaded, webIdentity, type DirectParty, type Fresh, type Party } from "./helpers.js";
+import { didcomm, directParty, freshVault, kidOf, newMediator, party, peerSealer, reloaded, sealed, webIdentity, type DirectParty, type Fresh, type Party, type Sealer } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
@@ -53,20 +52,8 @@ const WEB_BOB = "did:web:bob.example";
 const PICKUP: Source = { kind: "pickup", mediationId: MEDIATION, deliveryId: "d1" };
 const pickup = (deliveryId: string): Source => ({ kind: "pickup", mediationId: MEDIATION, deliveryId });
 const DIRECT: Source = { kind: "direct" };
-
-/** Someone who seals: the DID they write as, their secrets, and how the documents they seal against resolve. */
-interface Sealer {
-  did: string;
-  secrets: Secret[];
-  resolver: DIDResolver;
-}
-
-/** A peer party sealing as `as` — its long form unless told otherwise — against the documents its own vault answers, which include every numalgo-4 long form. */
-async function peerSealer(holder: DirectParty, as: string = holder.longFormDid): Promise<Sealer> {
-  const fold = await scanVault(holder.runtime.vault, holder.keys);
-  const ring = await Keyring.load(holder.keys, fold);
-  return { did: as, secrets: ring.secrets(), resolver: pinnedResolver(fold) };
-}
+/** what a receipt standing in for the vault's says it recorded */
+const RECORDED = "019b0000-0000-7000-8000-0000000000ff" as EventReference<"message.in">;
 
 /** A `did:web` party sealing against its own document and the peers' long forms. */
 async function webSealer(did: string): Promise<Sealer> {
@@ -75,22 +62,13 @@ async function webSealer(did: string): Promise<Sealer> {
   return { did, secrets: identity.secrets, resolver: { resolve: async (asked) => (asked === did ? document : resolveDIDCommDoc(asked)) } };
 }
 
-/** A basic message sealed to `to`: authcrypt from the sealer, anoncrypt without one. */
-async function sealed(from: Sealer | null, to: string, extra: Partial<IMessage> = {}): Promise<string> {
-  const plain = { id: crypto.randomUUID(), typ: PLAIN_TYP, type: BASIC_MESSAGE, ...(from === null ? {} : { from: from.did }), to: [to], body: { content: "hello" }, ...extra } as IMessage;
-  const [packed] = await packEncrypted(didcomm, plain, to, from?.did ?? null, null, from?.resolver ?? { resolve: resolveDIDCommDoc }, secretsResolverFor(from?.secrets ?? []), { forward: false });
-  return packed;
-}
-
-const kidOf = (packed: string): string => (JSON.parse(packed) as { recipients: { header: { kid: string } }[] }).recipients[0]!.header.kid;
-
 /** The envelope with every recipient's key ID replaced by `kid`: what arrives addressed elsewhere. */
 function addressedTo(packed: string, kid: string): string {
   const envelope = JSON.parse(packed) as { recipients: { header: { kid: string } }[] };
   return JSON.stringify({ ...envelope, recipients: envelope.recipients.map((recipient) => ({ ...recipient, header: { ...recipient.header, kid } })) });
 }
 
-function recording(answer: () => ReceiptOutcome = () => ({ outcome: "received" })): { receipt: ReceiverOptions["receipt"]; seen: Authenticated[] } {
+function recording(answer: () => ReceiptOutcome = () => ({ outcome: "received", eventId: RECORDED })): { receipt: ReceiverOptions["receipt"]; seen: Authenticated[] } {
   const seen: Authenticated[] = [];
   return {
     seen,
@@ -174,7 +152,7 @@ describe("the gate before the vault", () => {
     const packed = await sealed(sealer, alice.longFormDid);
     const delivery: Delivery = { packed, source: DIRECT };
 
-    expect(await receiver.receive(delivery)).toEqual({ outcome: "received", key: deliveryKey(delivery) });
+    expect(await receiver.receive(delivery)).toEqual({ outcome: "received", key: deliveryKey(delivery), eventId: RECORDED });
     const resolution = await peerResolutionOf(bob.longFormDid);
     expect(seen.map(({ recipient, sender, plaintext, fromPrior }) => ({ recipient, sender, body: plaintext.body, fromPrior }))).toEqual([
       {
@@ -185,7 +163,7 @@ describe("the gate before the vault", () => {
       },
     ]);
 
-    expect(await receiver.receive(delivery)).toEqual({ outcome: "received", key: deliveryKey(delivery) });
+    expect(await receiver.receive(delivery)).toEqual({ outcome: "received", key: deliveryKey(delivery), eventId: RECORDED });
     expect(seen).toHaveLength(1);
     expect(await trace.read({ type: "envelope.open" })).toHaveLength(1);
 
@@ -389,7 +367,7 @@ describe("the gate before the vault", () => {
     await copy.runtime.ingest(await eventsOf(alice.runtime, "route.configured"));
     expect(await receiver.localStateChanged()).toEqual([]);
     resume();
-    expect(await first).toEqual({ outcome: "received", key: deliveryKey(delivery) });
+    expect(await first).toEqual({ outcome: "received", key: deliveryKey(delivery), eventId: RECORDED });
     expect(seen).toHaveLength(1);
     expect(receiver.waiting()).toEqual([]);
     await closeAll(alice, bob, copy);
@@ -411,7 +389,7 @@ describe("the gate before the vault", () => {
       receipt: async ({ recipient }) => {
         calls.push(recipient.didId);
         if (failing) throw new Error("the disk is full");
-        if (recipient.didId !== DID) return { outcome: "received" };
+        if (recipient.didId !== DID) return { outcome: "received", eventId: RECORDED };
         return { outcome: "deferred", reason: "the receipt waits for the recipient's disclosure", watch: (fold) => String(fold.routes.dids.get(DID)?.disclosures.length ?? 0) };
       },
     });
@@ -502,7 +480,7 @@ describe("the gate before the vault", () => {
         receipt: async ({ recipient }) => {
           seen.push(recipient.didId);
           if (failing && failure === "write") throw new Error("the disk is full");
-          return { outcome: "received" };
+          return { outcome: "received", eventId: RECORDED };
         },
       });
       const delivery: Delivery = { packed: await sealed(await peerSealer(bob), alice.longFormDid), source: PICKUP };
@@ -594,7 +572,7 @@ describe("the gate before the vault", () => {
 
     expect(await receiver.receive(delivery)).toMatchObject({ outcome: "deferred", reason: "the vault is not read: the database is locked; the delivery is left where it came from" });
     expect([receiver.waiting(), seen]).toEqual([[], []]);
-    expect(await receiver.receive(delivery)).toEqual({ outcome: "received", key: deliveryKey(delivery) });
+    expect(await receiver.receive(delivery)).toEqual({ outcome: "received", key: deliveryKey(delivery), eventId: RECORDED });
     await closeAll(alice, bob);
   });
 
@@ -684,7 +662,7 @@ describe("the receiver's lifecycle", () => {
     const receipt: ReceiverOptions["receipt"] = async (authenticated) => {
       seen.push(authenticated);
       await gate;
-      return { outcome: "received" };
+      return { outcome: "received", eventId: RECORDED };
     };
     const receiver = await receiverOver(alice, { receipt });
     expect(() => new Receiver(alice.runtime, alice.keys, null as unknown as Keyring, { didcomm, receipt })).toThrow(ReceiverInUse);
@@ -697,7 +675,7 @@ describe("the receiver's lifecycle", () => {
     await expect(receiver.receive({ packed: "{}", source: DIRECT })).rejects.toThrow(ReceiverClosed);
     await expect(receiver.pickupHandle(MEDIATION)({ attachmentId: "a", packed: "{}" })).rejects.toThrow(ReceiverClosed);
     release();
-    expect(await first).toEqual({ outcome: "received", key: deliveryKey(delivery) });
+    expect(await first).toEqual({ outcome: "received", key: deliveryKey(delivery), eventId: RECORDED });
     await expect(second).rejects.toThrow(ReceiverClosed);
     expect(seen).toHaveLength(1);
     expect(receiver.waiting()).toEqual([]);

@@ -6,11 +6,12 @@
  * waiting on something recoverable of this runtime's is held. It is
  * then opened with the one key it may be opened with, its sender read
  * from what the vault holds and nothing else, and what the envelope
- * proves checked; what passes goes to the receipt, which records it or
- * says what of this runtime's it still waits for. A terminal delivery
- * is acknowledged to the mediator and leaves nothing in the vault, only
- * a bounded diagnostic here and in the trace: what it lacked, without a
- * claimed sender presented as anyone, and without a cause asserted.
+ * proves checked; what passes goes to the receipt, which records it as
+ * one observation, told here by its event, or says what of this
+ * runtime's it still waits for. A terminal delivery is acknowledged to
+ * the mediator and leaves nothing in the vault, only a bounded
+ * diagnostic here and in the trace: what it lacked, without a claimed
+ * sender presented as anyone, and without a cause asserted.
  *
  * A runtime receives through one receiver at a time, so that every way
  * a delivery arrives — a pickup's drain, the socket, a direct post, a
@@ -37,7 +38,7 @@
 
 import type { Secret } from "@estoc/did-peer";
 import { canonicalize, parseStrict, type VaultRuntime } from "@estoc/event-store/v3";
-import { rawCidOfBytes, scanVault, type Did, type DidId, type DidUrl, type Keys, type KeyName, type MediationId, type VaultFold } from "@estoc/vault/v3";
+import { rawCidOfBytes, scanVault, type Did, type DidId, type DidUrl, type EventReference, type Keys, type KeyName, type MediationId, type VaultFold } from "@estoc/vault/v3";
 
 import { secretsResolverFor, unpack, type DidcommApi, type IMessage, type UnpackMetadata } from "../../protocol/didcomm.js";
 import { envelopeHeader } from "../../protocol/envelope.js";
@@ -80,18 +81,21 @@ export interface Authenticated {
 export type Watch = (fold: VaultFold) => string;
 
 /**
- * What the receipt made of an authenticated delivery: recorded, which
- * ends it; terminal; or deferred for something of this runtime's that
- * the fold can show is not ready, with a watch over it. A receipt that
- * cannot record for another reason throws instead, and the delivery is
- * not kept.
+ * What the receipt made of an authenticated delivery: recorded as the
+ * observation named, which ends it; terminal; or deferred for
+ * something of this runtime's that the fold can show is not ready,
+ * with a watch over it. A receipt that cannot record for another
+ * reason throws instead, and the delivery is not kept.
  */
-export type ReceiptOutcome = { outcome: "received" } | { outcome: "terminal"; reason: string } | { outcome: "deferred"; reason: string; watch: Watch };
+export type ReceiptOutcome = { outcome: "received"; eventId: EventReference<"message.in"> } | { outcome: "terminal"; reason: string } | { outcome: "deferred"; reason: string; watch: Watch };
 
 export type Receipt = (authenticated: Authenticated) => Promise<ReceiptOutcome>;
 
 /** What became of a delivery. `key` is what it is kept under; null only for a direct post that is not strict JSON. */
-export type Received = { outcome: "received"; key: string } | { outcome: "terminal"; key: string | null; reason: string } | { outcome: "deferred"; key: string; reason: string };
+export type Received =
+  | { outcome: "received"; key: string; eventId: EventReference<"message.in"> }
+  | { outcome: "terminal"; key: string | null; reason: string }
+  | { outcome: "deferred"; key: string; reason: string };
 
 export interface WaitingDelivery {
   key: string;
@@ -392,7 +396,7 @@ export class Receiver {
     }
     switch (outcome.outcome) {
       case "received":
-        return this.finish(key, delivery, null);
+        return this.record(key, delivery, outcome.eventId);
       case "terminal":
         return this.finish(key, delivery, outcome.reason);
       case "deferred":
@@ -434,13 +438,21 @@ export class Receiver {
     return { outcome: "deferred", key, reason: left };
   }
 
-  private async finish(key: string, delivery: Delivery, reason: string | null): Promise<Received> {
+  private async record(key: string, delivery: Delivery, eventId: EventReference<"message.in">): Promise<Received> {
     this.waits.delete(key);
     this.release(key);
-    const ended: Ended = reason === null ? { outcome: "received", key } : { outcome: "terminal", key, reason: bounded(reason) };
+    const ended: Ended = { outcome: "received", key, eventId };
     if (!this.closed) this.remember(key, ended);
-    if (reason === null) await this.diag(delivery, { outcome: "received" });
-    else await this.discard(delivery, reason);
+    await this.diag(delivery, { outcome: "received", eventId });
+    return ended;
+  }
+
+  private async finish(key: string, delivery: Delivery, reason: string): Promise<Received> {
+    this.waits.delete(key);
+    this.release(key);
+    const ended: Ended = { outcome: "terminal", key, reason: bounded(reason) };
+    if (!this.closed) this.remember(key, ended);
+    await this.discard(delivery, reason);
     return ended;
   }
 
@@ -485,8 +497,8 @@ export class Receiver {
   }
 }
 
-/** Watches what keeps each of these entities from receiving: the delivery is retried when that changes for any of them. */
-function recipientWatch(didIds: readonly DidId[]): Watch {
+/** Watches what keeps each of these entities from receiving: a delivery waiting on them is retried when that changes for any of them. */
+export function recipientWatch(didIds: readonly DidId[]): Watch {
   return (fold) => JSON.stringify(didIds.map((didId) => [fold.routes.receipt(didId), fold.routes.dids.get(didId)?.faults ?? null]));
 }
 
