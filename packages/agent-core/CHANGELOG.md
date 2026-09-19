@@ -41,7 +41,25 @@
   short form after. A package the fold holds is returned as it is;
   an expiry that has passed terminates the intent with
   `delivery.failed`. `prepareAll` walks every intent the fold says
-  needs a package.
+  needs a package. `dispatch` makes the one transport call of a package
+  under a `LiveAction` — minted by `send` with the intent, or by a
+  manual retry — that carries exactly one call: the message is prepared
+  when it still needs a package, a mediated sender the peer has not
+  written to is first made to be held by its mediator over `links`, the
+  envelope goes as it is to a direct endpoint or inside a Routing 2.0
+  forward under the package's ID to the mediator the recipient's
+  document names, the fold is read again under the lock where the
+  action is consumed, and acceptance is committed as
+  `delivery.submitted` (an acceptance the disk would not record is owed
+  and recorded before the message is worked on again). Any other
+  answer, or none, is traced and spends the action; only a fresh manual
+  action calls again. `cancel` terminates an unsubmitted message with
+  `delivery.failed { cancelled }`, serially with its dispatch. The
+  `Dispatcher` keeps a live action while a prerequisite is waited for,
+  trying again after thirty seconds doubling up to six hours, lists what
+  the fold leaves for manual action with the wait on it (`pending`),
+  and mints the manual action of `retry`; nothing scans the vault to
+  send on its own.
 - **The rotation proof is the vault's to judge.** The didcomm binding is
   now Estoc's build of didcomm-rust, `@estoc/didcomm` (peer, types) and
   `@estoc/didcomm-node`, whose `unpack` can leave a `from_prior` header

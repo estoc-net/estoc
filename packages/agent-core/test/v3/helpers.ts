@@ -1,8 +1,9 @@
 import { FromPrior, Message } from "@estoc/didcomm-node";
+import { vi } from "vitest";
 
 import { resolveDIDCommDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
 import { openNodeSqlite } from "@estoc/event-store/node";
-import type { JsonObject, SqliteDriver } from "@estoc/event-store/v3";
+import type { Held, JsonObject, SqliteDriver, VaultRuntime } from "@estoc/event-store/v3";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
 import {
   PLAINTEXT_TYP,
@@ -21,7 +22,7 @@ import {
   type WireMessageId,
 } from "@estoc/vault/v3";
 
-import { AgentTrace, Keyring, MediatorLink, authorizedKeys, commitResolution, configureRoute, createDid, createMediation, createVault, resolve, type LinkOptions, type OpenedVault } from "../../src/v3/index.js";
+import { AgentTrace, Keyring, MediatorLink, authorizedKeys, commitResolution, configureRoute, createDid, createMediation, createVault, ensureRoute, establish, resolve, type LinkOptions, type OpenedVault, type Timers } from "../../src/v3/index.js";
 import { FakeMediator, MEDIATOR_HTTP } from "../fake-mediator.js";
 
 export const didcomm = { Message, FromPrior };
@@ -204,4 +205,78 @@ export async function received(party: DirectParty, peer: DirectParty, wire: stri
     ]
   );
   return event!.eventId as EventReference<"message.in">;
+}
+
+export interface MediatedParty extends Party {
+  didId: DidId;
+  did: Did;
+  longFormDid: Did;
+}
+
+/** A party with its arrangement granted and one communication DID, `didId`, on a route over the mediator: the DID's document sends to the mediator. */
+export async function mediatedParty(mediator: FakeMediator, fill: number, didId: DidId): Promise<MediatedParty> {
+  const p = await party(mediator, fill);
+  await establish(p.link, p.runtime, p.keys, p.mediationId);
+  const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
+  const { minted } = await createDid(p.runtime, p.keys, routeId, didId);
+  return { ...p, didId, did: minted.did, longFormDid: minted.longFormDid };
+}
+
+export interface Post {
+  url: string;
+  body: string;
+  init: RequestInit;
+}
+
+/** A transport that records every request it is given, in order, and answers each with `answer`. */
+export function posting(answer: (post: Post) => Response | Promise<Response>): { fetch: typeof globalThis.fetch; posts: Post[] } {
+  const posts: Post[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const post: Post = { url, body: String(init?.body), init: init ?? {} };
+    posts.push(post);
+    return answer(post);
+  };
+  return { fetch, posts };
+}
+
+export type HandWait = { fire: () => void; ms: number; cleared: boolean };
+
+/** Timers the test fires by hand: every wait set, in order, and whether it was cleared. */
+export function handTimers(): Timers & { waits: HandWait[] } {
+  const waits: HandWait[] = [];
+  return {
+    waits,
+    set: (fire, ms) => {
+      const wait = { fire, ms, cleared: false };
+      waits.push(wait);
+      return wait;
+    },
+    clear: (handle) => {
+      (handle as HandWait).cleared = true;
+    },
+  };
+}
+
+/** The next `times` commits of a `delivery.submitted` under `runtime` throw: the disk refusing the record of an acceptance the wire gave. */
+export function refuseSubmissions(runtime: VaultRuntime, times: number): void {
+  const locked = runtime.locked.bind(runtime);
+  let left = times;
+  const refusing = (held: Held): Held =>
+    new Proxy(held, {
+      get(target, key) {
+        if (key === "commit") {
+          return async (...args: Parameters<Held["commit"]>) => {
+            if (left > 0 && args[1].some((draft) => draft.type === "delivery.submitted")) {
+              left--;
+              throw new Error("the disk is full for now");
+            }
+            return target.commit(...args);
+          };
+        }
+        const value = Reflect.get(target, key, target) as unknown;
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+  vi.spyOn(runtime, "locked").mockImplementation(((work: (held: Held) => Promise<unknown>) => locked((held) => work(refusing(held)))) as VaultRuntime["locked"]);
 }

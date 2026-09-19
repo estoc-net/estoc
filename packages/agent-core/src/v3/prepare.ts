@@ -99,7 +99,7 @@ export function hasExpired(intent: MessageOut, now: () => number): boolean {
 /** The package of one queued outbound: made here, or the one the fold already holds. */
 export function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
   return serially(runtime, outboundWorkKey(messageId), async () => {
-    const { result, notes } = await runtime.locked((held) => settle(held, keys, messageId, options));
+    const { result, notes } = await runtime.locked((held) => prepareUnderLock(held, keys, messageId, options));
     await noteAll(options.trace ?? null, notes);
     return result;
   });
@@ -115,9 +115,18 @@ export async function prepareAll(runtime: VaultRuntime, keys: Keys, options: Pre
   return results;
 }
 
-type Settled = { result: Prepared; notes: Note[] };
+/** What one locked step came to, and the trace entries it owes once the lock is released. */
+export type Settled<T> = { result: T; notes: Note[] };
 
-async function settle(held: Held, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Settled> {
+/** The expired failure of an unsubmitted intent, committed under the lock the caller holds; `phase` says what the expiry came before. */
+export async function expireUnderLock(held: Held, messageId: MessageId, phase: "preparation" | "dispatch"): Promise<Settled<Extract<Prepared, { outcome: "expired" }>>> {
+  const [event] = (await held.commit([], [vaultDraft("delivery.failed", { messageId, code: "expired" })])).map(readVaultEvent);
+  const notes: Note[] = [{ stream: "diag", what: "delivery", data: { messageId, code: "expired", reason: `the expiry passed before ${phase}` } }];
+  return { result: { outcome: "expired", messageId, failed: event as VaultEvent<"delivery.failed"> }, notes };
+}
+
+/** `prepare` for a caller that already holds the message's turn and the writer lock: the dispatch of a message the fold says needs a package first. */
+export async function prepareUnderLock(held: Held, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Settled<Prepared>> {
   const notes: Note[] = [];
   const fold = await scanVault(held, keys);
   const outbound = fold.outbound.outbounds.get(messageId);
@@ -126,11 +135,7 @@ async function settle(held: Held, keys: Keys, messageId: MessageId, options: Pre
   if (work.kind === "none") return { result: { outcome: "none", messageId, because: work.because }, notes };
   if (work.kind === "dispatch") return { result: { outcome: "reused", messageId, package: work.package }, notes };
   const intent = (outbound.intent as { data: MessageOut }).data;
-  if (hasExpired(intent, options.now ?? Date.now)) {
-    const [event] = (await held.commit([], [vaultDraft("delivery.failed", { messageId, code: "expired" })])).map(readVaultEvent);
-    notes.push({ stream: "diag", what: "delivery", data: { messageId, code: "expired", reason: "the expiry passed before preparation" } });
-    return { result: { outcome: "expired", messageId, failed: event as VaultEvent<"delivery.failed"> }, notes };
-  }
+  if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, "preparation");
   const sender = outbound.sender as LocalDidEntity;
   const channel = outbound.channel as Channel;
   const ends = await endsOf(fold, keys, sender, channel, intent.recipientDid);
