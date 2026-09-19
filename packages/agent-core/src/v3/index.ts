@@ -1,8 +1,8 @@
 /**
- * `@estoc/agent-core/v3` — the agent over the version-3 vault. Every
- * module decides over the fold read under the vault's writer lock and
- * commits what it decided before any network work; the one transport
- * call of a message goes under a live action once the lock is
+ * `@estoc/agent-core/v3` — the agent over the version-3 vault. A
+ * message is decided over the fold read under the vault's writer lock
+ * and committed as an intent, then as a package, before its one
+ * transport call, which goes under a live action once the lock is
  * released. The protocols themselves — message types and shapes — are
  * shared with the package root under `protocol/`; `unpack` opens an
  * inbound envelope there with its rotation proof left for the vault

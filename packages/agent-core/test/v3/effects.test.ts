@@ -348,6 +348,48 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
+  it("an operation declared twice is one operation: one intent, one initial action, one call, and after a refusal only a manual retry calls again", async () => {
+    const { alice, bob } = await parties();
+    const twice: Handler = { ...echo, effectTypes: [ECHO_EFFECT, ECHO_EFFECT] };
+    const { wire, options, live } = await reacting(alice, { handlers: [twice] }, refusingFirst());
+    const reacted = await live(bob, { type: BASIC_MESSAGE, body: { content: "hi" } });
+    expect(outcomes(reacted.effects)).toEqual([[ECHO_EFFECT, "created", "failed"]]);
+    const { messageId, action } = created(reacted.effects[0]);
+    expect([action.kind, action.spent, wire.posts.length, (await foldOf(alice)).set.of("message.out").length]).toEqual(["initial", true, 1, 1]);
+    const retried = await completeResponse(alice.runtime, alice.keys, reacted.executionId!, ECHO_EFFECT, options);
+    expect(retried).toMatchObject({ outcome: "existing", messageId, action: { kind: "manual", spent: true }, dispatched: { outcome: "submitted" } });
+    expect(wire.posts).toHaveLength(2);
+    await closeAll(alice, bob);
+  });
+
+  it("a response that makes no intent refuses its own operation alone, in either order: the invalid content is traced under its operation and the valid one is recorded and called", async () => {
+    const { alice, bob } = await parties();
+    const trace = await AgentTrace.open(alice.runtime.local);
+    const RATE = "https://example.org/meter/1.0#rate";
+    const RECEIPT = "https://example.org/meter/1.0#receipt";
+    const rate = (): ReturnType<Handler["respond"]> => Promise.resolve([{ effectType: RATE, content: { type: "https://example.org/meter/1.0/rate", body: { rate: Infinity } } }]);
+    const receipt = (): ReturnType<Handler["respond"]> => Promise.resolve([{ effectType: RECEIPT, content: { type: "https://example.org/meter/1.0/receipt", body: { received: true } } }]);
+    let order: "rate first" | "receipt first" = "rate first";
+    const meter: Handler = {
+      types: [BASIC_MESSAGE],
+      effectTypes: [RATE, RECEIPT],
+      respond: async () => (order === "rate first" ? [...(await rate()), ...(await receipt())] : [...(await receipt()), ...(await rate())]),
+    };
+    const { wire, live } = await reacting(alice, { trace, handlers: [meter] });
+    for (order of ["rate first", "receipt first"] as const) {
+      const reacted = await live(bob, { type: BASIC_MESSAGE, body: { content: order } });
+      expect(outcomes(reacted.effects)).toEqual([
+        [RATE, "refused", "not I-JSON: $.body.rate: Infinity is not a finite number"],
+        [RECEIPT, "created", "submitted"],
+      ]);
+      const rateId = automaticMessageId(effectKey(reacted.executionId!, RATE));
+      expect((await trace.read({ type: "diag.effect" })).map((entry) => entry.data)).toContainEqual({ messageId: rateId, executionId: reacted.executionId, effectType: RATE, reason: "not I-JSON: $.body.rate: Infinity is not a finite number" });
+    }
+    expect(wire.posts).toHaveLength(2);
+    expect((await trace.read({ type: "diag.effect" })).map((entry) => entry.data.effectType)).toEqual([RATE, RATE]);
+    await closeAll(alice, bob);
+  });
+
   it("the reply goes by the carrier's channel while its local DID sends, even with a successor selected; once that DID is retired, by the unique verified successor keeping the peer, carrying the rotation's proof; a competing successor leaves no channel", async () => {
     const { alice, bob } = await parties();
     const { options, receive, executionOf } = await reacting(alice);

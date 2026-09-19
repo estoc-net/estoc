@@ -3,9 +3,10 @@
  * on its own, each the one intent of one operation over it, decided
  * under the writer lock over the fold read there and committed each on
  * its own. Each operation is its own boundary: one whose handler
- * throws, whose record the disk refuses or whose call's step throws
- * leaves another's intent standing, recorded and dispatched, so that
- * the receipt an input requests never waits on its protocol's reply.
+ * throws, whose content makes no intent, whose record the disk refuses
+ * or whose call's step throws leaves another's intent standing,
+ * recorded and dispatched, so that the receipt an input requests never
+ * waits on its protocol's reply.
  * Before any is decided, the input must be established by a complete
  * witness in a channel that takes a reply now: not denied, not in
  * conflict, its peer not moved on; and the reply's sender chosen by
@@ -85,7 +86,7 @@ export type EffectOutcome =
   | { effectType: string; outcome: "existing"; messageId: MessageId; action: LiveAction | null; dispatched: Called | null }
   /** the operation gives the input nothing now */
   | { effectType: string; outcome: "none"; because: string }
-  /** the operation threw, in its handler deciding the content or in the disk recording the intent: nothing is committed for it, and the others stand */
+  /** the operation threw, in its handler deciding the content, in the content becoming an intent or in the disk recording it: nothing is committed for it, and the others stand */
   | { effectType: string; outcome: "refused"; because: string };
 
 export interface Reacted {
@@ -154,13 +155,15 @@ type Drafted =
  * declares, `only` narrowing them to one; each looks its tuple up
  * first, and only the ones with no intent yet are decided now — the
  * receipt by the vault, the rest by the handler, asked once for all of
- * them and answering with content for each it gives, one at most.
+ * them and answering with content for each it gives, one at most. A
+ * handler that throws refuses every operation it was asked for; a
+ * response that cannot be recorded refuses its own operation alone.
  */
 async function settle(held: Held, fold: VaultFold, execution: Execution, options: EffectOptions, only?: string): Promise<{ because: string | null; drafted: Drafted[] }> {
   if (execution.status.status !== "complete") return { because: `the input is not established: ${execution.status.because}`, drafted: [] };
   const source = execution.members.find((member) => member.witness.status === "complete")!.source;
   const handler = handlerFor(handlersOf(options.handlers), source.event.data.msgType);
-  const operations = [PURE_ACK_EFFECT, ...(handler?.effectTypes ?? [])].filter((effectType) => only === undefined || effectType === only);
+  const operations = [...new Set([PURE_ACK_EFFECT, ...(handler?.effectTypes ?? [])])].filter((effectType) => only === undefined || effectType === only);
   const trace = options.trace ?? null;
   const drafted = new Map<string, Drafted>();
   const open = new Map<string, MessageId>();
@@ -170,21 +173,24 @@ async function settle(held: Held, fold: VaultFold, execution: Execution, options
     else open.set(effectType, tuple.messageId);
   }
   const decide = async (response: Response): Promise<void> => {
-    if (!open.has(response.effectType)) return;
+    const messageId = open.get(response.effectType);
+    if (messageId === undefined) return;
+    drafted.set(response.effectType, await record(held, fold, execution, source, messageId, response, trace));
     open.delete(response.effectType);
-    drafted.set(response.effectType, await record(held, fold, execution, source, response, trace));
   };
   if (open.has(PURE_ACK_EFFECT)) for (const response of acknowledgement(fold, source, options.acknowledge ?? true)) await decide(response);
   if (handler !== null && handler.effectTypes.some((effectType) => open.has(effectType))) {
     const input: Input = { execution, source, readBody: () => readBody(held, execution, source), now: options.now ?? Date.now };
+    let responses: readonly Response[] = [];
     try {
-      for (const response of await handler.respond(input, fold)) await decide(response);
+      responses = await handler.respond(input, fold);
     } catch (err) {
       for (const effectType of handler.effectTypes) {
         const messageId = open.get(effectType);
         if (messageId !== undefined) drafted.set(effectType, await refused(effectType, messageId, execution.id, err, trace));
       }
     }
+    for (const response of responses) await decide(response);
   }
   return { because: null, drafted: operations.flatMap((effectType) => drafted.get(effectType) ?? []) };
 }
@@ -206,18 +212,18 @@ function acknowledgement(fold: VaultFold, source: Source, acknowledge: boolean):
   return [{ effectType: PURE_ACK_EFFECT, content }];
 }
 
-/** The channel and the record of one operation's output, once its tuple is known to hold no intent. */
-async function record(held: Held, fold: VaultFold, execution: Execution, source: Source, response: Response, trace: AgentTrace | null): Promise<Drafted> {
+/** The channel and the record of one operation's output, once its tuple is known to hold no intent: whatever throws in it, the channel not selected, the content not made into an intent or the record refused, is this operation's alone. */
+async function record(held: Held, fold: VaultFold, execution: Execution, source: Source, messageId: MessageId, response: Response, trace: AgentTrace | null): Promise<Drafted> {
   const { effectType } = response;
   if (response.content === null) return { effectType, outcome: "none", because: response.because };
-  const selected = responseChannel(fold, execution);
-  if (selected.status === "none") return { effectType, outcome: "none", because: selected.because };
-  const draft = automaticDraft(fold, { execution, source, effectType, channel: selected.channel }, response.content);
   try {
+    const selected = responseChannel(fold, execution);
+    if (selected.status === "none") return { effectType, outcome: "none", because: selected.because };
+    const draft = automaticDraft(fold, { execution, source, effectType, channel: selected.channel }, response.content);
     const [event] = (await held.commit(draft.objects!, [draft.draft!])).map(readVaultEvent);
-    return { effectType, outcome: "created", messageId: draft.messageId, intent: event as VaultEvent<"message.out"> };
+    return { effectType, outcome: "created", messageId, intent: event as VaultEvent<"message.out"> };
   } catch (err) {
-    return refused(effectType, draft.messageId, execution.id, err, trace);
+    return refused(effectType, messageId, execution.id, err, trace);
   }
 }
 
