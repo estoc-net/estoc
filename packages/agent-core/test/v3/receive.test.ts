@@ -431,12 +431,12 @@ describe("the gate before the vault", () => {
     await copy.runtime.ingest(await eventsOf(alice.runtime, "did.disclosed"));
     failing = true;
     expect(await receiver.localStateChanged()).toMatchObject([{ key: deliveryKey(toAlice), outcome: "deferred", reason: "the receipt failed: the disk is full; the delivery is left where it came from" }]);
-    expect([calls, await opened(), receiver.waiting().length]).toEqual([[DID, OTHER, DID], 3, 1]);
+    expect([calls, await opened(), receiver.waiting()]).toEqual([[DID, OTHER, DID], 3, []]);
+    expect(await receiver.localStateChanged()).toEqual([]);
 
-    expect(await receiver.localStateChanged()).toMatchObject([{ outcome: "deferred", reason: expect.stringContaining("left where it came from") }]);
     failing = false;
-    expect(await receiver.localStateChanged()).toMatchObject([{ outcome: "deferred", reason: "the receipt waits for the recipient's disclosure" }]);
-    expect([calls, await opened(), receiver.waiting().length]).toEqual([[DID, OTHER, DID, DID, DID], 5, 1]);
+    expect(await receiver.receive(toAlice)).toMatchObject({ outcome: "deferred", reason: "the receipt waits for the recipient's disclosure" });
+    expect([calls, await opened(), receiver.waiting().length]).toEqual([[DID, OTHER, DID, DID], 4, 1]);
     expect(await receiver.localStateChanged()).toEqual([]);
     receiver.close();
 
@@ -487,6 +487,99 @@ describe("the gate before the vault", () => {
     await copy.runtime.ingest(await eventsOf(alice.runtime, "did.disclosed"));
     expect((await receiver.localStateChanged()).map(({ outcome }) => outcome)).toEqual(["deferred"]);
     expect([calls, await opened()]).toEqual([2, 2]);
+    await closeAll(alice, bob, copy);
+  });
+
+  it("a waiting delivery whose retry fails — the vault not read, the receipt thrown — is let go with its bytes, and is taken when it comes again without another change", async () => {
+    for (const failure of ["read", "write"] as const) {
+      const { alice, bob } = await parties();
+      const copy = await copyOf(alice, "did.created");
+      let failing = false;
+      const { acknowledge, acknowledged } = acknowledging();
+      const seen: DidId[] = [];
+      const receiver = await receiverOver(copy, {
+        acknowledge,
+        receipt: async ({ recipient }) => {
+          seen.push(recipient.didId);
+          if (failing && failure === "write") throw new Error("the disk is full");
+          return { outcome: "received" };
+        },
+      });
+      const delivery: Delivery = { packed: await sealed(await peerSealer(bob), alice.longFormDid), source: PICKUP };
+      expect(await receiver.receive(delivery)).toMatchObject({ outcome: "deferred" });
+      expect(receiver.waiting()).toEqual([expect.objectContaining({ held: true })]);
+
+      await copy.runtime.ingest(await eventsOf(alice.runtime, "route.configured"));
+      failing = true;
+      const events = copy.runtime.vault.events;
+      const scan = events.scan.bind(events);
+      let scans = 0;
+      const spy = vi.spyOn(events, "scan").mockImplementation((...args: Parameters<typeof scan>) => {
+        scans += 1;
+        if (failure === "read" && scans === 2) throw new Error("the database is locked");
+        return scan(...args);
+      });
+      expect(await receiver.localStateChanged()).toMatchObject([{ outcome: "deferred", reason: expect.stringContaining("left where it came from") }]);
+      spy.mockRestore();
+      failing = false;
+      expect([receiver.waiting(), acknowledged, seen.length]).toEqual([[], [], failure === "write" ? 1 : 0]);
+
+      expect(await receiver.pickupHandle(MEDIATION)({ attachmentId: PICKUP.deliveryId, packed: delivery.packed })).toBe("acked");
+      expect(seen.length).toBe(failure === "write" ? 2 : 1);
+      await closeAll(alice, bob, copy);
+    }
+  });
+
+  it("a comparison that cannot read the vault lets the waiting deliveries go rather than opening them: one already held, and one whose receipt is still deciding", async () => {
+    const { alice, bob } = await parties();
+    const copy = await copyOf(alice, "did.created", "route.configured");
+    const trace = await AgentTrace.open(copy.runtime.local);
+    const opened = async (): Promise<number> => (await trace.read({ type: "envelope.open" })).length;
+    let deciding: () => void = () => undefined;
+    let decide: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      deciding = resolve;
+    });
+    const resumed = new Promise<void>((resolve) => {
+      decide = resolve;
+    });
+    let calls = 0;
+    const receiver = await receiverOver(copy, {
+      trace,
+      receipt: async () => {
+        calls += 1;
+        if (calls === 2) {
+          deciding();
+          await resumed;
+        }
+        return { outcome: "deferred", reason: "the receipt waits for the recipient's disclosure", watch: (fold) => String(fold.routes.dids.get(DID)?.disclosures.length ?? 0) };
+      },
+    });
+    const events = copy.runtime.vault.events;
+    const failOnce = (): void => {
+      vi.spyOn(events, "scan").mockImplementationOnce(() => {
+        throw new Error("the database is locked");
+      });
+    };
+    const delivery: Delivery = { packed: await sealed(await peerSealer(bob), alice.longFormDid), source: PICKUP };
+
+    expect(await receiver.receive(delivery)).toMatchObject({ outcome: "deferred", reason: "the receipt waits for the recipient's disclosure" });
+    await configureRoute(copy.runtime, copy.keys, { kind: "direct", endpoint: OTHER_ENDPOINT });
+    failOnce();
+    expect(await receiver.localStateChanged()).toMatchObject([{ outcome: "deferred", reason: "the vault is not read to tell what changed; the delivery is left where it came from" }]);
+    expect([receiver.waiting(), calls, await opened()]).toEqual([[], 1, 1]);
+
+    const second = receiver.receive(delivery);
+    await entered;
+    await configureRoute(copy.runtime, copy.keys, { kind: "direct", endpoint: CAROL_ENDPOINT });
+    expect(await receiver.localStateChanged()).toEqual([]);
+    failOnce();
+    decide();
+    expect(await second).toMatchObject({ outcome: "deferred", reason: "the vault is not read to tell what changed; the delivery is left where it came from" });
+    expect([receiver.waiting(), calls, await opened()]).toEqual([[], 2, 2]);
+
+    expect(await receiver.receive(delivery)).toMatchObject({ outcome: "deferred", reason: "the receipt waits for the recipient's disclosure" });
+    expect([receiver.waiting().length, calls, await opened()]).toEqual([1, 3, 3]);
     await closeAll(alice, bob, copy);
   });
 

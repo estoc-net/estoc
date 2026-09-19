@@ -24,9 +24,10 @@
  * for retries it, from the bytes held or at the next redelivery, and
  * one retried off a pickup's turn is acknowledged through `acknowledge`
  * once it is received or found terminal. A delivery waits only for
- * something the fold can show; one whose attempt failed — the vault
- * not read, the receipt thrown — is not kept at all, and comes again
- * from where it came. What is kept is bounded: past as many waiting
+ * something the fold can show; where the vault cannot be read or the
+ * receipt throws, nothing is kept of the delivery — a wait it had is
+ * let go with its bytes — and it comes again from where it came, into
+ * the gate afresh. What is kept is bounded: past as many waiting
  * deliveries as are allowed, a delivery that would wait is likewise
  * left where it came from, since the mediator's copy is the only copy
  * and nothing addressed here may be dropped for want of room. Nothing
@@ -231,9 +232,9 @@ export class Receiver {
   /**
    * Something of this runtime's changed: every waiting delivery whose
    * watch now says something else is retried from its bytes, or opened
-   * at its next redelivery when they are not held. While the vault
-   * cannot be read to compare, every waiting delivery is retried, since
-   * a retry that cannot read it either leaves the wait as it was.
+   * at its next redelivery when they are not held. When the vault
+   * cannot be read to compare, nothing can be told of any wait, and
+   * every waiting delivery is let go to come again from where it came.
    */
   async localStateChanged(): Promise<Received[]> {
     this.changes += 1;
@@ -244,7 +245,10 @@ export class Receiver {
     for (const [key, wait] of waiting) {
       if (this.closed) break;
       if (fold !== null && wait.watch(fold) === wait.seen) continue;
-      const received = await this.retryInTurn(key, wait);
+      const received = await this.inTurn(key, () => {
+        if (this.waits.get(key) !== wait) return Promise.resolve(null);
+        return fold === null ? this.leave(key, wait, "the vault is not read to tell what changed") : this.retry(key, wait);
+      });
       if (received !== null) results.push(received);
     }
     return results;
@@ -285,10 +289,6 @@ export class Receiver {
   /** Steps for one delivery run one at a time under its runtime, so that a receiver closed while finishing one still goes before the next receiver's. */
   private inTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
     return serially(this.runtime, key, work);
-  }
-
-  private retryInTurn(key: string, wait: Wait): Promise<Received | null> {
-    return this.inTurn(key, () => (this.waits.get(key) === wait ? this.retry(key, wait) : Promise.resolve(null)));
   }
 
   private async foldOrNull(): Promise<VaultFold | null> {
@@ -414,7 +414,8 @@ export class Receiver {
     while (!this.closed && this.changes !== observed) {
       observed = this.changes;
       const fold = await this.foldOrNull();
-      if (fold === null || watch(fold) !== seen) return this.attempt(key, delivery);
+      if (fold === null) return this.leave(key, delivery, "the vault is not read to tell what changed");
+      if (watch(fold) !== seen) return this.attempt(key, delivery);
     }
     if (this.closed) return this.leave(key, delivery, reason);
     if (!this.waits.has(key) && this.waits.size >= this.maxWaiting) return this.leave(key, delivery, `${reason}; as many deliveries wait as may`);
@@ -424,8 +425,10 @@ export class Receiver {
     return { outcome: "deferred", key, reason };
   }
 
-  /** A delivery not kept: whatever waits for it already stays as it was, and it comes again from where it came. */
-  private async leave(key: string, delivery: Delivery, reason: string): Promise<Received> {
+  /** A delivery not kept: a wait it had is let go with its bytes, and it comes again from where it came. */
+  private async leave(key: string, delivery: Pick<Delivery, "source" | "parent">, reason: string): Promise<Received> {
+    this.waits.delete(key);
+    this.release(key);
     const left = bounded(`${reason}; the delivery is left where it came from`);
     await this.diag(delivery, { outcome: "deferred", reason: left });
     return { outcome: "deferred", key, reason: left };
@@ -475,7 +478,7 @@ export class Receiver {
     return this.diag(delivery, { outcome: "terminal", reason: kept });
   }
 
-  private diag(delivery: Delivery, data: TraceData): Promise<unknown> {
+  private diag(delivery: Pick<Delivery, "source" | "parent">, data: TraceData): Promise<unknown> {
     const { source } = delivery;
     const via: TraceData = source.kind === "pickup" ? { via: "pickup", mediationId: source.mediationId, deliveryId: source.deliveryId } : { via: "direct" };
     return note(this.options.trace ?? null, { stream: "diag", what: "receive", data: { ...via, parent: delivery.parent, ...data } });
