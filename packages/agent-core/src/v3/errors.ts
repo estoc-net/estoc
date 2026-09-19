@@ -73,3 +73,23 @@ export class UnauthorizedKey extends Error {
     this.name = "UnauthorizedKey";
   }
 }
+
+/** A contact's selected channels lead to more than one head a send may go to, or its preference matches none of them: which one is the caller's to say, as a channel. */
+export class AmbiguousTarget extends Error {
+  constructor(
+    contactId: string,
+    readonly channels: readonly { localDid: string; peerDid: string }[],
+    readonly preferenceMatchesNone: boolean
+  ) {
+    super(`contact ${contactId} may be written to at ${channels.length} channels${preferenceMatchesNone ? ", none of them under its preferred DID" : ""}: ${channels.map((channel) => `${channel.localDid} / ${channel.peerDid}`).join(", ")}`);
+    this.name = "AmbiguousTarget";
+  }
+}
+
+/** A contact's selected channels lead to no head a send may go to now. */
+export class NoTarget extends Error {
+  constructor(contactId: string, because: string) {
+    super(`contact ${contactId} cannot be written to: ${because}`);
+    this.name = "NoTarget";
+  }
+}

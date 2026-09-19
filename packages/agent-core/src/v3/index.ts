@@ -9,7 +9,10 @@
  * the exact evidence the vault retains and the failures that leave
  * work retryable told from the ones that close it (`resolver`); and that
  * evidence committed, read back and handed to didcomm under the
- * spelling it asks for (`evidence`). The protocols themselves —
+ * spelling it asks for (`evidence`); and a message decided and
+ * committed as an intent in its fixed channel before any network work,
+ * as a user's send or an operation's automatic effect (`send`). The
+ * protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`; `unpack` opens an inbound envelope there with its
  * rotation proof left for the vault to judge.
@@ -17,7 +20,7 @@
 
 export { EnvelopeRefused, unpack, type Unpacked } from "../protocol/didcomm.js";
 
-export { EntityConflict, MediatorRefused, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
+export { AmbiguousTarget, EntityConflict, MediatorRefused, NoTarget, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
   createVault,
   inspectRuntime,
@@ -84,3 +87,4 @@ export {
   type PinnedResolverOptions,
   type ResolutionEvidence,
 } from "./evidence.js";
+export { automaticDraft, send, type AutomaticDraft, type Content, type Effect, type EffectContent, type SendOptions, type Sent, type Target } from "./send.js";
