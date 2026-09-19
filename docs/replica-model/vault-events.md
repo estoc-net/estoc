@@ -1910,8 +1910,13 @@ Requirements:
   evidence metadata, excluded from the message hashes;
 - for authenticated input, derive the [channel pair](channels.md#channel-identity)
   from the local DID owning `localKeyName` and the authenticated canonical `did`.
-  Validate the local DID against the actual plaintext recipient; missing exact
-  DID/key evidence defers dependent projections. Anonymous input has no channel.
+  Validate that local DID/key mapping against the exact local key-agreement
+  method that successfully decrypted the authcrypt layer, under the
+  [recipient evidence rule](channels.md#carried-proof-and-library-boundary).
+  The plaintext `to` header is audience information, not recipient evidence;
+  its absence or failure to name that local DID does not by itself invalidate
+  receipt or change its channel. Missing exact DID/key evidence defers
+  dependent projections. Anonymous input has no channel.
 - `presentedDid` is the exact DID spelling disclosed on the wire, including a
   Peer DID long form when first seen;
 - `did` is the canonical peer DID, using Peer DID numalgo-4 short form after
