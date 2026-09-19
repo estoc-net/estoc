@@ -1,36 +1,12 @@
 /**
- * `@estoc/agent-core/v3` — the agent over the version-3 vault, bottom
- * up: the vault opened, created and inspected with the seed's keys
- * (`identity`); the keys in hand for didcomm (`keyring`); the trace of
- * what this runtime observed (`trace`); the line to a mediator and the
- * pickup of what it holds (`link`, `pickup`); the mediation rituals and
- * the reconciliation of recipients (`mediation`); routes, communication
- * DIDs, disclosure and retirement (`dids`); a peer's DID resolved to
- * the exact evidence the vault retains and the failures that leave
- * work retryable told from the ones that close it (`resolver`); and that
- * evidence committed, read back and handed to didcomm under the
- * spelling it asks for (`evidence`); and a message decided and
- * committed as an intent in its fixed channel before any network work,
- * as a user's send or an operation's automatic effect (`send`); and
- * that intent's one package made from local evidence alone and
- * committed with its envelope (`prepare`); and that package's one
- * transport call under a live action, its acceptance recorded, its
- * cancellation, and the dispatcher that waits out a prerequisite for
- * as long as the action lives (`action`, `dispatch`, `dispatcher`);
- * and every delivery handed to this runtime taken through the gate
- * before the vault — its recipient one of ours, its sender read from
- * what the vault holds, the envelope opened and what it proves checked
- * — and handed on to the receipt or refused; and that delivery
- * recorded as one observation in the vault, under the lock, with its
- * resolution evidence and its content, and nothing of the peer looked
- * up; and what follows that observation once it is committed — the
- * invitation it consumes, the acknowledgement it carries, the proof
- * it failed — recorded over the fold's judgement and dispatching
- * nothing (`receive/`).
- * The protocols themselves —
- * message types and shapes — are shared with the package root under
- * `protocol/`; `unpack` opens an inbound envelope there with its
- * rotation proof left for the vault to judge.
+ * `@estoc/agent-core/v3` — the agent over the version-3 vault. A
+ * message is decided over the fold read under the vault's writer lock
+ * and committed as an intent, then as a package, before its one
+ * transport call, which goes under a live action once the lock is
+ * released. The protocols themselves — message types and shapes — are
+ * shared with the package root under `protocol/`; `unpack` opens an
+ * inbound envelope there with its rotation proof left for the vault
+ * to judge.
  */
 
 export { EnvelopeRefused, unpack, type Unpacked } from "../protocol/didcomm.js";
@@ -104,7 +80,7 @@ export {
 } from "./evidence.js";
 export { automaticDraft, send, type AutomaticDraft, type Content, type Effect, type EffectContent, type SendOptions, type Sent, type Target } from "./send.js";
 export { MAX_CONTENT_BYTES, hasExpired, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
-export { LiveAction, type ActionKind } from "./action.js";
+export { LiveAction, LiveInput, type ActionKind } from "./action.js";
 export { DISPATCH_TIMEOUT_MS, MAX_ENVELOPE_BYTES, cancel, dispatch, type Cancelled, type DispatchOptions, type Dispatched } from "./dispatch.js";
 export { Dispatcher, GLOBAL_TIMERS, LONGEST_TIMER_MS, RETRY_POLICY, type DispatcherOptions, type PendingOutbound, type RetryPolicy, type Timers, type Waiting } from "./dispatcher.js";
 export { classifyRecipients, sealingOf, senderEvidence, senderProof, type AuthenticatedSender, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
@@ -132,3 +108,5 @@ export {
 export { receiptOf, recordReceipt } from "./receive/receipt.js";
 export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
 export { afterReceipt, type AfterReceipt, type AfterReceiptOptions } from "./receive/after.js";
+export { completeResponse, reactTo, type Called, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
+export { BUILT_IN_HANDLERS, basicMessage, claimedName, effectTypesOf, empty, handlerFor, handlersOf, reportProblem, trustPing, userProfile, type Handler, type Input, type Response } from "./handlers/index.js";
