@@ -109,8 +109,9 @@ export interface PackageProblem {
 /**
  * One block of the closure as a DIDComm attachment. The `id` is the CID
  * and is the only name the block has: DIDComm's `data.hash` is not used,
- * because it is defined alongside `links`, not `base64`, and
- * didcomm-rust drops it from an inline attachment.
+ * because it is defined alongside `links`, not `base64`, and the
+ * upstream didcomm-rust build, which the Estoc build corrects, drops it
+ * from an inline attachment.
  */
 export interface BlockAttachment {
   id: string;

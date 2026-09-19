@@ -161,7 +161,6 @@ export function plainMessage(
     type,
     ...(from === null ? {} : { from }),
     to: [to],
-    // The spec wants UTC epoch seconds, not milliseconds.
     created_time: Math.floor(Date.now() / 1000),
     body,
   } as IMessage;
