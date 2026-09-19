@@ -48,6 +48,7 @@ import {
   type LocalDidEntity,
   type MessageId,
   type MessageOut,
+  type Outbound,
   type Package,
   type PackageId,
   type PublicKey,
@@ -57,6 +58,7 @@ import {
 } from "@estoc/vault/v3";
 
 import { packEncrypted, secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
+import { recordOwedAcceptance } from "./acceptance.js";
 import { UnknownEntity } from "./errors.js";
 import { authorizedKeys, commitResolution, didcommDocumentOf, pinnedResolver } from "./evidence.js";
 import { secretsOf } from "./keyring.js";
@@ -84,7 +86,7 @@ export type Prepared =
   | { outcome: "none"; messageId: MessageId; because: string }
   /** the package cannot be made from what is here now, and what is missing may still arrive: the message stays queued */
   | { outcome: "pending"; messageId: MessageId; because: string }
-  /** the expiry passed before a package was made: the message is terminated */
+  /** the expiry had come when the message was looked at, whether or not a package was made: the message is terminated */
   | { outcome: "expired"; messageId: MessageId; failed: VaultEvent<"delivery.failed"> };
 
 /** The key every piece of work on one outbound runs under, serially per runtime (`serially`): its preparation here, its transport call after. */
@@ -96,10 +98,31 @@ export function hasExpired(intent: MessageOut, now: () => number): boolean {
   return intent.expiresTime !== null && now() >= intent.expiresTime * 1000;
 }
 
-/** The package of one queued outbound: made here, or the one the fold already holds. */
+/**
+ * Why a message takes no more work whatever holds it up otherwise: its
+ * intent is in conflict, it is submitted, or it is terminated. Null
+ * while it is open. What makes the message wait — a blocked channel,
+ * a package whose evidence is not here — comes after this, and after
+ * its expiry: an expiry that has come terminates the intent itself,
+ * without a package and whatever else the fold says.
+ */
+export function closedBecause(outbound: Outbound): string | null {
+  if (outbound.intent.status === "conflict") return outbound.intent.because;
+  if (outbound.submitted) return "submitted";
+  if (outbound.terminal !== null) return `terminated: ${outbound.terminal.event.data.code}`;
+  return null;
+}
+
+/** What the expiry of an open message came before, for the trace: the package it has none of, or the call of the one it has. */
+export function expiryPhase(outbound: Outbound): "preparation" | "dispatch" {
+  return outbound.package === null ? "preparation" : "dispatch";
+}
+
+/** The package of one queued outbound: made here, or the one the fold already holds. An acceptance this runtime saw and has not recorded yet is recorded first, so that the fold read here shows the message submitted rather than open to expiry. */
 export function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
   return serially(runtime, outboundWorkKey(messageId), async () => {
-    const { result, notes } = await runtime.locked((held) => settle(held, keys, messageId, options));
+    await recordOwedAcceptance(runtime, messageId);
+    const { result, notes } = await runtime.locked((held) => prepareUnderLock(held, keys, messageId, options));
     await noteAll(options.trace ?? null, notes);
     return result;
   });
@@ -115,22 +138,29 @@ export async function prepareAll(runtime: VaultRuntime, keys: Keys, options: Pre
   return results;
 }
 
-type Settled = { result: Prepared; notes: Note[] };
+/** What one locked step came to, and the trace entries it owes once the lock is released. */
+export type Settled<T> = { result: T; notes: Note[] };
 
-async function settle(held: Held, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Settled> {
+/** The expired failure of an unsubmitted intent, committed under the lock the caller holds; `phase` says what the expiry came before. */
+export async function expireUnderLock(held: Held, messageId: MessageId, phase: "preparation" | "dispatch"): Promise<Settled<Extract<Prepared, { outcome: "expired" }>>> {
+  const [event] = (await held.commit([], [vaultDraft("delivery.failed", { messageId, code: "expired" })])).map(readVaultEvent);
+  const notes: Note[] = [{ stream: "diag", what: "delivery", data: { messageId, code: "expired", reason: `the expiry passed before ${phase}` } }];
+  return { result: { outcome: "expired", messageId, failed: event as VaultEvent<"delivery.failed"> }, notes };
+}
+
+/** `prepare` for a caller that already holds the message's turn and the writer lock: the dispatch of a message the fold says needs a package first. */
+export async function prepareUnderLock(held: Held, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Settled<Prepared>> {
   const notes: Note[] = [];
   const fold = await scanVault(held, keys);
   const outbound = fold.outbound.outbounds.get(messageId);
   if (outbound === undefined) throw new UnknownEntity("message", messageId);
+  const closed = closedBecause(outbound);
+  if (closed !== null) return { result: { outcome: "none", messageId, because: closed }, notes };
+  const intent = (outbound.intent as { data: MessageOut }).data;
+  if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
   const { work } = outbound;
   if (work.kind === "none") return { result: { outcome: "none", messageId, because: work.because }, notes };
   if (work.kind === "dispatch") return { result: { outcome: "reused", messageId, package: work.package }, notes };
-  const intent = (outbound.intent as { data: MessageOut }).data;
-  if (hasExpired(intent, options.now ?? Date.now)) {
-    const [event] = (await held.commit([], [vaultDraft("delivery.failed", { messageId, code: "expired" })])).map(readVaultEvent);
-    notes.push({ stream: "diag", what: "delivery", data: { messageId, code: "expired", reason: "the expiry passed before preparation" } });
-    return { result: { outcome: "expired", messageId, failed: event as VaultEvent<"delivery.failed"> }, notes };
-  }
   const sender = outbound.sender as LocalDidEntity;
   const channel = outbound.channel as Channel;
   const ends = await endsOf(fold, keys, sender, channel, intent.recipientDid);

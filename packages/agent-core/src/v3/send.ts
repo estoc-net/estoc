@@ -52,6 +52,7 @@ import {
   type VaultFold,
 } from "@estoc/vault/v3";
 
+import { LiveAction } from "./action.js";
 import { AmbiguousTarget, EntityConflict, NoTarget, UnknownEntity, Unusable } from "./errors.js";
 import { objectsHeld } from "./evidence.js";
 
@@ -93,6 +94,8 @@ export interface Sent {
   intent: VaultEvent<"message.out">;
   /** an equal intent under this message ID was there already, its objects held: nothing was written */
   existed: boolean;
+  /** the one transport call this send authorizes: `initial` with a new intent, `manual` when the user sent again for one already recorded */
+  action: LiveAction;
 }
 
 type IntentFields = Omit<MessageOut, "senderDidId" | "recipientDid">;
@@ -111,15 +114,15 @@ export async function send(runtime: VaultRuntime, keys: Keys, target: Target, co
   return runtime.locked(async (held) => {
     const fold = await scanVault(held, keys);
     const existing = fold.outbound.outbounds.get(messageId);
-    if (existing !== undefined) return repeat(held, fold, existing, target, fields, objects, roots);
+    if (existing !== undefined) return { ...(await repeat(held, fold, existing, target, fields, objects, roots)), action: new LiveAction(messageId, "manual") };
     const { sender, channel, recipientDid } = select(fold, target);
     const data: MessageOut = { ...fields, senderDidId: sender.didId, recipientDid };
     const [event] = (await held.commit(objects, [vaultDraft("message.out", data)])).map(readVaultEvent);
-    return { messageId, channel, senderDidId: sender.didId, intent: event as VaultEvent<"message.out">, existed: false };
+    return { messageId, channel, senderDidId: sender.didId, intent: event as VaultEvent<"message.out">, existed: false, action: new LiveAction(messageId, "initial") };
   });
 }
 
-async function repeat(held: Held, fold: VaultFold, existing: Outbound, target: Target, fields: IntentFields, objects: CommitObject[], roots: readonly Cid[]): Promise<Sent> {
+async function repeat(held: Held, fold: VaultFold, existing: Outbound, target: Target, fields: IntentFields, objects: CommitObject[], roots: readonly Cid[]): Promise<Omit<Sent, "action">> {
   const { messageId } = fields;
   if (existing.intent.status === "conflict" || existing.channel === null) throw new EntityConflict("message", messageId, existing.intent.status === "conflict" ? existing.intent.because : "an intent whose sender is not here");
   const { data } = existing.intent;

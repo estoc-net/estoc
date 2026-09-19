@@ -231,6 +231,37 @@ describe("reconciling recipients", () => {
     await p.runtime.close();
   });
 
+  it("refuses a mediator whose pages make no progress or never end, and is ready for the account's next procedure", async () => {
+    const mediator = await newMediator();
+    const p = await party(mediator);
+    await establish(p.link, p.runtime, p.keys, p.mediationId);
+    const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
+    const a = await createDid(p.runtime, p.keys, routeId);
+    const established = mediator.seenTypes.filter((type) => type === RECIPIENT_QUERY).length;
+    const queries = () => mediator.seenTypes.filter((type) => type === RECIPIENT_QUERY).length - established;
+    const offsetOf = (msg: IMessage) => (msg.body as { paginate: { offset: number } }).paginate.offset;
+    const paging = (entries: (msg: IMessage) => unknown[]) => {
+      mediator.intercept = (msg, from) => (msg.type === RECIPIENT_QUERY ? mediator.reply(RECIPIENT, from!, { dids: entries(msg), pagination: { count: 1, offset: offsetOf(msg), remaining: 1 } }, msg.id) : undefined);
+    };
+
+    paging(() => [{ recipient_did: a.minted.did }]);
+    await expect(reconcile(p.link, p.runtime, p.keys, p.mediationId)).rejects.toThrow(/recipient-query lists .* again at offset 1/);
+    expect(queries()).toBe(2);
+
+    paging((msg) => [{ recipient_did: `did:peer:2.Ez6page${offsetOf(msg)}` }]);
+    await expect(reconcile(p.link, p.runtime, p.keys, p.mediationId)).rejects.toThrow(/recipient-query lists more than 100 pages/);
+    expect(queries()).toBe(102);
+
+    paging(() => [{ action: "add" }]);
+    await expect(reconcile(p.link, p.runtime, p.keys, p.mediationId)).rejects.toThrow(/recipient-query names no recipient at offset 0/);
+    expect(queries()).toBe(103);
+
+    mediator.intercept = null;
+    expect(registered(await reconcile(p.link, p.runtime, p.keys, p.mediationId), a.minted.did)).toBe(true);
+    expect(mediator.seenTypes.filter((type) => type === RECIPIENT_UPDATE)).toHaveLength(1);
+    await p.runtime.close();
+  });
+
   it("needs a usable arrangement", async () => {
     const p = await party(await newMediator());
     await expect(reconcile(p.link, p.runtime, p.keys, p.mediationId)).rejects.toBeInstanceOf(Unusable);

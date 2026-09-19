@@ -13,7 +13,11 @@
  * committed as an intent in its fixed channel before any network work,
  * as a user's send or an operation's automatic effect (`send`); and
  * that intent's one package made from local evidence alone and
- * committed with its envelope (`prepare`). The protocols themselves —
+ * committed with its envelope (`prepare`); and that package's one
+ * transport call under a live action, its acceptance recorded, its
+ * cancellation, and the dispatcher that waits out a prerequisite for
+ * as long as the action lives (`action`, `dispatch`, `dispatcher`).
+ * The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`; `unpack` opens an inbound envelope there with its
  * rotation proof left for the vault to judge.
@@ -90,3 +94,6 @@ export {
 } from "./evidence.js";
 export { automaticDraft, send, type AutomaticDraft, type Content, type Effect, type EffectContent, type SendOptions, type Sent, type Target } from "./send.js";
 export { MAX_CONTENT_BYTES, hasExpired, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
+export { LiveAction, type ActionKind } from "./action.js";
+export { DISPATCH_TIMEOUT_MS, MAX_ENVELOPE_BYTES, cancel, dispatch, type Cancelled, type DispatchOptions, type Dispatched } from "./dispatch.js";
+export { Dispatcher, GLOBAL_TIMERS, LONGEST_TIMER_MS, RETRY_POLICY, type DispatcherOptions, type PendingOutbound, type RetryPolicy, type Timers, type Waiting } from "./dispatcher.js";
