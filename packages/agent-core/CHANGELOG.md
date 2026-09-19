@@ -24,6 +24,24 @@
   disclosed only once its registration is verified, an `oob` disclosure
   carried by an invitation with the long form. The shared protocol
   constants gain `RECIPIENT_QUERY` and `RECIPIENT`.
+- **A message is decided, then packaged, before any network work.**
+  `send` commits the objects and one `message.out` in a single batch
+  under the writer lock, the channel fixed at commit — one live local
+  DID of ours and the peer's DID in the exact spelling given — through
+  a channel target in any spelling or a contact's one eligible head
+  (`AmbiguousTarget`, `NoTarget`); `automaticDraft` builds the intent of
+  an automatic effect under the message ID its tuple derives. `prepare`
+  makes the one package of a queued intent from local evidence alone —
+  a numalgo-4 recipient resolved from its long form, a short form
+  waiting for the long form to be in evidence rather than going to the
+  network — and commits the envelope object, the resolution evidence
+  and `message.prepared` under one lock; the sender goes out under its
+  long form with the frozen proof of the rotation that made it a
+  successor until the peer has written to that address, and under its
+  short form after. A package the fold holds is returned as it is;
+  an expiry that has passed terminates the intent with
+  `delivery.failed`. `prepareAll` walks every intent the fold says
+  needs a package.
 - **The rotation proof is the vault's to judge.** The didcomm binding is
   now Estoc's build of didcomm-rust, `@estoc/didcomm` (peer, types) and
   `@estoc/didcomm-node`, whose `unpack` can leave a `from_prior` header
