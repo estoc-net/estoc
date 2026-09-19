@@ -84,8 +84,6 @@ export type Target = { channel: Channel; recipientDid?: string; preRotation?: bo
 export interface SendOptions {
   /** the message ID, for a send repeated after a crash: a fresh UUIDv7 when left out */
   messageId?: MessageId;
-  /** the rotation decision this message is the notification of, for a rotation with no trigger input */
-  rotationEventId?: EventReference<"did.rotationSelected">;
 }
 
 export interface Sent {
@@ -109,7 +107,7 @@ type IntentFields = Omit<MessageOut, "senderDidId" | "recipientDid">;
  */
 export async function send(runtime: VaultRuntime, keys: Keys, target: Target, content: Content, options: SendOptions = {}): Promise<Sent> {
   const messageId = options.messageId ?? (uuidv7() as MessageId);
-  const { fields, objects, roots } = intentOf(messageId, content, [], { rotationEventId: options.rotationEventId ?? null });
+  const { fields, objects, roots } = intentOf(messageId, content, [], LOCAL);
   return runtime.locked(async (held) => {
     const fold = await scanVault(held, keys);
     const existing = fold.outbound.outbounds.get(messageId);
@@ -172,7 +170,6 @@ function selectContact(fold: VaultFold, contactId: ContactId): Selected {
   throw new AmbiguousTarget(contactId, view.writeTo, view.preference !== null && view.preference.matches.length === 0);
 }
 
-/** The channel checked for a send now: its local DID live, the pair not denied or in conflict, and not moved on from unless the caller said so. */
 function inChannel(fold: VaultFold, channel: Channel, recipientDid: Did, preRotation: boolean): Selected {
   const gate = senderGate(fold, channel);
   if (gate.status === "closed") throw new Unusable("channel", channelKey(channel), [gate.because]);
@@ -195,7 +192,7 @@ type EffectFields = Pick<MessageOut, "executionId" | "effectType" | "effectKey" 
 
 const LOCAL: EffectFields = { executionId: null, effectType: null, effectKey: null, sourceEventId: null, rotationEventId: null };
 
-function intentOf(messageId: MessageId, content: Content, ack: readonly string[], effect: Partial<EffectFields>): { fields: IntentFields; objects: CommitObject[]; roots: readonly Cid[] } {
+function intentOf(messageId: MessageId, content: Content, ack: readonly string[], effect: EffectFields): { fields: IntentFields; objects: CommitObject[]; roots: readonly Cid[] } {
   const stored = storeMessage(content.body, content.attachments);
   const intent: Intent = {
     id: messageId,
@@ -222,7 +219,6 @@ function intentOf(messageId: MessageId, content: Content, ack: readonly string[]
     bodyCid: stored.bodyCid,
     attachmentCids: stored.attachmentCids,
     intentHash: intentHash(intent),
-    ...LOCAL,
     ...effect,
   };
   const objects: CommitObject[] = [{ cid: stored.bodyCid, source: stored.bytes }, ...stored.payloads.map(({ cid, bytes }) => ({ cid, source: bytes }))];
@@ -248,21 +244,20 @@ export interface EffectContent extends Content {
   ack?: readonly string[];
 }
 
-/** The tuple, its message ID and the intent already recorded under it, with the draft and the objects a new one commits. */
-export interface AutomaticDraft extends AutomaticIntent {
-  draft: VaultDraft<"message.out">;
-  objects: CommitObject[];
-}
+/** The tuple and its message ID, with the intent already recorded under it, or else the draft and the objects a new one commits. */
+export type AutomaticDraft = Omit<AutomaticIntent, "existing"> & ({ existing: Outbound; draft: null; objects: null } | { existing: null; draft: VaultDraft<"message.out">; objects: CommitObject[] });
 
 /**
  * The intent of an automatic effect, drafted over the fold under the
- * lock: the tuple and its message ID first, then the fields frozen
- * under that ID, the recipient being the source's canonical peer. The
- * operation commits the draft with the objects unless `existing`
- * already records the effect, which it then reuses as it is.
+ * lock: the tuple and its message ID first, and the intent already
+ * recorded under that ID as it is, whatever the channel or the content
+ * would be now; only for a new one the fields frozen under the ID, the
+ * recipient being the source's canonical peer. The operation commits
+ * the draft with the objects.
  */
 export function automaticDraft(fold: VaultFold, effect: Effect, content: EffectContent): AutomaticDraft {
   const tuple = automaticIntent(fold, effect.execution, effect.effectType);
+  if (tuple.existing !== null) return { ...tuple, existing: tuple.existing, draft: null, objects: null };
   const sender = senderOf(fold, effect.channel);
   const { fields, objects } = intentOf(tuple.messageId, content, content.ack ?? [], {
     executionId: tuple.executionId,
@@ -272,5 +267,5 @@ export function automaticDraft(fold: VaultFold, effect: Effect, content: EffectC
     rotationEventId: effect.rotationEventId ?? null,
   });
   const data: MessageOut = { ...fields, senderDidId: sender.didId, recipientDid: effect.channel.peerDid };
-  return { ...tuple, draft: vaultDraft("message.out", data), objects };
+  return { ...tuple, existing: null, draft: vaultDraft("message.out", data), objects };
 }

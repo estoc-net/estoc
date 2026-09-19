@@ -259,7 +259,7 @@ describe("send to a contact", () => {
 });
 
 describe("automatic effects", () => {
-  it("drafts the intent under the ID its tuple derives, in the response channel, and finds the one already recorded", async () => {
+  it("drafts the intent under the ID its tuple derives, in the response channel, and hands back the one already recorded as it is, whatever the channel would be now", async () => {
     const { alice, bob, carol, toBob } = await parties();
     const sourceEventId = await received(alice, bob, "wire-1", { type: BASIC_MESSAGE, body: { content: "hi" }, please_ack: [""], created_time: 1_000 });
     let f = await fold(alice);
@@ -273,6 +273,7 @@ describe("automatic effects", () => {
     const drafted = automaticDraft(f, effect, { type: EMPTY_MESSAGE_TYPE, body: {}, thid: "wire-1", createdTime: 1_000, ack: ["wire-1"] });
     const key = effectKey(execution.id, PURE_ACK_EFFECT);
     expect(drafted).toMatchObject({ executionId: execution.id, effectType: PURE_ACK_EFFECT, effectKey: key, messageId: automaticMessageId(key), existing: null });
+    if (drafted.existing !== null) throw new Error("drafted");
     expect(drafted.draft.data).toMatchObject({ messageId: automaticMessageId(key), senderDidId: ALICE, recipientDid: bob.did, msgType: EMPTY_MESSAGE_TYPE, thid: "wire-1", pthid: null, createdTime: 1_000, expiresTime: null, pleaseAck: null, ack: ["wire-1"], executionId: execution.id, effectType: PURE_ACK_EFFECT, effectKey: key, sourceEventId, rotationEventId: null });
     expect(drafted.objects.map((object) => object.cid)).toEqual([drafted.draft.data.bodyCid]);
 
@@ -284,9 +285,10 @@ describe("automatic effects", () => {
     expect(outbound.channel).toEqual(toBob);
     expect(outbound.work).toEqual({ kind: "prepare" });
     expect(unfinishedWork(f).responses).toEqual([]);
-    const again = automaticDraft(f, { ...effect, execution: f.inbound.ofSource(sourceEventId)!, source: f.channels.sources.get(sourceEventId)! }, { type: EMPTY_MESSAGE_TYPE, body: {}, thid: "wire-1", createdTime: 1_000, ack: ["wire-1"] });
-    expect(again.existing?.messageId).toBe(drafted.messageId);
-    expect(again.draft.data).toEqual(drafted.draft.data);
+    await retireDid(alice.runtime, alice.keys, ALICE, "user");
+    f = await fold(alice);
+    const again = automaticDraft(f, { ...effect, execution: f.inbound.ofSource(sourceEventId)!, source: f.channels.sources.get(sourceEventId)! }, { type: EMPTY_MESSAGE_TYPE, body: { other: true }, ack: ["wire-1"] });
+    expect(again).toMatchObject({ messageId: drafted.messageId, existing: { messageId: drafted.messageId }, draft: null, objects: null });
     await closeAll(alice, bob, carol);
   });
 
