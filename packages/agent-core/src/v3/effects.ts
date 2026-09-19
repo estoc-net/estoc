@@ -212,7 +212,7 @@ function acknowledgement(fold: VaultFold, source: Source, acknowledge: boolean):
   return [{ effectType: PURE_ACK_EFFECT, content }];
 }
 
-/** The channel and the record of one operation's output, once its tuple is known to hold no intent: whatever throws in it, the channel not selected, the content not made into an intent or the record refused, is this operation's alone. */
+/** The channel and the record of one operation's output, once its tuple is known to hold no intent. */
 async function record(held: Held, fold: VaultFold, execution: Execution, source: Source, messageId: MessageId, response: Response, trace: AgentTrace | null): Promise<Drafted> {
   const { effectType } = response;
   if (response.content === null) return { effectType, outcome: "none", because: response.because };
