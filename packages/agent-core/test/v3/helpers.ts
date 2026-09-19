@@ -3,7 +3,7 @@ import { vi } from "vitest";
 
 import { resolveDIDCommDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
 import { openNodeSqlite } from "@estoc/event-store/node";
-import type { Held, JsonObject, SqliteDriver, VaultRuntime } from "@estoc/event-store/v3";
+import type { Cid, Held, JsonObject, SqliteDriver, VaultRuntime } from "@estoc/event-store/v3";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
 import {
   PLAINTEXT_TYP,
@@ -308,23 +308,57 @@ export function refuseSubmissions(runtime: VaultRuntime, times: number): void {
 
 /** The next `times` commits of an event of `type` under `runtime`'s lock throw, as a disk refusing the record would. */
 export function refuseCommits(runtime: VaultRuntime, type: VaultEventType, times: number): void {
-  const locked = runtime.locked.bind(runtime);
   let left = times;
-  const refusing = (held: Held): Held =>
-    new Proxy(held, {
-      get(target, key) {
-        if (key === "commit") {
-          return async (...args: Parameters<Held["commit"]>) => {
-            if (left > 0 && args[1].some((draft) => draft.type === type)) {
-              left--;
-              throw new Error("the disk is full for now");
-            }
-            return target.commit(...args);
-          };
+  underLock(runtime, (held) =>
+    overriding(held, "commit", async (...args: Parameters<Held["commit"]>) => {
+      if (left > 0 && args[1].some((draft) => draft.type === type)) {
+        left--;
+        throw new Error("the disk is full for now");
+      }
+      return held.commit(...args);
+    })
+  );
+}
+
+/** The next `times` reads of the object `cid` under `runtime`'s lock throw, as a disk refusing the read would; every read of it, by default. */
+export function refuseReads(runtime: VaultRuntime, cid: Cid, times = Infinity): void {
+  let left = times;
+  underLock(runtime, (held) =>
+    overriding(
+      held,
+      "objects",
+      overriding(held.objects, "read", async (...args: Parameters<Held["objects"]["read"]>) => {
+        if (left > 0 && args[0] === cid) {
+          left--;
+          throw new Error("the disk refuses the read");
         }
-        const value = Reflect.get(target, key, target) as unknown;
-        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-      },
-    });
-  vi.spyOn(runtime, "locked").mockImplementation(((work: (held: Held) => Promise<unknown>) => locked((held) => work(refusing(held)))) as VaultRuntime["locked"]);
+        return held.objects.read(...args);
+      })
+    )
+  );
+}
+
+const faults = new WeakMap<VaultRuntime, ((held: Held) => Held)[]>();
+
+/** Every locked step of `runtime` sees `held` through `wrap`, after the wraps installed before it. */
+function underLock(runtime: VaultRuntime, wrap: (held: Held) => Held): void {
+  let wraps = faults.get(runtime);
+  if (wraps === undefined) {
+    const installed: ((held: Held) => Held)[] = [];
+    faults.set(runtime, installed);
+    wraps = installed;
+    const locked = runtime.locked.bind(runtime);
+    vi.spyOn(runtime, "locked").mockImplementation(((work: (held: Held) => Promise<unknown>) => locked((held) => work(installed.reduce((wrapped, wrap) => wrap(wrapped), held)))) as VaultRuntime["locked"]);
+  }
+  wraps.push(wrap);
+}
+
+function overriding<T extends object>(target: T, key: keyof T, value: unknown): T {
+  return new Proxy(target, {
+    get(inner, property) {
+      if (property === key) return value;
+      const found = Reflect.get(inner, property, inner) as unknown;
+      return typeof found === "function" ? (found as (...args: unknown[]) => unknown).bind(inner) : found;
+    },
+  });
 }

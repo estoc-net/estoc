@@ -1,40 +1,12 @@
 /**
- * `@estoc/agent-core/v3` — the agent over the version-3 vault, bottom
- * up: the vault opened, created and inspected with the seed's keys
- * (`identity`); the keys in hand for didcomm (`keyring`); the trace of
- * what this runtime observed (`trace`); the line to a mediator and the
- * pickup of what it holds (`link`, `pickup`); the mediation rituals and
- * the reconciliation of recipients (`mediation`); routes, communication
- * DIDs, disclosure and retirement (`dids`); a peer's DID resolved to
- * the exact evidence the vault retains and the failures that leave
- * work retryable told from the ones that close it (`resolver`); and that
- * evidence committed, read back and handed to didcomm under the
- * spelling it asks for (`evidence`); and a message decided and
- * committed as an intent in its fixed channel before any network work,
- * as a user's send or an operation's automatic effect (`send`); and
- * that intent's one package made from local evidence alone and
- * committed with its envelope (`prepare`); and that package's one
- * transport call under a live action, its acceptance recorded, its
- * cancellation, and the dispatcher that waits out a prerequisite for
- * as long as the action lives (`action`, `dispatch`, `dispatcher`);
- * and every delivery handed to this runtime taken through the gate
- * before the vault — its recipient one of ours, its sender read from
- * what the vault holds, the envelope opened and what it proves checked
- * — and handed on to the receipt or refused; and that delivery
- * recorded as one observation in the vault, under the lock, with its
- * resolution evidence and its content, and nothing of the peer looked
- * up; and what follows that observation once it is committed — the
- * invitation it consumes, the acknowledgement it carries, the proof
- * it failed — recorded over the fold's judgement and dispatching
- * nothing (`receive/`); and what the input so established earns on
- * its own — the receipt it requested, the reply its protocol's handler
- * gives — each the one intent of its operation, committed on its own
- * and dispatched only under the action a live input mints, or made
- * later by an explicit completion (`effects`, `handlers/`).
- * The protocols themselves —
- * message types and shapes — are shared with the package root under
- * `protocol/`; `unpack` opens an inbound envelope there with its
- * rotation proof left for the vault to judge.
+ * `@estoc/agent-core/v3` — the agent over the version-3 vault. Every
+ * module decides over the fold read under the vault's writer lock and
+ * commits what it decided before any network work; the one transport
+ * call of a message goes under a live action once the lock is
+ * released. The protocols themselves — message types and shapes — are
+ * shared with the package root under `protocol/`; `unpack` opens an
+ * inbound envelope there with its rotation proof left for the vault
+ * to judge.
  */
 
 export { EnvelopeRefused, unpack, type Unpacked } from "../protocol/didcomm.js";
@@ -136,5 +108,5 @@ export {
 export { receiptOf, recordReceipt } from "./receive/receipt.js";
 export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
 export { afterReceipt, type AfterReceipt, type AfterReceiptOptions } from "./receive/after.js";
-export { completeResponse, reactTo, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
+export { completeResponse, reactTo, type Called, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
 export { BUILT_IN_HANDLERS, basicMessage, claimedName, effectTypesOf, empty, handlerFor, handlersOf, reportProblem, trustPing, userProfile, type Handler, type Input, type Response } from "./handlers/index.js";

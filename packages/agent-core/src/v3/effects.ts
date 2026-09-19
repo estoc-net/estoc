@@ -2,15 +2,19 @@
  * An input's automatic effects: the outputs an established input earns
  * on its own, each the one intent of one operation over it, decided
  * under the writer lock over the fold read there and committed each on
- * its own, so that one operation's refusal, or a disk refusing its
- * record, leaves another's intent standing. Before any is decided, the
- * input must be established by a complete witness in a channel that
- * takes a reply now: not denied, not in conflict, its peer not moved
- * on; and the reply's sender chosen by the fold — the carrier's own
- * local DID while it may send, else the unique verified successor that
- * keeps the peer — is fixed by the intent for good. Each operation
- * looks its tuple up first and reuses the intent already under it,
- * whatever it would decide now, and dispatches nothing for it: the
+ * its own. Each operation is its own boundary: one whose handler
+ * throws, whose record the disk refuses or whose call's step throws
+ * leaves another's intent standing, recorded and dispatched, so that
+ * the receipt an input requests never waits on its protocol's reply.
+ * Before any is decided, the input must be established by a complete
+ * witness in a channel that takes a reply now: not denied, not in
+ * conflict, its peer not moved on; and the reply's sender chosen by
+ * the fold — the carrier's own local DID while it may send, else the
+ * unique verified successor that keeps the peer — is fixed by the
+ * intent for good. Each operation looks its tuple up first: an intent
+ * already under it is reused as it is, before the input's body is
+ * read or its handler asked anything, so that a fixed output survives
+ * a body gone or a handler that would decide otherwise now, and the
  * same input delivered again, a package retried, a body erased or a
  * clock moved never make a second output. Two operations are the
  * vault's own — the receipt an input requests, given under local
@@ -59,20 +63,29 @@ export interface EffectOptions {
   acknowledge?: boolean;
   /** the clock a Ping's expiry is compared with, in milliseconds since the epoch; `Date.now` when left out */
   now?: () => number;
-  /** an operation whose record the disk refused goes to the `diag` stream */
+  /** an operation that threw, in deciding, recording or calling, goes to the `diag` stream */
   trace?: AgentTrace;
-  /** the one transport call of an intent under its action: the dispatcher's, so that a prerequisite is waited out for as long as the action lives */
+  /**
+   * The one transport call of an intent under its action: the
+   * dispatcher's, so that a prerequisite is waited out for as long as
+   * the action lives. It is told the same handlers' effect types
+   * (`effectTypesOf`), so that the fold it reads counts their intents
+   * as this runtime's work.
+   */
   dispatch: (action: LiveAction) => Promise<Dispatched>;
 }
 
+/** What the call of an intent came to; `threw` when the call's step threw, the action then telling whether the transport was called, and an acceptance it saw kept for the message's next work. */
+export type Called = Dispatched | { outcome: "threw"; messageId: MessageId; reason: string };
+
 export type EffectOutcome =
   /** a new intent, committed under the tuple and dispatched under the action minted for it */
-  | { effectType: string; outcome: "created"; messageId: MessageId; intent: VaultEvent<"message.out">; action: LiveAction; dispatched: Dispatched }
+  | { effectType: string; outcome: "created"; messageId: MessageId; intent: VaultEvent<"message.out">; action: LiveAction; dispatched: Called }
   /** the tuple had an intent already: reused as it is, dispatched only under a manual completion */
-  | { effectType: string; outcome: "existing"; messageId: MessageId; action: LiveAction | null; dispatched: Dispatched | null }
+  | { effectType: string; outcome: "existing"; messageId: MessageId; action: LiveAction | null; dispatched: Called | null }
   /** the operation gives the input nothing now */
   | { effectType: string; outcome: "none"; because: string }
-  /** the record of the intent threw: nothing is committed for this operation, and the others stand */
+  /** the operation threw, in its handler deciding the content or in the disk recording the intent: nothing is committed for it, and the others stand */
   | { effectType: string; outcome: "refused"; because: string };
 
 export interface Reacted {
@@ -99,7 +112,7 @@ export async function reactTo(runtime: VaultRuntime, keys: Keys, live: LiveInput
     return { executionId: execution.id, because: settled.because, effects: settled.drafted.map((draft) => (draft.outcome === "created" ? { ...draft, action: live.mint(draft.messageId) } : draft)) };
   });
   const effects: EffectOutcome[] = [];
-  for (const draft of decided.effects) effects.push(await dispatched(draft, options));
+  for (const draft of decided.effects) effects.push(await dispatched(draft, decided.executionId, options));
   return { eventId: live.eventId, ...decided, effects };
 }
 
@@ -122,7 +135,7 @@ export async function completeResponse(runtime: VaultRuntime, keys: Keys, execut
     if (draft.outcome === "none" || draft.outcome === "refused") return draft;
     return { ...draft, action: new LiveAction(draft.messageId, "manual") };
   });
-  return dispatched(decided, options);
+  return dispatched(decided, executionId, options);
 }
 
 function scan(held: Held, keys: Keys, options: EffectOptions): Promise<VaultFold> {
@@ -136,27 +149,44 @@ type Drafted =
   | Extract<EffectOutcome, { outcome: "none" | "refused" }>;
 
 /**
- * Under the lock: the input must be established and its intent
- * uncontradicted, or no operation is asked. Then each operation's
- * response, and for each its tuple looked up first — an intent already
- * there is reused before anything is decided about it now — then, for
- * one with content, the channel the reply goes by and the commit.
- * `only` limits the handler to one operation; the receipt is decided
- * whenever it is the one asked.
+ * Under the lock: the input must be established, or no operation is
+ * asked. The operations are the receipt and those the input's handler
+ * declares, `only` narrowing them to one; each looks its tuple up
+ * first, and only the ones with no intent yet are decided now — the
+ * receipt by the vault, the rest by the handler, asked once for all of
+ * them and answering with content for each it gives, one at most.
  */
 async function settle(held: Held, fold: VaultFold, execution: Execution, options: EffectOptions, only?: string): Promise<{ because: string | null; drafted: Drafted[] }> {
   if (execution.status.status !== "complete") return { because: `the input is not established: ${execution.status.because}`, drafted: [] };
   const source = execution.members.find((member) => member.witness.status === "complete")!.source;
-  const responses: Response[] = [];
-  if (only === undefined || only === PURE_ACK_EFFECT) responses.push(...acknowledgement(fold, source, options.acknowledge ?? true));
   const handler = handlerFor(handlersOf(options.handlers), source.event.data.msgType);
-  if (handler !== null && (only === undefined || handler.effectTypes.includes(only))) {
-    const input: Input = { execution, source, readBody: () => readBody(held, execution, source), now: options.now ?? Date.now };
-    for (const response of await handler.respond(input, fold)) if (only === undefined || response.effectType === only) responses.push(response);
+  const operations = [PURE_ACK_EFFECT, ...(handler?.effectTypes ?? [])].filter((effectType) => only === undefined || effectType === only);
+  const trace = options.trace ?? null;
+  const drafted = new Map<string, Drafted>();
+  const open = new Map<string, MessageId>();
+  for (const effectType of operations) {
+    const tuple = automaticIntent(fold, execution, effectType);
+    if (tuple.existing !== null) drafted.set(effectType, { effectType, outcome: "existing", messageId: tuple.messageId });
+    else open.set(effectType, tuple.messageId);
   }
-  const drafted: Drafted[] = [];
-  for (const response of responses) drafted.push(await record(held, fold, execution, source, response, options.trace ?? null));
-  return { because: null, drafted };
+  const decide = async (response: Response): Promise<void> => {
+    if (!open.has(response.effectType)) return;
+    open.delete(response.effectType);
+    drafted.set(response.effectType, await record(held, fold, execution, source, response, trace));
+  };
+  if (open.has(PURE_ACK_EFFECT)) for (const response of acknowledgement(fold, source, options.acknowledge ?? true)) await decide(response);
+  if (handler !== null && handler.effectTypes.some((effectType) => open.has(effectType))) {
+    const input: Input = { execution, source, readBody: () => readBody(held, execution, source), now: options.now ?? Date.now };
+    try {
+      for (const response of await handler.respond(input, fold)) await decide(response);
+    } catch (err) {
+      for (const effectType of handler.effectTypes) {
+        const messageId = open.get(effectType);
+        if (messageId !== undefined) drafted.set(effectType, await refused(effectType, messageId, execution.id, err, trace));
+      }
+    }
+  }
+  return { because: null, drafted: operations.flatMap((effectType) => drafted.get(effectType) ?? []) };
 }
 
 /**
@@ -176,10 +206,9 @@ function acknowledgement(fold: VaultFold, source: Source, acknowledge: boolean):
   return [{ effectType: PURE_ACK_EFFECT, content }];
 }
 
+/** The channel and the record of one operation's output, once its tuple is known to hold no intent. */
 async function record(held: Held, fold: VaultFold, execution: Execution, source: Source, response: Response, trace: AgentTrace | null): Promise<Drafted> {
   const { effectType } = response;
-  const tuple = automaticIntent(fold, execution, effectType);
-  if (tuple.existing !== null) return { effectType, outcome: "existing", messageId: tuple.messageId };
   if (response.content === null) return { effectType, outcome: "none", because: response.because };
   const selected = responseChannel(fold, execution);
   if (selected.status === "none") return { effectType, outcome: "none", because: selected.because };
@@ -188,10 +217,14 @@ async function record(held: Held, fold: VaultFold, execution: Execution, source:
     const [event] = (await held.commit(draft.objects!, [draft.draft!])).map(readVaultEvent);
     return { effectType, outcome: "created", messageId: draft.messageId, intent: event as VaultEvent<"message.out"> };
   } catch (err) {
-    const because = err instanceof Error ? err.message : String(err);
-    await note(trace, { stream: "diag", what: "effect", data: { messageId: draft.messageId, executionId: execution.id, effectType, reason: because } });
-    return { effectType, outcome: "refused", because };
+    return refused(effectType, draft.messageId, execution.id, err, trace);
   }
+}
+
+async function refused(effectType: string, messageId: MessageId, executionId: ExecutionId, err: unknown, trace: AgentTrace | null): Promise<Drafted> {
+  const because = messageOf(err);
+  await note(trace, { stream: "diag", what: "effect", data: { messageId, executionId, effectType, reason: because } });
+  return { effectType, outcome: "refused", because };
 }
 
 /** The stored body of the input, or null once the message is erased or the body cannot be read. */
@@ -201,9 +234,20 @@ async function readBody(held: Held, execution: Execution, source: Source): Promi
   return bytes === null ? null : readStoredDocument(parseStrict(bytes)).body;
 }
 
-/** The one transport call of a drafted intent, under the action it carries; none for an intent no action was minted for. */
-async function dispatched(draft: Drafted, options: EffectOptions): Promise<EffectOutcome> {
+/** The one transport call of a drafted intent, under the action it carries; none for an intent no action was minted for. A call's step that throws is this operation's alone. */
+async function dispatched(draft: Drafted, executionId: ExecutionId | null, options: EffectOptions): Promise<EffectOutcome> {
   if (draft.outcome === "none" || draft.outcome === "refused") return draft;
   if (draft.action === undefined) return { ...draft, outcome: "existing", action: null, dispatched: null };
-  return { ...draft, action: draft.action, dispatched: await options.dispatch(draft.action) };
+  const { action, messageId, effectType } = draft;
+  try {
+    return { ...draft, action, dispatched: await options.dispatch(action) };
+  } catch (err) {
+    const reason = messageOf(err);
+    await note(options.trace ?? null, { stream: "diag", what: "effect", data: { messageId, executionId, effectType, reason } });
+    return { ...draft, action, dispatched: { outcome: "threw", messageId, reason } };
+  }
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

@@ -41,7 +41,7 @@ import {
   type VaultFold,
 } from "@estoc/vault/v3";
 
-import { ENCRYPTED_MIME, PLAIN_TYP, endpointOf, packEncrypted, secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
+import { ENCRYPTED_MIME, PLAIN_TYP, endpointOf, packEncrypted, secretsResolverFor, type IMessage } from "../protocol/didcomm.js";
 import { FORWARD } from "../protocol/spec.js";
 import { recordAcceptance, recordOwedAcceptance } from "./acceptance.js";
 import type { LiveAction } from "./action.js";
@@ -49,7 +49,7 @@ import { UnknownEntity } from "./errors.js";
 import { didcommDocumentOf } from "./evidence.js";
 import { bounded, sealData, type MediatorLink } from "./link.js";
 import { reconcile, registered } from "./mediation.js";
-import { closedBecause, expireUnderLock, expiryPhase, hasExpired, outboundWorkKey, prepareUnderLock, type Settled } from "./prepare.js";
+import { closedBecause, expireUnderLock, expiryPhase, hasExpired, outboundWorkKey, prepareUnderLock, scanOptions, type PrepareOptions, type Settled } from "./prepare.js";
 import { serially } from "./procedure.js";
 import { knownLongForms, resolve, type ResolverOptions, type Resolved } from "./resolver.js";
 import { note, noteAll, type AgentTrace, type Note } from "./trace.js";
@@ -59,8 +59,7 @@ export const DISPATCH_TIMEOUT_MS = 15_000;
 /** The most bytes a stored envelope may run to and still be read into memory for the wire. */
 export const MAX_ENVELOPE_BYTES = 128 * 1024 * 1024;
 
-export interface DispatchOptions extends ResolverOptions {
-  didcomm: DidcommApi;
+export interface DispatchOptions extends ResolverOptions, PrepareOptions {
   /**
    * The transport a package is carried over, and a `did:web` mediator
    * resolved over: the host's, under the contract `WebResolverOptions`
@@ -70,8 +69,6 @@ export interface DispatchOptions extends ResolverOptions {
   fetch: typeof fetch;
   /** The link to each mediation arrangement of this vault, or null where there is none now: what a mediated sender's registration is confirmed over. */
   links?: (mediationId: MediationId) => MediatorLink | null;
-  /** the clock expiry is compared with, in milliseconds since the epoch; `Date.now` when left out */
-  now?: () => number;
   /** how long one attempt may take, the mediator resolved, the forward sealed and the call answered; `DISPATCH_TIMEOUT_MS` when left out */
   timeoutMs?: number;
 }
@@ -99,7 +96,6 @@ export function dispatch(runtime: VaultRuntime, keys: Keys, action: LiveAction, 
 async function attempt(runtime: VaultRuntime, keys: Keys, action: LiveAction, options: DispatchOptions): Promise<Dispatched> {
   const { messageId } = action;
   const trace = options.trace ?? null;
-  const now = options.now ?? Date.now;
   const owed = await recordOwedAcceptance(runtime, messageId);
   if (owed !== null) return { outcome: "submitted", messageId, packageId: owed.data.packageId, submitted: owed };
   if (action.spent) return { outcome: "spent", messageId };
@@ -120,7 +116,7 @@ async function attempt(runtime: VaultRuntime, keys: Keys, action: LiveAction, op
   const carried = await carry(fold, pkg, envelope, service, options, deadline);
   if ("because" in carried) return { outcome: "none", messageId, because: carried.because };
   if ("reason" in carried) return pending("route", carried.reason);
-  const rechecked = await runtime.locked((held) => recheck(held, keys, action, packageId, now));
+  const rechecked = await runtime.locked((held) => recheck(held, keys, action, packageId, options));
   await noteAll(trace, rechecked.notes);
   if (rechecked.result !== null) return rechecked.result;
   const answer = await call(options.fetch, carried, deadline, action);
@@ -154,7 +150,7 @@ interface Ready {
 async function ready(held: Held, keys: Keys, messageId: MessageId, options: DispatchOptions): Promise<Settled<Dispatched | Ready>> {
   const notes: Note[] = [];
   const done = (result: Dispatched): Settled<Dispatched | Ready> => ({ result, notes });
-  let fold = await scanVault(held, keys);
+  let fold = await scanVault(held, keys, scanOptions(options));
   let outbound = fold.outbound.outbounds.get(messageId);
   if (outbound === undefined) throw new UnknownEntity("message", messageId);
   const closed = closedBecause(outbound);
@@ -166,7 +162,7 @@ async function ready(held: Held, keys: Keys, messageId: MessageId, options: Disp
     notes.push(...prepared.notes);
     const { result } = prepared;
     if (result.outcome === "none" || result.outcome === "pending" || result.outcome === "expired") return done(result);
-    fold = await scanVault(held, keys);
+    fold = await scanVault(held, keys, scanOptions(options));
     outbound = fold.outbound.outbounds.get(messageId)!;
   }
   const { work } = outbound;
@@ -215,12 +211,12 @@ async function confirmRegistration(runtime: VaultRuntime, keys: Keys, { mediatio
  * consumed at the call itself, not here, so that a deadline passed
  * while this lock was waited for costs the action nothing.
  */
-async function recheck(held: Held, keys: Keys, action: LiveAction, packageId: PackageId, now: () => number): Promise<Settled<Dispatched | null>> {
+async function recheck(held: Held, keys: Keys, action: LiveAction, packageId: PackageId, options: DispatchOptions): Promise<Settled<Dispatched | null>> {
   const { messageId } = action;
-  const outbound = (await scanVault(held, keys)).outbound.outbounds.get(messageId)!;
+  const outbound = (await scanVault(held, keys, scanOptions(options))).outbound.outbounds.get(messageId)!;
   const closed = closedBecause(outbound);
   if (closed !== null) return { result: { outcome: "none", messageId, because: closed }, notes: [] };
-  if (hasExpired((outbound.intent as { data: MessageOut }).data, now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
+  if (hasExpired((outbound.intent as { data: MessageOut }).data, options.now ?? Date.now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
   const { work } = outbound;
   if (work.kind === "none") return { result: { outcome: "none", messageId, because: work.because }, notes: [] };
   if (work.kind === "prepare") return { result: { outcome: "pending", messageId, because: "the package is no longer here" }, notes: [] };

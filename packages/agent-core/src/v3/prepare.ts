@@ -52,6 +52,7 @@ import {
   type Package,
   type PackageId,
   type PublicKey,
+  type ScanOptions,
   type StoredMessageDocument,
   type VaultEvent,
   type VaultFold,
@@ -72,6 +73,8 @@ export const MAX_CONTENT_BYTES = 16 * 1024 * 1024;
 
 export interface PrepareOptions {
   didcomm: DidcommApi;
+  /** the operations beyond the built-in ones whose intents this runtime produces, as its handlers declare them; an intent of another operation is no work of this runtime's */
+  effectTypes?: readonly string[];
   /** the seal of every package goes to the `envelope` stream */
   trace?: AgentTrace;
   /** the clock expiry is compared with, in milliseconds since the epoch; `Date.now` when left out */
@@ -92,6 +95,11 @@ export type Prepared =
 /** The key every piece of work on one outbound runs under, serially per runtime (`serially`): its preparation here, its transport call after. */
 export function outboundWorkKey(messageId: MessageId): string {
   return `outbound ${messageId}`;
+}
+
+/** What every scan over an outbound is told, so that the fold counts the runtime's own operations as its work. */
+export function scanOptions(options: Pick<PrepareOptions, "effectTypes">): ScanOptions {
+  return options.effectTypes === undefined ? {} : { effectTypes: options.effectTypes };
 }
 
 export function hasExpired(intent: MessageOut, now: () => number): boolean {
@@ -130,7 +138,7 @@ export function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId,
 
 /** Every outbound the fold says needs a package, in message order. */
 export async function prepareAll(runtime: VaultRuntime, keys: Keys, options: PrepareOptions): Promise<Prepared[]> {
-  const fold = await scanVault(runtime.vault, keys);
+  const fold = await scanVault(runtime.vault, keys, scanOptions(options));
   const results: Prepared[] = [];
   for (const outbound of [...fold.outbound.outbounds.values()].sort((a, b) => (a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0))) {
     if (outbound.work.kind === "prepare") results.push(await prepare(runtime, keys, outbound.messageId, options));
@@ -151,7 +159,7 @@ export async function expireUnderLock(held: Held, messageId: MessageId, phase: "
 /** `prepare` for a caller that already holds the message's turn and the writer lock: the dispatch of a message the fold says needs a package first. */
 export async function prepareUnderLock(held: Held, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Settled<Prepared>> {
   const notes: Note[] = [];
-  const fold = await scanVault(held, keys);
+  const fold = await scanVault(held, keys, scanOptions(options));
   const outbound = fold.outbound.outbounds.get(messageId);
   if (outbound === undefined) throw new UnknownEntity("message", messageId);
   const closed = closedBecause(outbound);

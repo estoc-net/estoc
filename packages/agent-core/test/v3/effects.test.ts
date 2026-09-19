@@ -20,6 +20,7 @@ import {
   type EventReference,
   type ExecutionId,
   type MessageId,
+  type PackageId,
   type VaultFold,
   type WireMessageId,
 } from "@estoc/vault/v3";
@@ -28,12 +29,15 @@ import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
 import { secretsResolverFor, type IMessage } from "../../src/protocol/didcomm.js";
 import {
   AgentTrace,
+  Dispatcher,
   Keyring,
   LiveAction,
   LiveInput,
   Receiver,
   createDid,
   dispatch,
+  effectTypesOf,
+  handlersOf,
   pinnedResolver,
   reactTo,
   completeResponse,
@@ -46,7 +50,7 @@ import {
   type Reacted,
   type Source,
 } from "../../src/v3/index.js";
-import { didcomm, directParty, peerSealer, posting, refuseCommits, sealed, type DirectParty, type Fresh } from "./helpers.js";
+import { didcomm, directParty, peerSealer, posting, refuseCommits, refuseReads, refuseSubmissions, sealed, type DirectParty, type Fresh, type Post } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const ALICE_NEXT = "019b0000-0000-7000-8000-00000000000b" as DidId;
@@ -60,6 +64,11 @@ const DIRECT: Source = { kind: "direct" };
 const BOB_ENDPOINT = "https://bob.example/didcomm";
 
 const accepted = (): Response => new Response(null, { status: 202 });
+/** A transport that refuses the first call and accepts the rest. */
+const refusingFirst = (): ((post: Post) => Response) => {
+  let calls = 0;
+  return () => new Response(null, { status: calls++ === 0 ? 503 : 202 });
+};
 
 type Holder = Pick<Fresh, "runtime" | "keys">;
 
@@ -74,11 +83,12 @@ async function closeAll(...holders: Holder[]): Promise<void> {
 }
 
 /** Alice's receiver over her vault's own receipt, and the wire her replies go out on. */
-async function reacting(alice: DirectParty, over: Partial<EffectOptions> = {}) {
+async function reacting(alice: DirectParty, over: Partial<EffectOptions> = {}, answer: (post: Post) => Response = accepted) {
   const ring = await Keyring.load(alice.keys, await foldOf(alice));
   const receiver = new Receiver(alice.runtime, alice.keys, ring, { didcomm, receipt: receiptOf(alice.runtime, alice.keys) });
-  const wire = posting(accepted);
-  const options: EffectOptions = { dispatch: (action) => dispatch(alice.runtime, alice.keys, action, { didcomm, fetch: wire.fetch }), ...over };
+  const wire = posting(answer);
+  const effectTypes = effectTypesOf(handlersOf(over.handlers));
+  const options: EffectOptions = { dispatch: (action) => dispatch(alice.runtime, alice.keys, action, { didcomm, fetch: wire.fetch, effectTypes }), ...over };
   const receive = async (peer: DirectParty, extra: Partial<IMessage>, as?: string): Promise<EventReference<"message.in">> => {
     const received = await receiver.receive({ packed: await sealed(await peerSealer(peer, as), alice.longFormDid, extra), source: DIRECT });
     if (received.outcome !== "received") throw new Error(`not received: ${JSON.stringify(received)}`);
@@ -86,8 +96,20 @@ async function reacting(alice: DirectParty, over: Partial<EffectOptions> = {}) {
   };
   const live = async (peer: DirectParty, extra: Partial<IMessage>): Promise<Reacted> => reactTo(alice.runtime, alice.keys, new LiveInput(await receive(peer, extra)), options);
   const executionOf = async (eventId: EventReference<"message.in">): Promise<ExecutionId> => (await foldOf(alice)).inbound.ofSource(eventId)!.id;
-  return { receiver, wire, options, receive, live, executionOf };
+  return { receiver, wire, options, effectTypes, receive, live, executionOf };
 }
+
+const packageOf = async (holder: Holder, messageId: MessageId): Promise<PackageId> => (await foldOf(holder)).outbound.outbounds.get(messageId)!.package!.event.data.packageId;
+const bodyCidOf = async (holder: Holder, executionId: ExecutionId) => (await foldOf(holder)).inbound.executions.get(executionId)!.members[0]!.source.event.data.bodyCid;
+
+const ECHO_TYPE = "https://example.org/echo/1.0/echo";
+const ECHO_EFFECT = "https://example.org/echo/1.0#echo";
+/** A registered protocol: chat is echoed back under its own operation. */
+const echo: Handler = {
+  types: [BASIC_MESSAGE],
+  effectTypes: [ECHO_EFFECT],
+  respond: async (input) => [{ effectType: ECHO_EFFECT, content: { type: ECHO_TYPE, body: { echoed: input.source.event.data.wireMessageId }, thid: input.source.event.data.wireMessageId, pleaseAck: null, ack: [] } }],
+};
 
 const ping = (wire: string, extra: Partial<IMessage> = {}): Partial<IMessage> => ({ id: wire, type: PING_TYPE, body: { response_requested: true }, please_ack: [""], created_time: CREATED, ...extra });
 
@@ -194,7 +216,7 @@ describe("the automatic effects of a live input", () => {
 
   it("receipts are local policy: with them off a request is declined and the reply still goes; a registered handler covers a type before the built-in", async () => {
     const { alice, bob } = await parties();
-    const declining: Handler = { types: [BASIC_MESSAGE], effectTypes: [], respond: async () => [{ effectType: "https://example.org/chat#reply", content: null, because: "chat is read, not answered" }] };
+    const declining: Handler = { types: [BASIC_MESSAGE], effectTypes: ["https://example.org/chat#reply"], respond: async () => [{ effectType: "https://example.org/chat#reply", content: null, because: "chat is read, not answered" }] };
     const { live } = await reacting(alice, { acknowledge: false, handlers: [declining] });
     const pinged = await live(bob, ping(crypto.randomUUID()));
     expect(outcomes(pinged.effects)).toEqual([
@@ -251,6 +273,78 @@ describe("the automatic effects of a live input", () => {
     expect(wire.posts).toHaveLength(1);
     const ack = created(await completeResponse(alice.runtime, alice.keys, reacted.executionId!, PURE_ACK_EFFECT, options));
     expect([ack.messageId, ack.action.kind, ack.dispatched.outcome, wire.posts.length]).toEqual([ackId, "manual", "submitted", 2]);
+    await closeAll(alice, bob);
+  });
+
+  it("a registered handler's operation is this runtime's work end to end: its intent is prepared and called under the initial action, listed by a dispatcher told of it, retried by hand as the same package, and no work of a scan not told of it", async () => {
+    const { alice, bob } = await parties();
+    const { wire, effectTypes, live } = await reacting(alice, { handlers: [echo] }, refusingFirst());
+    const wireId = crypto.randomUUID() as WireMessageId;
+    const reacted = await live(bob, { id: wireId, type: BASIC_MESSAGE, body: { content: "hi" } });
+    expect(outcomes(reacted.effects)).toEqual([[ECHO_EFFECT, "created", "failed"]]);
+    const { messageId } = created(reacted.effects[0]);
+    const packageId = await packageOf(alice, messageId);
+    expect(wire.posts).toHaveLength(1);
+
+    const untold = await dispatch(alice.runtime, alice.keys, new LiveAction(messageId, "manual"), { didcomm, fetch: wire.fetch });
+    expect([untold.outcome, wire.posts.length]).toEqual(["none", 1]);
+    const dispatcher = new Dispatcher(alice.runtime, alice.keys, { didcomm, fetch: wire.fetch, effectTypes });
+    expect((await dispatcher.pending()).map((pending) => [pending.outbound.messageId, pending.outbound.work.kind])).toEqual([[messageId, "dispatch"]]);
+    const retried = await dispatcher.retry(messageId);
+    expect(retried).toMatchObject({ outcome: "submitted", packageId });
+    expect(wire.posts).toHaveLength(2);
+    expect(await openedByBob(bob, alice, messageId)).toMatchObject({ type: ECHO_TYPE, thid: wireId, body: { echoed: wireId } });
+    dispatcher.close();
+    await closeAll(alice, bob);
+  });
+
+  it("an intent already under the tuple is reused before the body is read or the handler asked: a prepared reply goes out by hand as the same package when its handler would now decide otherwise, and when the disk refuses the Ping's body", async () => {
+    const { alice, bob } = await parties();
+    const { wire, options, live } = await reacting(alice, {}, refusingFirst());
+    const reacted = await live(bob, ping(crypto.randomUUID(), { please_ack: undefined }));
+    expect(outcomes(reacted.effects)).toEqual([[PING_RESPONSE_EFFECT, "created", "failed"]]);
+    const { messageId } = created(reacted.effects[0]);
+    const packageId = await packageOf(alice, messageId);
+
+    const otherwise: Handler = { types: [PING_TYPE], effectTypes: [PING_RESPONSE_EFFECT], respond: async () => [] };
+    const declined = await completeResponse(alice.runtime, alice.keys, reacted.executionId!, PING_RESPONSE_EFFECT, { ...options, handlers: [otherwise] });
+    expect(declined).toMatchObject({ outcome: "existing", messageId, action: { kind: "manual", spent: true }, dispatched: { outcome: "submitted", packageId } });
+
+    refuseReads(alice.runtime, await bodyCidOf(alice, reacted.executionId!));
+    const unread = await completeResponse(alice.runtime, alice.keys, reacted.executionId!, PING_RESPONSE_EFFECT, options);
+    expect(unread).toMatchObject({ outcome: "existing", messageId, action: { kind: "manual", spent: false }, dispatched: { outcome: "none", because: "submitted" } });
+    expect(wire.posts).toHaveLength(2);
+    await closeAll(alice, bob);
+  });
+
+  it("each operation is its own boundary: the disk refusing the Ping's body costs the reply alone and the receipt goes; the disk refusing to record an acceptance once costs the receipt's call step alone, the reply goes, and the acceptance is recorded by the next action without a second call", async () => {
+    const { alice, bob } = await parties();
+    const trace = await AgentTrace.open(alice.runtime.local);
+    const { wire, options, receive, live } = await reacting(alice, { trace });
+    const eventId = await receive(bob, ping(crypto.randomUUID()));
+    const executionId = (await foldOf(alice)).inbound.ofSource(eventId)!.id;
+    refuseReads(alice.runtime, await bodyCidOf(alice, executionId), 1);
+    const unread = await reactTo(alice.runtime, alice.keys, new LiveInput(eventId), options);
+    expect(outcomes(unread.effects)).toEqual([
+      [PURE_ACK_EFFECT, "created", "submitted"],
+      [PING_RESPONSE_EFFECT, "refused", "the disk refuses the read"],
+    ]);
+    const replyId = automaticMessageId(effectKey(executionId, PING_RESPONSE_EFFECT));
+    expect((await trace.read({ type: "diag.effect" })).map((entry) => entry.data)).toEqual([{ messageId: replyId, executionId, effectType: PING_RESPONSE_EFFECT, reason: "the disk refuses the read" }]);
+    const reply = created(await completeResponse(alice.runtime, alice.keys, executionId, PING_RESPONSE_EFFECT, options));
+    expect([reply.messageId, reply.action.kind, reply.dispatched.outcome, wire.posts.length]).toEqual([replyId, "manual", "submitted", 2]);
+
+    refuseSubmissions(alice.runtime, 1);
+    const unrecorded = await live(bob, ping(crypto.randomUUID()));
+    expect(outcomes(unrecorded.effects)).toEqual([
+      [PURE_ACK_EFFECT, "created", "threw"],
+      [PING_RESPONSE_EFFECT, "created", "submitted"],
+    ]);
+    const [ack] = unrecorded.effects.map(created);
+    expect([ack!.action.spent, ack!.dispatched, wire.posts.length]).toEqual([true, { outcome: "threw", messageId: ack!.messageId, reason: "the disk is full for now" }, 4]);
+    expect((await trace.read({ type: "diag.effect" })).map((entry) => entry.data)).toContainEqual({ messageId: ack!.messageId, executionId: unrecorded.executionId, effectType: PURE_ACK_EFFECT, reason: "the disk is full for now" });
+    const recorded = await dispatch(alice.runtime, alice.keys, new LiveAction(ack!.messageId, "manual"), { didcomm, fetch: wire.fetch });
+    expect([recorded.outcome, wire.posts.length, (await foldOf(alice)).outbound.outbounds.get(ack!.messageId)!.outcome]).toEqual(["submitted", 4, { status: "submitted" }]);
     await closeAll(alice, bob);
   });
 

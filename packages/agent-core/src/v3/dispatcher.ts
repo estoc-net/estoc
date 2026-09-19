@@ -17,6 +17,7 @@ import { scanVault, unfinishedWork, type Keys, type MessageId, type Outbound } f
 
 import { LiveAction, type ActionKind } from "./action.js";
 import { cancel, dispatch, type Cancelled, type DispatchOptions, type Dispatched } from "./dispatch.js";
+import { scanOptions } from "./prepare.js";
 
 export interface RetryPolicy {
   /** the wait after an attempt held up by a prerequisite; each such attempt in a row doubles it */
@@ -119,7 +120,7 @@ export class Dispatcher {
 
   /** Every outbound the fold lists for manual action, in message order, with what this runtime is waiting on for it. */
   async pending(): Promise<PendingOutbound[]> {
-    const fold = await scanVault(this.runtime.vault, this.keys);
+    const fold = await scanVault(this.runtime.vault, this.keys, scanOptions(this.options));
     return unfinishedWork(fold).outbounds.map((outbound) => ({ outbound, waiting: this.waitingOn(outbound.messageId) }));
   }
 

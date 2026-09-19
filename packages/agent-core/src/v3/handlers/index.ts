@@ -14,7 +14,6 @@ export { claimedName, userProfile } from "./user-profile.js";
 
 export const BUILT_IN_HANDLERS: readonly Handler[] = [trustPing, basicMessage, empty, reportProblem, userProfile];
 
-/** The handlers a runtime answers with: those registered first, so that one covers a type before a built-in does. */
 export function handlersOf(registered: readonly Handler[] = []): Handler[] {
   return [...registered, ...BUILT_IN_HANDLERS];
 }
