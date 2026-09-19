@@ -23,7 +23,10 @@
  * — and handed on to the receipt or refused; and that delivery
  * recorded as one observation in the vault, under the lock, with its
  * resolution evidence and its content, and nothing of the peer looked
- * up (`receive/`).
+ * up; and what follows that observation once it is committed — the
+ * invitation it consumes, the acknowledgement it carries, the proof
+ * it failed — recorded over the fold's judgement and dispatching
+ * nothing (`receive/`).
  * The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`; `unpack` opens an inbound envelope there with its
@@ -127,3 +130,5 @@ export {
   type Watch,
 } from "./receive/receiver.js";
 export { receiptOf, recordReceipt } from "./receive/receipt.js";
+export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
+export { afterReceipt, type AfterReceipt, type AfterReceiptOptions } from "./receive/after.js";
