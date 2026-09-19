@@ -220,7 +220,6 @@ async function rotationRefusal(held: Held, runtime: VaultRuntime, keys: Keys, fo
   return null;
 }
 
-/** Every channel a conflict reaches, by key, with the conflict's kind. */
 function conflictedChannels(conflicts: readonly Conflict[]): Map<string, Conflict["kind"]> {
   const reached = new Map<string, Conflict["kind"]>();
   for (const conflict of conflicts) {
