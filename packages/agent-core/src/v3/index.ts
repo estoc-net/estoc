@@ -26,7 +26,11 @@
  * up; and what follows that observation once it is committed — the
  * invitation it consumes, the acknowledgement it carries, the proof
  * it failed — recorded over the fold's judgement and dispatching
- * nothing (`receive/`).
+ * nothing (`receive/`); and what the input so established earns on
+ * its own — the receipt it requested, the reply its protocol's handler
+ * gives — each the one intent of its operation, committed on its own
+ * and dispatched only under the action a live input mints, or made
+ * later by an explicit completion (`effects`, `handlers/`).
  * The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`; `unpack` opens an inbound envelope there with its
@@ -104,7 +108,7 @@ export {
 } from "./evidence.js";
 export { automaticDraft, send, type AutomaticDraft, type Content, type Effect, type EffectContent, type SendOptions, type Sent, type Target } from "./send.js";
 export { MAX_CONTENT_BYTES, hasExpired, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
-export { LiveAction, type ActionKind } from "./action.js";
+export { LiveAction, LiveInput, type ActionKind } from "./action.js";
 export { DISPATCH_TIMEOUT_MS, MAX_ENVELOPE_BYTES, cancel, dispatch, type Cancelled, type DispatchOptions, type Dispatched } from "./dispatch.js";
 export { Dispatcher, GLOBAL_TIMERS, LONGEST_TIMER_MS, RETRY_POLICY, type DispatcherOptions, type PendingOutbound, type RetryPolicy, type Timers, type Waiting } from "./dispatcher.js";
 export { classifyRecipients, sealingOf, senderEvidence, senderProof, type AuthenticatedSender, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
@@ -132,3 +136,5 @@ export {
 export { receiptOf, recordReceipt } from "./receive/receipt.js";
 export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
 export { afterReceipt, type AfterReceipt, type AfterReceiptOptions } from "./receive/after.js";
+export { completeResponse, reactTo, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
+export { BUILT_IN_HANDLERS, basicMessage, claimedName, effectTypesOf, empty, handlerFor, handlersOf, reportProblem, trustPing, userProfile, type Handler, type Input, type Response } from "./handlers/index.js";
