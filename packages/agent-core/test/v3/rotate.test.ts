@@ -18,7 +18,6 @@ import {
   signFromPrior,
   unfinishedWork,
   vaultDraft,
-  type Did,
   type DidId,
   type EventReference,
   type MessageId,
@@ -31,7 +30,6 @@ import { secretsResolverFor, type IMessage } from "../../src/protocol/didcomm.js
 import {
   AgentTrace,
   Keyring,
-  LiveAction,
   LiveInput,
   NotificationConflict,
   Receiver,
@@ -195,6 +193,34 @@ describe("a local rotation", () => {
     await expect(rotate(fresh.alice.runtime, fresh.alice.keys, target, fresh0)).rejects.toThrow(Unusable);
     expect((await foldOf(fresh.alice)).routes.dids.size).toBe(3);
     await closeAll(fresh.alice, fresh.bob);
+  });
+
+  it("an entity recorded earlier is a manual rotation's successor only while no replacement path leads back from it, and never the policy's: a rotation back to the predecessor and a policy rotation to a disclosed address are refused before anything is written, and a fresh ID given to the policy is taken", async () => {
+    const { alice, bob } = await parties();
+    const { wire, options, receive } = await rotating(alice);
+    await receive(bob, { type: BASIC_MESSAGE });
+    const forward = await rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: bob.did }, { ...options, didId: ALICE_NEXT });
+    const successor = await successorOf(alice, forward);
+    await receive(bob, { type: BASIC_MESSAGE }, undefined, successor.longFormDid);
+    let fold = await foldOf(alice);
+    expect(fold.continuity.confirmed(successor.did, bob.did)).toBe(true);
+    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE_NEXT, peerDid: bob.did }, { ...options, didId: ALICE })).rejects.toThrow(new Unusable("DID", ALICE, ["a replacement path from it leads back to the predecessor"]));
+    fold = await foldOf(alice);
+    expect([fold.set.of("did.rotationSelected").length, fold.routes.dids.size, fold.continuity.head({ localDid: alice.did, peerDid: bob.did }), fold.continuity.conflicts, wire.posts.length]).toEqual([1, 2, { localDid: successor.did, peerDid: bob.did }, [], 1]);
+    await closeAll(alice, bob);
+
+    const disclosed = await parties();
+    const routeId = (await foldOf(disclosed.alice)).routes.dids.get(ALICE)!.created!.boundRouteId;
+    await createDid(disclosed.alice.runtime, disclosed.alice.keys, routeId, ALICE_OTHER);
+    for (const didId of [ALICE, ALICE_OTHER]) await disclose(null, disclosed.alice.runtime, disclosed.alice.keys, didId, { as: "direct", uses: "many" });
+    const { wire: theirs, options: policy, receive: written } = await rotating(disclosed.alice);
+    const chat = await written(disclosed.bob, { type: BASIC_MESSAGE });
+    await expect(privateAddress(disclosed.alice.runtime, disclosed.alice.keys, new LiveInput(chat), { ...policy, didId: ALICE_OTHER })).rejects.toThrow(new Unusable("DID", ALICE_OTHER, ["a rotation an input selects takes a fresh successor"]));
+    fold = await foldOf(disclosed.alice);
+    expect([fold.set.of("did.rotationSelected"), fold.set.of("message.out"), theirs.posts.length, fold.routes.dids.size]).toEqual([[], [], 0, 2]);
+    const fresh = rotated(await privateAddress(disclosed.alice.runtime, disclosed.alice.keys, new LiveInput(chat), { ...policy, didId: ALICE_NEXT }));
+    expect([fresh.successor, fresh.decision.data.sourceEventId, fresh.notification.outcome, theirs.posts.length, (await foldOf(disclosed.alice)).routes.dids.size]).toEqual([ALICE_NEXT, chat, "created", 1, 3]);
+    await closeAll(disclosed.alice, disclosed.bob);
   });
 
   it("the private-address policy: the first live application input at a disclosed address selects a successor over that input and notifies on its thread; a later input reuses the decision; one at the undisclosed successor, a control input or an undisclosed address selects nothing", async () => {

@@ -1,26 +1,27 @@
 /**
  * A local rotation: one of our DIDs replaced toward one peer by a
- * fresh successor, decided under the writer lock over the fold read
- * there and frozen as one record — the predecessor, the canonical
- * peer, the successor, the input that selected it or none, and the
- * proof the predecessor's authentication key signs — committed
- * atomically with the successor's creation, so that a crash leaves
- * both or neither and never a DID allocated for nothing. A pair
- * rotates once: the decision already recorded from the predecessor
- * anywhere in its verified peer-only context is reused, and no second
- * successor is minted while one waits for evidence or two contradict
- * each other. The peer must have written to exactly the predecessor
- * address, since a link from an address the peer never used confirms
- * nothing.
+ * successor, decided under the writer lock and frozen as one record —
+ * the predecessor, the canonical peer, the successor, the input that
+ * selected it or none, and the proof the predecessor's authentication
+ * key signs — committed atomically with the successor's creation, so
+ * that a crash leaves both or neither and never a DID allocated for
+ * nothing. A pair rotates once: the decision already recorded from
+ * the predecessor anywhere in its verified peer-only context is
+ * reused, and no second successor is minted while one waits for
+ * evidence or two contradict each other. The peer must have written
+ * to exactly the predecessor address, since a link from an address
+ * the peer never used confirms nothing. A successor is a fresh entity,
+ * or one recorded earlier that no replacement path leads back from:
+ * the continuity graph keeps every branch and chooses no winner, so a
+ * cycle the producer could see coming would leave the whole context
+ * without authority for good.
  * The notification announcing the rotation is the decision's own
  * operation, made right after the decision commits under the same
- * lock and dispatched under an initial action once it is released:
- * an Empty message from the successor to the peer requesting its own
- * receipt, on the selecting input's thread when there is one. A
- * decision found already recorded makes none: its missing
- * notification, left by a crash between the two commits, is listed
- * as manual work and made only by an explicit completion, under a
- * manual action, while the input that selected it still permits one.
+ * lock and called under an initial action once the lock is released.
+ * A decision found already recorded makes none: its missing
+ * notification, left by a crash between the two commits, is manual
+ * work, made only by an explicit completion while the input that
+ * selected it still permits one.
  */
 
 import { v7 as uuidv7 } from "uuid";
@@ -54,7 +55,6 @@ import {
   type MessageId,
   type MintedDid,
   type RouteId,
-  type Source,
   type VaultDraft,
   type VaultEvent,
   type VaultFold,
@@ -98,11 +98,7 @@ export interface Rotated {
   notification: EffectOutcome;
 }
 
-/**
- * The rotation of `target` under one lock, then the one call of its
- * notification. A decision already recorded is returned with the
- * state of its notification and nothing written or called.
- */
+/** A decision already recorded is returned with the state of its notification, nothing written or called. */
 export async function rotate(runtime: VaultRuntime, keys: Keys, target: RotationTarget, options: RotateOptions): Promise<Rotated> {
   const decided = await runtime.locked(async (held) => {
     let fold = await scanVault(held, keys);
@@ -118,10 +114,10 @@ export async function rotate(runtime: VaultRuntime, keys: Keys, target: Rotation
     const existing = decisionFor(fold, channel.localDid, channel.peerDid);
     if (existing.status === "reuse") return { channel, decision: existing.decision.event, existed: true, drafted: recorded(fold, existing.decision.event.eventId), executionId: null };
     if (existing.status !== "none") throw new Unusable("channel", key, [existing.because]);
-    if (sourceEventId !== null) selecting(fold, channel, sourceEventId);
+    if (sourceEventId !== null) assertSelectingSource(fold, channel, sourceEventId);
     if (!fold.continuity.confirmed(channel.localDid, channel.peerDid)) throw new Unusable("channel", key, ["the peer has not written to exactly this address"]);
 
-    const { drafts, successor } = await successorOf(fold, keys, predecessor, options);
+    const { drafts, successor } = await successorOf(fold, keys, predecessor, channel, sourceEventId !== null, options);
     const iat = Math.floor((options.now ?? Date.now)() / 1000);
     const fromPrior = await signFromPrior(keys, { didId: predecessor.didId, longFormDid: predecessor.created.longFormDid }, successor.longFormDid, iat);
     const events = (await held.commit([], [...drafts, vaultDraft("did.rotationSelected", { fromDidId: predecessor.didId, peerDid: channel.peerDid, toDidId: successor.didId, sourceEventId, fromPrior })])).map(readVaultEvent);
@@ -152,14 +148,8 @@ export async function completeNotification(runtime: VaultRuntime, keys: Keys, ro
   return dispatched(decided.drafted, decided.executionId, options);
 }
 
-/**
- * The input that selects a rotation away from `channel`: a complete
- * witness there, of an established application input, since a control
- * input selects none. What the recorded decision would then be judged
- * by is checked here first, so that no decision is committed to be
- * refused.
- */
-function selecting(fold: VaultFold, channel: Channel, sourceEventId: EventReference<"message.in">): Source {
+/** What the fold would refuse the recorded decision for is refused here first, so that no decision is committed to be refused. */
+function assertSelectingSource(fold: VaultFold, channel: Channel, sourceEventId: EventReference<"message.in">): void {
   const source = fold.channels.sources.get(sourceEventId as EventId);
   if (source === undefined) throw new UnknownEntity("input", sourceEventId);
   const faults: string[] = [];
@@ -172,18 +162,19 @@ function selecting(fold: VaultFold, channel: Channel, sourceEventId: EventRefere
   const kind = kindOf(source.event.data);
   if (kind !== "application") faults.push(`a control input selects no rotation: it is ${kind}`);
   if (faults.length > 0) throw new Unusable("input", sourceEventId, faults);
-  return source;
 }
 
 /**
  * The successor: minted from a fresh entity ID on the predecessor's
  * route, or the route given, and created in the decision's own
  * commit. An entity already recorded under the ID given is the
- * successor only when the seed and the route give exactly its
- * document and it is live; one that would differ is refused rather
- * than replaced.
+ * successor of a manual rotation only, when the seed and the route
+ * give exactly its document, it is live, and no replacement path
+ * leads from it back to the predecessor; a rotation an input selected
+ * is the private-address policy's, whose successor is an address no
+ * one has yet. What would differ is refused rather than replaced.
  */
-async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEntity, options: RotateOptions): Promise<{ drafts: VaultDraft[]; successor: MintedDid }> {
+async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEntity, channel: Channel, selected: boolean, options: RotateOptions): Promise<{ drafts: VaultDraft[]; successor: MintedDid }> {
   const didId = options.didId ?? (uuidv7() as DidId);
   const routeId = options.routeId ?? predecessor.created!.boundRouteId;
   const successor = await mintDid(keys, didId, routeTargetOf(fold, routeId));
@@ -191,8 +182,27 @@ async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEnt
   if (existing === undefined) return { drafts: [vaultDraft("did.created", { didId, did: successor.did, longFormDid: successor.longFormDid, boundRouteId: routeId })], successor };
   const same = existing.created !== null && existing.created.did === successor.did && existing.created.longFormDid === successor.longFormDid && existing.created.boundRouteId === routeId;
   if (!same) throw new EntityConflict("DID", didId, existing.conflict ? existing.faults.join("; ") : "another document or route");
-  if (!existing.live) throw new Unusable("DID", didId, existing.retired !== null ? [`retired: ${existing.retired}`, ...existing.faults] : existing.faults);
+  const faults: string[] = [];
+  if (selected) faults.push("a rotation an input selects takes a fresh successor");
+  if (!existing.live) faults.push(...(existing.retired !== null ? [`retired: ${existing.retired}`, ...existing.faults] : existing.faults));
+  if (successor.did === channel.peerDid) faults.push("it is the peer's DID");
+  if (leadsBack(fold, successor.did, channel.localDid)) faults.push("a replacement path from it leads back to the predecessor");
+  if (faults.length > 0) throw new Unusable("DID", didId, faults);
   return { drafts: [], successor };
+}
+
+/** Does any replacement path in the positive graph, conflicted branches included, lead from a channel of `successor` to one of `predecessor`? */
+function leadsBack(fold: VaultFold, successor: Did, predecessor: Did): boolean {
+  const seen = new Set<string>();
+  const queue = fold.continuity.links.filter((link) => link.from.localDid === successor).map((link) => link.from);
+  for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+    const key = channelKey(next);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (next.localDid === predecessor) return true;
+    for (const link of fold.continuity.links) if (sameChannel(link.from, next)) queue.push(link.to);
+  }
+  return false;
 }
 
 /** The state of a recorded decision's notification, for a rotation that reuses the decision: nothing is made or called for it here. */
@@ -204,12 +214,7 @@ function recorded(fold: VaultFold, rotationEventId: EventId): Drafted {
   return { effectType, outcome: "none", because: "the decision was recorded already: its missing notification is made by an explicit completion" };
 }
 
-/**
- * Under the lock: the decision's one notification, reused as recorded,
- * or made now — over the input that selected the decision, under the
- * tuple that input and this operation derive; or over no input, under
- * a fresh message ID — when the fold still selects a channel for it.
- */
+/** The decision's one notification, reused as recorded or made now over the input that selected the decision, or over none under a fresh message ID. */
 async function settleNotification(held: Held, fold: VaultFold, rotationEventId: EventReference<"did.rotationSelected">, trace: AgentTrace | null): Promise<{ drafted: Drafted; executionId: ExecutionId | null }> {
   const effectType = ROTATION_NOTIFICATION_EFFECT;
   const decision = fold.channels.decisions.get(rotationEventId as EventId);

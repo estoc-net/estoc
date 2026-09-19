@@ -18,12 +18,7 @@ import { channelPolicy, decisionFor, kindOf, scanVault, type Decision, type Even
 import type { LiveInput } from "./action.js";
 import { rotate, type RotateOptions, type Rotated, type RotationTarget } from "./rotate.js";
 
-export type PrivacyPolicy =
-  /** the input selects a rotation away from its channel */
-  | { status: "rotate"; target: RotationTarget }
-  /** the predecessor decided already in this context: that decision stands */
-  | { status: "reuse"; decision: Decision }
-  | { status: "none"; because: string };
+export type PrivacyPolicy = { status: "rotate"; target: RotationTarget } | { status: "reuse"; decision: Decision } | { status: "none"; because: string };
 
 /** What the policy makes of an observation over the fold: pure, and read again under the lock by the rotation it selects. */
 export function privacyPolicy(fold: VaultFold, eventId: EventReference<"message.in">): PrivacyPolicy {
@@ -55,8 +50,12 @@ export type PrivateAddress =
 
 /**
  * The policy applied to a live input: the rotation it selects is
- * decided again under the lock, its notification made and called
- * there; a decision recorded meanwhile is reused as it is.
+ * checked again under the writer lock, where the decision and the
+ * notification's intent are committed, and the notification's one
+ * transport call is made once the lock is released. A decision
+ * recorded meanwhile is reused as it is. The successor is a fresh
+ * entity: the rotation refuses an address recorded before, disclosed
+ * or not, as the policy's successor.
  */
 export async function privateAddress(runtime: VaultRuntime, keys: Keys, live: LiveInput, options: RotateOptions): Promise<PrivateAddress> {
   const policy = privacyPolicy(await scanVault(runtime.vault, keys), live.eventId);
