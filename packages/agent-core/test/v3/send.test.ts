@@ -9,9 +9,7 @@ import {
   automaticMessageId,
   channelOf,
   compareChannels,
-  didKeyName,
   effectKey,
-  inboundMessageId,
   intentOfOutbound,
   objectReader,
   readPlaintext,
@@ -25,17 +23,13 @@ import {
   type ContactId,
   type Did,
   type DidId,
-  type EventReference,
   type MessageId,
-  type PublicKey,
-  type ReceiptOrdinal,
   type VaultFold,
-  type WireMessageId,
 } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import { AmbiguousTarget, EntityConflict, NoTarget, UnknownEntity, Unusable, authorizedKeys, automaticDraft, commitResolution, createDid, resolve, retireDid, send, type Content } from "../../src/v3/index.js";
-import { directParty, type DirectParty } from "./helpers.js";
+import { AmbiguousTarget, EntityConflict, NoTarget, UnknownEntity, Unusable, automaticDraft, createDid, retireDid, send, type Content } from "../../src/v3/index.js";
+import { directParty, received, type DirectParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const ALICE_NEXT = "019b0000-0000-7000-8000-00000000000c" as DidId;
@@ -64,46 +58,6 @@ const fold = (party: DirectParty): Promise<VaultFold> => scanVault(party.runtime
 async function contact(party: DirectParty, contactId: ContactId, channels: Channel[]): Promise<void> {
   await party.runtime.vault.commit([], [vaultDraft("contact.created", { contactId, because: "user" }), vaultDraft("contact.channelsSet", { contactId, channels })]);
 }
-
-/** Bob's message received at Alice's DID `at`: his document pinned, the body stored, the observation committed — a complete witness of him writing to exactly that address. */
-async function received(alice: DirectParty, bob: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = { didId: ALICE, did: alice.did }): Promise<EventReference<"message.in">> {
-  const outcome = await resolve(bob.longFormDid, () => null);
-  if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
-  const [peerPublicKey] = authorizedKeys(outcome.resolution, "keyAgreement").values();
-  const resolved = await commitResolution(alice.runtime, { resolution: outcome.resolution, localKeyName: didKeyName(at.didId, "key-agreement"), peerPublicKey: peerPublicKey as PublicKey });
-  const read = readPlaintext({ typ: PLAINTEXT_TYP, id: wire, from: bob.longFormDid, to: [at.did], ...plaintext });
-  const [event] = await alice.runtime.vault.commit(
-    [{ cid: read.stored.bodyCid, source: read.stored.bytes }],
-    [
-      vaultDraft("message.in", {
-        messageId: inboundMessageId(bob.did, at.did, wire as WireMessageId),
-        wireMessageId: wire as WireMessageId,
-        receiptOrdinal: "1" as ReceiptOrdinal,
-        intentHash: read.intentHash,
-        plaintextHash: read.plaintextHash,
-        localKeyName: didKeyName(at.didId, "key-agreement"),
-        msgType: read.intent.type,
-        peerResolutionEventId: resolved.eventId as EventReference<"peer.resolved">,
-        presentedDid: bob.longFormDid,
-        did: bob.did,
-        thid: read.intent.thid,
-        pthid: read.intent.pthid,
-        createdTime: read.intent.createdTime,
-        expiresTime: read.intent.expiresTime,
-        pleaseAck: read.intent.pleaseAck,
-        ack: read.intent.ack,
-        headers: read.intent.headers,
-        fromPrior: null,
-        bodyCid: read.stored.bodyCid,
-        attachmentCids: read.stored.attachmentCids,
-        bytes: 512,
-        receivedVia: { mediationId: null, deliveryId: null },
-      }),
-    ]
-  );
-  return event!.eventId as EventReference<"message.in">;
-}
-
 
 /** Alice continues `ALICE` as `ALICE_NEXT` toward `peer`, under the proof her seed signs, once the peer has written to `ALICE`: a verified local replacement. */
 async function rotated(alice: DirectParty, peer: DirectParty): Promise<{ next: Did; longFormDid: Did }> {

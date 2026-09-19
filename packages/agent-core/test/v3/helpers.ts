@@ -4,9 +4,24 @@ import { resolveDIDCommDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
 import { openNodeSqlite } from "@estoc/event-store/node";
 import type { JsonObject, SqliteDriver } from "@estoc/event-store/v3";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
-import { scanVault, type Did, type DidId, type MediationId, type VaultEvent } from "@estoc/vault/v3";
+import {
+  PLAINTEXT_TYP,
+  didKeyName,
+  inboundMessageId,
+  readPlaintext,
+  scanVault,
+  vaultDraft,
+  type Did,
+  type DidId,
+  type EventReference,
+  type MediationId,
+  type PublicKey,
+  type ReceiptOrdinal,
+  type VaultEvent,
+  type WireMessageId,
+} from "@estoc/vault/v3";
 
-import { AgentTrace, Keyring, MediatorLink, configureRoute, createDid, createMediation, createVault, type LinkOptions, type OpenedVault } from "../../src/v3/index.js";
+import { AgentTrace, Keyring, MediatorLink, authorizedKeys, commitResolution, configureRoute, createDid, createMediation, createVault, resolve, type LinkOptions, type OpenedVault } from "../../src/v3/index.js";
 import { FakeMediator, MEDIATOR_HTTP } from "../fake-mediator.js";
 
 export const didcomm = { Message, FromPrior };
@@ -150,4 +165,43 @@ export async function directParty(fill: number, endpoint: string, didId: DidId, 
   const route = await configureRoute(fresh.runtime, fresh.keys, { kind: "direct", endpoint });
   const { minted } = await createDid(fresh.runtime, fresh.keys, route.data.routeId, didId);
   return { ...fresh, didId, did: minted.did, longFormDid: minted.longFormDid };
+}
+
+/** The peer's message received at one of `party`'s DIDs: the peer's document pinned, the body stored, the observation committed — a complete witness of the peer writing to exactly that address. */
+export async function received(party: DirectParty, peer: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = party): Promise<EventReference<"message.in">> {
+  const outcome = await resolve(peer.longFormDid, () => null);
+  if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
+  const [peerPublicKey] = authorizedKeys(outcome.resolution, "keyAgreement").values();
+  const resolved = await commitResolution(party.runtime, { resolution: outcome.resolution, localKeyName: didKeyName(at.didId, "key-agreement"), peerPublicKey: peerPublicKey as PublicKey });
+  const read = readPlaintext({ typ: PLAINTEXT_TYP, id: wire, from: peer.longFormDid, to: [at.did], ...plaintext });
+  const [event] = await party.runtime.vault.commit(
+    [{ cid: read.stored.bodyCid, source: read.stored.bytes }],
+    [
+      vaultDraft("message.in", {
+        messageId: inboundMessageId(peer.did, at.did, wire as WireMessageId),
+        wireMessageId: wire as WireMessageId,
+        receiptOrdinal: "1" as ReceiptOrdinal,
+        intentHash: read.intentHash,
+        plaintextHash: read.plaintextHash,
+        localKeyName: didKeyName(at.didId, "key-agreement"),
+        msgType: read.intent.type,
+        peerResolutionEventId: resolved.eventId as EventReference<"peer.resolved">,
+        presentedDid: peer.longFormDid,
+        did: peer.did,
+        thid: read.intent.thid,
+        pthid: read.intent.pthid,
+        createdTime: read.intent.createdTime,
+        expiresTime: read.intent.expiresTime,
+        pleaseAck: read.intent.pleaseAck,
+        ack: read.intent.ack,
+        headers: read.intent.headers,
+        fromPrior: null,
+        bodyCid: read.stored.bodyCid,
+        attachmentCids: read.stored.attachmentCids,
+        bytes: 512,
+        receivedVia: { mediationId: null, deliveryId: null },
+      }),
+    ]
+  );
+  return event!.eventId as EventReference<"message.in">;
 }

@@ -75,7 +75,7 @@ export function resolutionData({ resolution, localKeyName, peerPublicKey }: Reso
 }
 
 export interface CommitResolutionOptions {
-  /** record the resolution even when an equal one is there: evidence that must postdate something else, as a first package's must postdate its intent */
+  /** record the resolution even when an equal one is there: the caller wants evidence of its own */
   fresh?: boolean;
 }
 

@@ -11,8 +11,9 @@
  * evidence committed, read back and handed to didcomm under the
  * spelling it asks for (`evidence`); and a message decided and
  * committed as an intent in its fixed channel before any network work,
- * as a user's send or an operation's automatic effect (`send`). The
- * protocols themselves —
+ * as a user's send or an operation's automatic effect (`send`); and
+ * that intent's one package made from local evidence alone and
+ * committed with its envelope (`prepare`). The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`; `unpack` opens an inbound envelope there with its
  * rotation proof left for the vault to judge.
@@ -88,3 +89,4 @@ export {
   type ResolutionEvidence,
 } from "./evidence.js";
 export { automaticDraft, send, type AutomaticDraft, type Content, type Effect, type EffectContent, type SendOptions, type Sent, type Target } from "./send.js";
+export { MAX_CONTENT_BYTES, hasExpired, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
