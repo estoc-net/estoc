@@ -11,10 +11,11 @@
  * evidence or two contradict each other. The peer must have written
  * to exactly the predecessor address, since a link from an address
  * the peer never used confirms nothing. A successor is a fresh entity,
- * or one recorded earlier that no replacement path leads back from:
- * the continuity graph keeps every branch and chooses no winner, so a
- * cycle the producer could see coming would leave the whole context
- * without authority for good.
+ * or one recorded earlier; either way the decision is folded with the
+ * evidence here before it is written, and refused when that fold puts
+ * it or its context in conflict: the continuity graph keeps every
+ * branch and chooses no winner, so a cycle the producer could see
+ * coming would leave the whole context without authority for good.
  * The notification announcing the rotation is the decision's own
  * operation, made right after the decision commits under the same
  * lock and called under an initial action once the lock is released.
@@ -26,19 +27,23 @@
 
 import { v7 as uuidv7 } from "uuid";
 
-import type { Held, VaultRuntime } from "@estoc/event-store/v3";
+import type { Event, Held, VaultRuntime } from "@estoc/event-store/v3";
 import {
   EMPTY_MESSAGE_TYPE,
   ROTATION_NOTIFICATION_EFFECT,
+  VaultEventSet,
   automaticIntent,
   canonicalDidOf,
   channelKey,
   channelOf,
   channelPolicy,
+  checkVault,
   decisionFor,
+  foldVault,
   kindOf,
   mintDid,
   notificationChannel,
+  objectReader,
   readVaultEvent,
   sameChannel,
   scanVault,
@@ -117,10 +122,13 @@ export async function rotate(runtime: VaultRuntime, keys: Keys, target: Rotation
     if (sourceEventId !== null) assertSelectingSource(fold, channel, sourceEventId);
     if (!fold.continuity.confirmed(channel.localDid, channel.peerDid)) throw new Unusable("channel", key, ["the peer has not written to exactly this address"]);
 
-    const { drafts, successor } = await successorOf(fold, keys, predecessor, channel, sourceEventId !== null, options);
+    const { drafts, successor } = await successorOf(fold, keys, predecessor, sourceEventId !== null, options);
     const iat = Math.floor((options.now ?? Date.now)() / 1000);
     const fromPrior = await signFromPrior(keys, { didId: predecessor.didId, longFormDid: predecessor.created.longFormDid }, successor.longFormDid, iat);
-    const events = (await held.commit([], [...drafts, vaultDraft("did.rotationSelected", { fromDidId: predecessor.didId, peerDid: channel.peerDid, toDidId: successor.didId, sourceEventId, fromPrior })])).map(readVaultEvent);
+    drafts.push(vaultDraft("did.rotationSelected", { fromDidId: predecessor.didId, peerDid: channel.peerDid, toDidId: successor.didId, sourceEventId, fromPrior }));
+    const refusal = await foreseen(held, runtime, keys, fold, drafts);
+    if (refusal !== null) throw new Unusable("DID", successor.didId, [refusal]);
+    const events = (await held.commit([], drafts)).map(readVaultEvent);
     const decision = events[events.length - 1] as VaultEvent<"did.rotationSelected">;
     fold = await scanVault(held, keys);
     const settled = await settleNotification(held, fold, decision.eventId as EventReference<"did.rotationSelected">, options.trace ?? null);
@@ -169,12 +177,12 @@ function assertSelectingSource(fold: VaultFold, channel: Channel, sourceEventId:
  * route, or the route given, and created in the decision's own
  * commit. An entity already recorded under the ID given is the
  * successor of a manual rotation only, when the seed and the route
- * give exactly its document, it is live, and no replacement path
- * leads from it back to the predecessor; a rotation an input selected
- * is the private-address policy's, whose successor is an address no
- * one has yet. What would differ is refused rather than replaced.
+ * give exactly its document and it is live; a rotation an input
+ * selected is the private-address policy's, whose successor is an
+ * address no one has yet. What would differ is refused rather than
+ * replaced.
  */
-async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEntity, channel: Channel, selected: boolean, options: RotateOptions): Promise<{ drafts: VaultDraft[]; successor: MintedDid }> {
+async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEntity, selected: boolean, options: RotateOptions): Promise<{ drafts: VaultDraft[]; successor: MintedDid }> {
   const didId = options.didId ?? (uuidv7() as DidId);
   const routeId = options.routeId ?? predecessor.created!.boundRouteId;
   const successor = await mintDid(keys, didId, routeTargetOf(fold, routeId));
@@ -185,24 +193,37 @@ async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEnt
   const faults: string[] = [];
   if (selected) faults.push("a rotation an input selects takes a fresh successor");
   if (!existing.live) faults.push(...(existing.retired !== null ? [`retired: ${existing.retired}`, ...existing.faults] : existing.faults));
-  if (successor.did === channel.peerDid) faults.push("it is the peer's DID");
-  if (leadsBack(fold, successor.did, channel.localDid)) faults.push("a replacement path from it leads back to the predecessor");
   if (faults.length > 0) throw new Unusable("DID", didId, faults);
   return { drafts: [], successor };
 }
 
-/** Does any replacement path in the positive graph, conflicted branches included, lead from a channel of `successor` to one of `predecessor`? */
-function leadsBack(fold: VaultFold, successor: Did, predecessor: Did): boolean {
-  const seen = new Set<string>();
-  const queue = fold.continuity.links.filter((link) => link.from.localDid === successor).map((link) => link.from);
-  for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
-    const key = channelKey(next);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (next.localDid === predecessor) return true;
-    for (const link of fold.continuity.links) if (sameChannel(link.from, next)) queue.push(link.to);
+/**
+ * The fold as it would be with the drafts committed, the decision
+ * last: the events here and the candidates, checked against the seed
+ * and the retained documents and folded again, so that every join,
+ * confirmation and conflict the decision implies — a waiting decision
+ * it would confirm, a path it would close — is the continuity fold's
+ * own verdict and not an approximation of it. Why the decision is
+ * refused, or null when the fold takes it.
+ */
+async function foreseen(held: Held, runtime: VaultRuntime, keys: Keys, fold: VaultFold, drafts: readonly VaultDraft[]): Promise<string | null> {
+  const at = new Date().toISOString();
+  const candidates: Event[] = drafts.map((draft) => ({ eventId: uuidv7() as EventId, at, author: runtime.author, type: draft.type, roots: draft.roots ?? [], data: draft.data }));
+  const set = VaultEventSet.of([...fold.set.all(), ...candidates]);
+  const next = foldVault(set, await checkVault(set, keys, objectReader(held.objects)));
+  const decisionId = candidates[candidates.length - 1]!.eventId;
+  const decision = next.channels.decisions.get(decisionId)!;
+  if (decision.status.status === "invalid" || decision.status.status === "conflict") return `the decision would be ${decision.status.status}: ${decision.status.because}`;
+  const continuity = next.continuity.status(decisionId);
+  if (continuity.status === "conflict") return `the decision would be in conflict: ${continuity.because}`;
+  const before = new Map<string, number>();
+  for (const conflict of fold.continuity.conflicts) before.set(conflict.kind, (before.get(conflict.kind) ?? 0) + 1);
+  for (const conflict of next.continuity.conflicts) {
+    const seen = before.get(conflict.kind) ?? 0;
+    if (seen === 0) return `the decision would bring the evidence here a conflict: ${conflict.kind}`;
+    before.set(conflict.kind, seen - 1);
   }
-  return false;
+  return null;
 }
 
 /** The state of a recorded decision's notification, for a rotation that reuses the decision: nothing is made or called for it here. */

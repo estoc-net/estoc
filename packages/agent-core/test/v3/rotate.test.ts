@@ -59,6 +59,7 @@ const ALICE_NEXT = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const ALICE_OTHER = "019b0000-0000-7000-8000-00000000000c" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
 const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
+const CHARLIE = "019b0000-0000-7000-8000-0000000000c0" as DidId;
 const CREATED = 1_757_700_000;
 const IAT = 1_757_700_000;
 
@@ -195,7 +196,7 @@ describe("a local rotation", () => {
     await closeAll(fresh.alice, fresh.bob);
   });
 
-  it("an entity recorded earlier is a manual rotation's successor only while no replacement path leads back from it, and never the policy's: a rotation back to the predecessor and a policy rotation to a disclosed address are refused before anything is written, and a fresh ID given to the policy is taken", async () => {
+  it("an entity recorded earlier is a manual rotation's successor only while the decision folds without conflict, and never the policy's: a rotation back to the predecessor and a policy rotation to a disclosed address are refused before anything is written, and a fresh ID given to the policy is taken", async () => {
     const { alice, bob } = await parties();
     const { wire, options, receive } = await rotating(alice);
     await receive(bob, { type: BASIC_MESSAGE });
@@ -204,7 +205,7 @@ describe("a local rotation", () => {
     await receive(bob, { type: BASIC_MESSAGE }, undefined, successor.longFormDid);
     let fold = await foldOf(alice);
     expect(fold.continuity.confirmed(successor.did, bob.did)).toBe(true);
-    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE_NEXT, peerDid: bob.did }, { ...options, didId: ALICE })).rejects.toThrow(new Unusable("DID", ALICE, ["a replacement path from it leads back to the predecessor"]));
+    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE_NEXT, peerDid: bob.did }, { ...options, didId: ALICE })).rejects.toThrow(new Unusable("DID", ALICE, ["the decision would be in conflict: its context is in conflict: cycle"]));
     fold = await foldOf(alice);
     expect([fold.set.of("did.rotationSelected").length, fold.routes.dids.size, fold.continuity.head({ localDid: alice.did, peerDid: bob.did }), fold.continuity.conflicts, wire.posts.length]).toEqual([1, 2, { localDid: successor.did, peerDid: bob.did }, [], 1]);
     await closeAll(alice, bob);
@@ -221,6 +222,46 @@ describe("a local rotation", () => {
     const fresh = rotated(await privateAddress(disclosed.alice.runtime, disclosed.alice.keys, new LiveInput(chat), { ...policy, didId: ALICE_NEXT }));
     expect([fresh.successor, fresh.decision.data.sourceEventId, fresh.notification.outcome, theirs.posts.length, (await foldOf(disclosed.alice)).routes.dids.size]).toEqual([ALICE_NEXT, chat, "created", 1, 3]);
     await closeAll(disclosed.alice, disclosed.bob);
+  });
+
+  it("a decision is folded with the evidence here before it is written: one whose join would confirm a waiting decision closing a cycle is refused with nothing written, while the same local DIDs rotate back and forth toward unrelated peers, each context keeping its own head", async () => {
+    const { alice, bob } = await parties();
+    const { wire, options, receive } = await rotating(alice);
+    const bobRoute = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
+    const { minted: prior } = await createDid(bob.runtime, bob.keys, bobRoute, BOB_PRIOR);
+    await receive(bob, { type: BASIC_MESSAGE }, prior.longFormDid);
+    const proof = await signFromPrior(bob.keys, { didId: BOB_PRIOR, longFormDid: prior.longFormDid }, bob.longFormDid, IAT);
+    await receive(bob, { type: BASIC_MESSAGE, from_prior: proof });
+    const aliceRoute = (await foldOf(alice)).routes.dids.get(ALICE)!.created!.boundRouteId;
+    const { minted: next } = await createDid(alice.runtime, alice.keys, aliceRoute, ALICE_NEXT);
+    await receive(bob, { type: BASIC_MESSAGE }, undefined, next.longFormDid);
+    const waiting = await signFromPrior(alice.keys, { didId: ALICE_NEXT, longFormDid: next.longFormDid }, alice.longFormDid, IAT);
+    const [pending] = await alice.runtime.vault.commit([], [vaultDraft("did.rotationSelected", { fromDidId: ALICE_NEXT, peerDid: prior.did, toDidId: ALICE, sourceEventId: null, fromPrior: waiting })]);
+    const old = { localDid: alice.did, peerDid: prior.did };
+    let fold = await foldOf(alice);
+    expect([fold.continuity.status(pending!.eventId).status, fold.continuity.confirmed(alice.did, prior.did), fold.continuity.head(old)]).toEqual(["pending-history", true, { localDid: alice.did, peerDid: bob.did }]);
+    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: prior.did }, { ...options, didId: ALICE_NEXT })).rejects.toThrow(new Unusable("DID", ALICE_NEXT, ["the decision would be in conflict: its context is in conflict: cycle"]));
+    fold = await foldOf(alice);
+    expect([fold.set.of("did.rotationSelected").length, fold.routes.dids.size, fold.continuity.head(old), fold.continuity.conflicts, wire.posts.length]).toEqual([1, 2, { localDid: alice.did, peerDid: bob.did }, [], 0]);
+    await closeAll(alice, bob);
+
+    const three = await parties();
+    const charlie = await directParty(3, "https://charlie.example/didcomm", CHARLIE);
+    const { wire: hers, options: theirs, receive: written } = await rotating(three.alice);
+    await written(three.bob, { type: BASIC_MESSAGE });
+    const forward = await rotate(three.alice.runtime, three.alice.keys, { localDidId: ALICE, peerDid: three.bob.did }, { ...theirs, didId: ALICE_NEXT });
+    const successor = await successorOf(three.alice, forward);
+    await written(charlie, { type: BASIC_MESSAGE }, undefined, successor.longFormDid);
+    const back = await rotate(three.alice.runtime, three.alice.keys, { localDidId: ALICE_NEXT, peerDid: charlie.did }, { ...theirs, didId: ALICE });
+    expect([back.existed, back.successor, back.decision.data.peerDid, back.notification.outcome]).toEqual([false, ALICE, charlie.did, "created"]);
+    fold = await foldOf(three.alice);
+    expect(fold.continuity.status(back.decision.eventId)).toEqual({ status: "verified" });
+    expect([fold.continuity.conflicts, fold.routes.dids.size, hers.posts.map((post) => post.url)]).toEqual([[], 2, [BOB_ENDPOINT, "https://charlie.example/didcomm"]]);
+    expect([fold.continuity.head({ localDid: three.alice.did, peerDid: three.bob.did }), fold.continuity.head({ localDid: successor.did, peerDid: charlie.did })]).toEqual([
+      { localDid: successor.did, peerDid: three.bob.did },
+      { localDid: three.alice.did, peerDid: charlie.did },
+    ]);
+    await closeAll(three.alice, three.bob, charlie);
   });
 
   it("the private-address policy: the first live application input at a disclosed address selects a successor over that input and notifies on its thread; a later input reuses the decision; one at the undisclosed successor, a control input or an undisclosed address selects nothing", async () => {
