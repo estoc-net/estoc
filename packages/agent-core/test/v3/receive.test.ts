@@ -15,6 +15,7 @@ import {
   ReceiverClosed,
   ReceiverInUse,
   authorizedKeys,
+  classifyRecipients,
   commitResolution,
   configureRoute,
   createDid,
@@ -33,7 +34,6 @@ import {
   type ReceiverOptions,
   type Resolution,
   type Source,
-  type Watch,
 } from "../../src/v3/index.js";
 import { didcomm, directParty, freshVault, newMediator, party, reloaded, webIdentity, type DirectParty, type Fresh, type Party } from "./helpers.js";
 
@@ -395,7 +395,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("only a change of what a delivery waits for retries it: a receipt's deferral watches something of the fold and a change elsewhere leaves the delivery unopened, while a deferral without a watch is retried at every change", async () => {
+  it("only a change of what a delivery waits for retries it: a receipt's deferral watches something of the fold and a change elsewhere leaves the delivery unopened; a receipt that throws keeps nothing, and the delivery is taken when it comes again", async () => {
     const { alice, bob } = await parties();
     const otherRoute = await configureRoute(alice.runtime, alice.keys, { kind: "direct", endpoint: OTHER_ENDPOINT });
     const other = await createDid(alice.runtime, alice.keys, otherRoute.data.routeId, OTHER);
@@ -403,17 +403,16 @@ describe("the gate before the vault", () => {
     const routes = (await eventsOf(alice.runtime, "route.configured")) as { data: { routeId: RouteId } }[];
     await copy.runtime.ingest([...(await eventsOf(alice.runtime, "did.created")), ...routes.filter((event) => event.data.routeId !== otherRoute.data.routeId)]);
     const calls: DidId[] = [];
-    let watched = true;
+    let failing = false;
     const trace = await AgentTrace.open(copy.runtime.local);
     const opened = async (): Promise<number> => (await trace.read({ type: "envelope.open" })).length;
     const receiver = await receiverOver(copy, {
       trace,
       receipt: async ({ recipient }) => {
         calls.push(recipient.didId);
+        if (failing) throw new Error("the disk is full");
         if (recipient.didId !== DID) return { outcome: "received" };
-        const disclosed = (fold: Parameters<Watch>[0]): number => fold.routes.dids.get(DID)?.disclosures.length ?? 0;
-        if (!watched) return { outcome: "deferred", reason: "the receipt waits, for whatever comes" };
-        return { outcome: "deferred", reason: "the receipt waits for the recipient's disclosure", watch: (fold) => String(disclosed(fold)) };
+        return { outcome: "deferred", reason: "the receipt waits for the recipient's disclosure", watch: (fold) => String(fold.routes.dids.get(DID)?.disclosures.length ?? 0) };
       },
     });
     const sealer = await peerSealer(bob);
@@ -430,13 +429,98 @@ describe("the gate before the vault", () => {
 
     await disclose(null, alice.runtime, alice.keys, DID, { as: "direct", uses: "many" });
     await copy.runtime.ingest(await eventsOf(alice.runtime, "did.disclosed"));
-    watched = false;
-    expect((await receiver.localStateChanged()).map(({ key, outcome }) => [key, outcome])).toEqual([[deliveryKey(toAlice), "deferred"]]);
-    expect(calls).toEqual([DID, OTHER, DID]);
-    expect(receiver.waiting().map(({ reason }) => reason)).toEqual(["the receipt waits, for whatever comes"]);
+    failing = true;
+    expect(await receiver.localStateChanged()).toMatchObject([{ key: deliveryKey(toAlice), outcome: "deferred", reason: "the receipt failed: the disk is full; the delivery is left where it came from" }]);
+    expect([calls, await opened(), receiver.waiting().length]).toEqual([[DID, OTHER, DID], 3, 1]);
 
+    expect(await receiver.localStateChanged()).toMatchObject([{ outcome: "deferred", reason: expect.stringContaining("left where it came from") }]);
+    failing = false;
+    expect(await receiver.localStateChanged()).toMatchObject([{ outcome: "deferred", reason: "the receipt waits for the recipient's disclosure" }]);
+    expect([calls, await opened(), receiver.waiting().length]).toEqual([[DID, OTHER, DID, DID, DID], 5, 1]);
+    expect(await receiver.localStateChanged()).toEqual([]);
+    receiver.close();
+
+    const again = await receiverOver(copy, { trace, receipt: async () => { throw new Error("the disk is full"); } });
+    expect(await again.receive(toOther)).toMatchObject({ outcome: "deferred", reason: "the receipt failed: the disk is full; the delivery is left where it came from" });
+    expect(again.waiting()).toEqual([]);
+    expect(await again.pickupHandle(MEDIATION)({ attachmentId: "o", packed: toOther.packed })).toBe("skip");
+    await closeAll(alice, bob, copy);
+  });
+
+  it("a change told of while the receipt is deciding sends the delivery through the gate again only when its watch says something else: an unrelated change lets it be held as decided", async () => {
+    const { alice, bob } = await parties();
+    const copy = await copyOf(alice, "did.created", "route.configured");
+    const trace = await AgentTrace.open(copy.runtime.local);
+    const opened = async (): Promise<number> => (await trace.read({ type: "envelope.open" })).length;
+    let deciding: () => void = () => undefined;
+    let decide: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      deciding = resolve;
+    });
+    const resumed = new Promise<void>((resolve) => {
+      decide = resolve;
+    });
+    let calls = 0;
+    const receiver = await receiverOver(copy, {
+      trace,
+      receipt: async () => {
+        calls += 1;
+        if (calls === 1) {
+          deciding();
+          await resumed;
+        }
+        return { outcome: "deferred", reason: "the receipt waits for the recipient's disclosure", watch: (fold) => String(fold.routes.dids.get(DID)?.disclosures.length ?? 0) };
+      },
+    });
+    const delivery: Delivery = { packed: await sealed(await peerSealer(bob), alice.longFormDid), source: PICKUP };
+
+    const first = receiver.receive(delivery);
+    await entered;
+    await configureRoute(copy.runtime, copy.keys, { kind: "direct", endpoint: OTHER_ENDPOINT });
+    expect(await receiver.localStateChanged()).toEqual([]);
+    decide();
+    expect(await first).toMatchObject({ outcome: "deferred" });
+    expect([calls, await opened(), receiver.waiting().length]).toEqual([1, 1, 1]);
+    expect(await receiver.localStateChanged()).toEqual([]);
+
+    await disclose(null, alice.runtime, alice.keys, DID, { as: "direct", uses: "many" });
+    await copy.runtime.ingest(await eventsOf(alice.runtime, "did.disclosed"));
     expect((await receiver.localStateChanged()).map(({ outcome }) => outcome)).toEqual(["deferred"]);
-    expect([calls, await opened()]).toEqual([[DID, OTHER, DID, DID], 4]);
+    expect([calls, await opened()]).toEqual([2, 2]);
+    await closeAll(alice, bob, copy);
+  });
+
+  it("a delivery whose vault could not be read is not kept and is taken when it comes again", async () => {
+    const { alice, bob } = await parties();
+    const { receipt, seen } = recording();
+    const receiver = await receiverOver(alice, { receipt });
+    const delivery: Delivery = { packed: await sealed(await peerSealer(bob), alice.longFormDid), source: PICKUP };
+    vi.spyOn(alice.runtime.vault.events, "scan").mockImplementationOnce(() => {
+      throw new Error("the database is locked");
+    });
+
+    expect(await receiver.receive(delivery)).toMatchObject({ outcome: "deferred", reason: "the vault is not read: the database is locked; the delivery is left where it came from" });
+    expect([receiver.waiting(), seen]).toEqual([[], []]);
+    expect(await receiver.receive(delivery)).toEqual({ outcome: "received", key: deliveryKey(delivery) });
+    await closeAll(alice, bob);
+  });
+
+  it("a recipient named many times over is one recipient: what the delivery waits on and the reason kept do not grow with the repetition", async () => {
+    const { alice, bob } = await parties();
+    const copy = await copyOf(alice, "did.created");
+    const { receipt, seen } = recording();
+    const receiver = await receiverOver(copy, { receipt, maxWaiting: 1, maxHeldBytes: 0 });
+    const packed = await sealed(await peerSealer(bob), alice.longFormDid);
+    const kid = kidOf(packed);
+    const fold = await scanVault(copy.runtime.vault, copy.keys);
+    const once = classifyRecipients(fold, [kid]);
+    expect(once).toEqual({ verdict: "pending", reason: `${kid}: the bound route is not configured`, waitingOn: [DID] });
+    expect(classifyRecipients(fold, Array.from({ length: 2048 }, () => kid))).toEqual(once);
+
+    const envelope = JSON.parse(packed) as { recipients: unknown[] };
+    const forged = JSON.stringify({ ...envelope, ciphertext: "not-authenticated", recipients: Array.from({ length: 2048 }, () => envelope.recipients[0]) });
+    expect(await receiver.receive({ packed: forged, source: DIRECT })).toMatchObject({ outcome: "deferred", reason: `${kid}: the bound route is not configured` });
+    expect([receiver.waiting().length, seen]).toEqual([1, []]);
     await closeAll(alice, bob, copy);
   });
 

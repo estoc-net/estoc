@@ -41,9 +41,9 @@ export function classifyRecipients(fold: VaultFold, kids: readonly string[]): Re
   if (kids.length === 0) return { verdict: "terminal", reason: "the envelope names no recipient key" };
   const refused: string[] = [];
   const pending: string[] = [];
-  const waitingOn: DidId[] = [];
+  const waitingOn = new Set<DidId>();
   let anyOfOurs = false;
-  for (const kid of kids) {
+  for (const kid of new Set(kids)) {
     const [did, reference] = splitDidUrl(kid);
     const didId = fold.routes.entityOfDid(did);
     const entity = didId === null ? undefined : fold.routes.dids.get(didId);
@@ -59,14 +59,14 @@ export function classifyRecipients(fold: VaultFold, kids: readonly string[]): Re
         return { verdict: "eligible", kid: kid as DidUrl, didId, did: entity.created.did, localKeyName: entity.keyNames.keyAgreement };
       case "pending":
         pending.push(`${kid}: ${entity.faults.join("; ")}`);
-        waitingOn.push(didId);
+        waitingOn.add(didId);
         break;
       case "terminal":
         refused.push(`${kid}: its route or mediation is retired or in conflict`);
         break;
     }
   }
-  if (pending.length > 0) return { verdict: "pending", reason: pending.join("; "), waitingOn };
+  if (pending.length > 0) return { verdict: "pending", reason: pending.join("; "), waitingOn: [...waitingOn] };
   if (!anyOfOurs) return { verdict: "terminal", reason: `local recipient material is unavailable for ${kids.join(", ")}; the delivery was discarded` };
   return { verdict: "terminal", reason: refused.join("; ") };
 }

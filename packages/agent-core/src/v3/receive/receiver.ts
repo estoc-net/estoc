@@ -23,12 +23,15 @@
  * opened again when it is redelivered: only a change of what it waits
  * for retries it, from the bytes held or at the next redelivery, and
  * one retried off a pickup's turn is acknowledged through `acknowledge`
- * once it is received or found terminal. What is kept is bounded: past
- * as many waiting deliveries as are allowed, a delivery that would wait
- * is left where it came from, since the mediator's copy is the only
- * copy and nothing addressed here may be dropped for want of room.
- * Nothing here waits for the network or for evidence about a peer: a
- * sender the vault cannot authenticate now is refused now.
+ * once it is received or found terminal. A delivery waits only for
+ * something the fold can show; one whose attempt failed — the vault
+ * not read, the receipt thrown — is not kept at all, and comes again
+ * from where it came. What is kept is bounded: past as many waiting
+ * deliveries as are allowed, a delivery that would wait is likewise
+ * left where it came from, since the mediator's copy is the only copy
+ * and nothing addressed here may be dropped for want of room. Nothing
+ * here waits for the network or for evidence about a peer: a sender
+ * the vault cannot authenticate now is refused now.
  */
 
 import type { Secret } from "@estoc/did-peer";
@@ -78,10 +81,11 @@ export type Watch = (fold: VaultFold) => string;
 /**
  * What the receipt made of an authenticated delivery: recorded, which
  * ends it; terminal; or deferred for something of this runtime's that
- * is not ready, with a watch over what that is. A deferral without one
- * is retried at every local change.
+ * the fold can show is not ready, with a watch over it. A receipt that
+ * cannot record for another reason throws instead, and the delivery is
+ * not kept.
  */
-export type ReceiptOutcome = { outcome: "received" } | { outcome: "terminal"; reason: string } | { outcome: "deferred"; reason: string; watch?: Watch };
+export type ReceiptOutcome = { outcome: "received" } | { outcome: "terminal"; reason: string } | { outcome: "deferred"; reason: string; watch: Watch };
 
 export type Receipt = (authenticated: Authenticated) => Promise<ReceiptOutcome>;
 
@@ -141,15 +145,13 @@ export const DISCARDED_KEPT = 256;
 interface Wait {
   source: Source;
   reason: string;
-  /** null: any local change retries it */
-  watch: Watch | null;
+  watch: Watch;
   /** what the watch said over the fold the delivery was held on */
-  seen: string | null;
+  seen: string;
   /** what it waits for changed while no bytes were held: the next redelivery is opened */
   retry: boolean;
 }
 
-/** A delivery's bytes, held for a retry, under the size they were counted at. */
 interface HeldDelivery {
   delivery: Delivery;
   bytes: number;
@@ -229,9 +231,9 @@ export class Receiver {
   /**
    * Something of this runtime's changed: every waiting delivery whose
    * watch now says something else is retried from its bytes, or opened
-   * at its next redelivery when they are not held. A delivery whose
-   * attempt was reading the vault as the change came decides over the
-   * vault again before it is held.
+   * at its next redelivery when they are not held. While the vault
+   * cannot be read to compare, every waiting delivery is retried, since
+   * a retry that cannot read it either leaves the wait as it was.
    */
   async localStateChanged(): Promise<Received[]> {
     this.changes += 1;
@@ -241,7 +243,7 @@ export class Receiver {
     const results: Received[] = [];
     for (const [key, wait] of waiting) {
       if (this.closed) break;
-      if (fold !== null && wait.watch !== null && wait.watch(fold) === wait.seen) continue;
+      if (fold !== null && wait.watch(fold) === wait.seen) continue;
       const received = await this.retryInTurn(key, wait);
       if (received !== null) results.push(received);
     }
@@ -334,16 +336,15 @@ export class Receiver {
     return received;
   }
 
-  /** One pass through the gate over the vault as it is read now; a local change told of meanwhile sends it through again. */
   private async attempt(key: string, delivery: Delivery): Promise<Received> {
     const observed = this.changes;
-    const defer = (reason: string, watch: Watch | null, fold: VaultFold | null): Promise<Received> => this.defer(key, delivery, observed, { reason, watch, fold });
+    const defer = (reason: string, watch: Watch, fold: VaultFold): Promise<Received> => this.defer(key, delivery, observed, { reason, watch, fold });
     let fold: VaultFold;
     try {
       fold = await scanVault(this.runtime.vault, this.keys);
     } catch (err) {
       this.refuseClosed();
-      return defer(`the vault is not read: ${messageOf(err)}`, null, null);
+      return this.leave(key, delivery, `the vault is not read: ${messageOf(err)}`);
     }
     this.refuseClosed();
     const header = envelopeHeader(delivery.packed);
@@ -387,7 +388,7 @@ export class Receiver {
     try {
       outcome = await this.options.receipt(authenticated);
     } catch (err) {
-      return defer(`the receipt failed: ${messageOf(err)}`, null, null);
+      return this.leave(key, delivery, `the receipt failed: ${messageOf(err)}`);
     }
     switch (outcome.outcome) {
       case "received":
@@ -395,31 +396,39 @@ export class Receiver {
       case "terminal":
         return this.finish(key, delivery, outcome.reason);
       case "deferred":
-        return defer(outcome.reason, outcome.watch ?? null, fold);
+        return defer(outcome.reason, outcome.watch, fold);
     }
   }
 
   /**
-   * A delivery that waits: held with what it waits for, unless a local
-   * change came while the attempt read the vault, in which case what it
-   * decided may be stale and it goes through the gate again; or, past
-   * as many as may wait, left where it came from with nothing kept.
+   * A delivery that waits, held with what it waits for. A local change
+   * told of while the attempt read the vault may have changed that: the
+   * vault is read again, and only when the watch says something else
+   * does the delivery go through the gate again. Past as many as may
+   * wait, it is left where it came from instead.
    */
-  private async defer(key: string, delivery: Delivery, observed: number, deferral: { reason: string; watch: Watch | null; fold: VaultFold | null }): Promise<Received> {
+  private async defer(key: string, delivery: Delivery, observed: number, deferral: { reason: string; watch: Watch; fold: VaultFold }): Promise<Received> {
     const reason = bounded(deferral.reason);
-    if (!this.closed) {
-      if (this.changes !== observed) return this.attempt(key, delivery);
-      if (!this.waits.has(key) && this.waits.size >= this.maxWaiting) {
-        const left = `${reason}; as many deliveries wait as may, so this one is left where it came from`;
-        await this.diag(delivery, { outcome: "deferred", reason: left });
-        return { outcome: "deferred", key, reason: left };
-      }
-      const { watch, fold } = deferral;
-      this.hold(key, delivery);
-      this.waits.set(key, { source: delivery.source, reason, watch, seen: watch === null || fold === null ? null : watch(fold), retry: false });
+    const { watch } = deferral;
+    const seen = watch(deferral.fold);
+    while (!this.closed && this.changes !== observed) {
+      observed = this.changes;
+      const fold = await this.foldOrNull();
+      if (fold === null || watch(fold) !== seen) return this.attempt(key, delivery);
     }
+    if (this.closed) return this.leave(key, delivery, reason);
+    if (!this.waits.has(key) && this.waits.size >= this.maxWaiting) return this.leave(key, delivery, `${reason}; as many deliveries wait as may`);
+    this.hold(key, delivery);
+    this.waits.set(key, { source: delivery.source, reason, watch, seen, retry: false });
     await this.diag(delivery, { outcome: "deferred", reason });
     return { outcome: "deferred", key, reason };
+  }
+
+  /** A delivery not kept: whatever waits for it already stays as it was, and it comes again from where it came. */
+  private async leave(key: string, delivery: Delivery, reason: string): Promise<Received> {
+    const left = bounded(`${reason}; the delivery is left where it came from`);
+    await this.diag(delivery, { outcome: "deferred", reason: left });
+    return { outcome: "deferred", key, reason: left };
   }
 
   private async finish(key: string, delivery: Delivery, reason: string | null): Promise<Received> {
