@@ -1,18 +1,19 @@
 /**
- * What follows a receipt, once the observation is committed and
- * before the delivery is acknowledged to whoever brought it; and what
- * an open runs again over everything received before, since a crash
- * may fall between a receipt and this. The fold has already judged the
- * observation: whether the proof it carried verifies, and what its
- * `ack` earns. This reads that judgement and records the two things
- * the vault owes on its own — a one-use invitation consumed by the
- * first eligible receipt, and a peer's acknowledgement of an outbound
- * — in one commit under the lock, over the fold read there. A proof
- * that did not verify leaves a diagnostic in the trace and nothing
- * else: the fold keeps saying what it says, and an import may change
- * it. Nothing here is sent. An automatic reply is an operation's
- * effect, decided elsewhere over the same fold, and neither
- * consumption nor acknowledgement grants it anything.
+ * What follows a receipt, once the observation is durably committed:
+ * independent of the pickup acknowledgement, which the durable receipt
+ * alone earns, and run again by an open over everything received
+ * before, since a crash may fall between a receipt and this. The fold
+ * has already judged every observation: whether the proof it carried
+ * verifies, and what its `ack` earns. This records the two things the
+ * vault owes on its own — a one-use invitation consumed by the first
+ * eligible receipt, and a peer's acknowledgement of an outbound — in
+ * one commit under the lock, over the fold read there, for the whole
+ * fold: `consumed` and `acknowledged` hold whatever this pass
+ * recorded, an earlier observation's included, while `eventId` only
+ * selects the proof reported and, when it did not verify, left as a
+ * diagnostic in the trace. Nothing here is sent. An automatic reply is
+ * an operation's effect, decided elsewhere over the same fold, and
+ * neither consumption nor acknowledgement grants it anything.
  */
 
 import type { VaultRuntime } from "@estoc/event-store/v3";

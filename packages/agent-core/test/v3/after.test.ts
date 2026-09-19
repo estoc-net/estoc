@@ -40,7 +40,6 @@ async function receiving(holder: Fresh): Promise<{ receiver: Receiver; seen: Aut
   return { receiver, seen };
 }
 
-/** One message from `peer` received at `alice` and recorded, then what follows it. */
 async function receivedThen(receiver: Receiver, alice: DirectParty, peer: DirectParty, extra: Partial<IMessage>, trace?: AgentTrace) {
   const received = await receiver.receive({ packed: await sealed(await peerSealer(peer), alice.longFormDid, extra), source: DIRECT });
   if (received.outcome !== "received") throw new Error(`not received: ${JSON.stringify(received)}`);
