@@ -144,7 +144,7 @@ function scan(held: Held, keys: Keys, options: EffectOptions): Promise<VaultFold
 }
 
 /** An outcome before its dispatch: the action is minted by whoever decided the intent. */
-type Drafted =
+export type Drafted =
   | { effectType: string; outcome: "created"; messageId: MessageId; intent: VaultEvent<"message.out">; action?: LiveAction }
   | { effectType: string; outcome: "existing"; messageId: MessageId; action?: LiveAction }
   | Extract<EffectOutcome, { outcome: "none" | "refused" }>;
@@ -227,7 +227,7 @@ async function record(held: Held, fold: VaultFold, execution: Execution, source:
   }
 }
 
-async function refused(effectType: string, messageId: MessageId, executionId: ExecutionId, err: unknown, trace: AgentTrace | null): Promise<Drafted> {
+export async function refused(effectType: string, messageId: MessageId, executionId: ExecutionId | null, err: unknown, trace: AgentTrace | null): Promise<Drafted> {
   const because = messageOf(err);
   await note(trace, { stream: "diag", what: "effect", data: { messageId, executionId, effectType, reason: because } });
   return { effectType, outcome: "refused", because };
@@ -241,7 +241,7 @@ async function readBody(held: Held, execution: Execution, source: Source): Promi
 }
 
 /** The one transport call of a drafted intent, under the action it carries; none for an intent no action was minted for. A call's step that throws is this operation's alone. */
-async function dispatched(draft: Drafted, executionId: ExecutionId | null, options: EffectOptions): Promise<EffectOutcome> {
+export async function dispatched(draft: Drafted, executionId: ExecutionId | null, options: EffectOptions): Promise<EffectOutcome> {
   if (draft.outcome === "none" || draft.outcome === "refused") return draft;
   if (draft.action === undefined) return { ...draft, outcome: "existing", action: null, dispatched: null };
   const { action, messageId, effectType } = draft;
@@ -254,6 +254,6 @@ async function dispatched(draft: Drafted, executionId: ExecutionId | null, optio
   }
 }
 
-function messageOf(err: unknown): string {
+export function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }

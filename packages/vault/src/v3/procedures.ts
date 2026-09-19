@@ -284,35 +284,51 @@ function missingResponses(fold: VaultFold): MissingResponse[] {
 }
 
 /**
- * A decision permits a notification once continuity has verified it
- * and no intent names it. With a source, the source must still be a
+ * Where a decision's notification goes, once continuity has verified
+ * the decision: from the successor to the decision's peer, when the
+ * successor may send there. With a source, the source must still be a
  * complete witness of an established application input, since a
  * control input triggers none, and its channel must not be denied, in
- * conflict, or left by the peer; the successor must be able to send
- * to that peer. A source-free decision is held only to the successor's
- * channel.
+ * conflict, or left by the peer. A source-free decision is held only
+ * to the successor's channel. Whether an intent already names the
+ * decision is the outbound fold's answer, not this one's.
  */
+export type NotificationChannel = { status: "selected"; channel: Channel; source: Source | null } | { status: "none"; because: string };
+
+export function notificationChannel(fold: VaultFold, decision: Decision): NotificationChannel {
+  const none = (because: string): NotificationChannel => ({ status: "none", because });
+  if (decision.channel === null) return none("the decision's predecessor is not known here");
+  const continuity = fold.continuity.status(decision.event.eventId);
+  if (continuity.status !== "verified") return none(`the rotation is not verified: ${continuity.status}${"because" in continuity ? `, ${continuity.because}` : ""}`);
+  const successor = fold.routes.dids.get(decision.event.data.toDidId)?.created?.did;
+  if (successor === undefined) return none("the successor has no consistent creation here");
+  const channel = channelOf(successor, decision.channel.peerDid);
+  const gate = senderGate(fold, channel);
+  if (gate.status === "closed") return none(`the successor cannot send to the peer: ${gate.because}`);
+  const { sourceEventId } = decision.event.data;
+  if (sourceEventId === null) return { status: "selected", channel, source: null };
+  const source = fold.channels.sources.get(sourceEventId as EventId) ?? null;
+  if (source === null) return none("the source is not here");
+  const witness = fold.continuity.witness(source.event.eventId);
+  if (witness.status !== "complete") return none(`the source is no complete witness: ${witness.because}`);
+  const execution = fold.inbound.ofSource(source.event.eventId);
+  if (execution === null) return none("the source is in no input here");
+  if (execution.status.status !== "complete") return none(`the source's input is not established: ${execution.status.because}`);
+  if (kindOf(source.event.data) !== "application") return none(`a control input triggers no notification: the source is ${kindOf(source.event.data)}`);
+  const denied = channelPolicy(fold, decision.channel, { automatic: true });
+  return denied === null ? { status: "selected", channel, source } : none(denied);
+}
+
+/** A verified decision no intent names yet, while its channel still takes the notification; several intents naming one decision are its conflict. */
 function missingNotifications(fold: VaultFold): { notifications: MissingNotification[]; conflicts: NotificationConflict[] } {
   const notifications: MissingNotification[] = [];
   const conflicts: NotificationConflict[] = [];
   for (const decision of fold.channels.decisions.values()) {
     const notification = fold.outbound.notificationFor(decision.event.eventId);
     if (notification.status === "conflict") conflicts.push({ decision, notification });
-    if (notification.status !== "none" || decision.channel === null) continue;
-    if (fold.continuity.status(decision.event.eventId).status !== "verified") continue;
-    const successor = fold.routes.dids.get(decision.event.data.toDidId)?.created?.did;
-    if (successor === undefined) continue;
-    const channel = channelOf(successor, decision.channel.peerDid);
-    if (senderGate(fold, channel).status === "closed") continue;
-    let source: Source | null = null;
-    if (decision.event.data.sourceEventId !== null) {
-      source = fold.channels.sources.get(decision.event.data.sourceEventId as EventId) ?? null;
-      if (source === null || fold.continuity.witness(source.event.eventId).status !== "complete") continue;
-      if (fold.inbound.ofSource(source.event.eventId)?.status.status !== "complete") continue;
-      if (kindOf(source.event.data) !== "application") continue;
-      if (channelPolicy(fold, decision.channel, { automatic: true }) !== null) continue;
-    }
-    notifications.push({ decision, channel, source });
+    if (notification.status !== "none") continue;
+    const selected = notificationChannel(fold, decision);
+    if (selected.status === "selected") notifications.push({ decision, channel: selected.channel, source: selected.source });
   }
   return { notifications, conflicts };
 }

@@ -11,7 +11,7 @@
 
 export { EnvelopeRefused, unpack, type Unpacked } from "../protocol/didcomm.js";
 
-export { AmbiguousTarget, EntityConflict, MediatorRefused, NoTarget, ReceiverClosed, ReceiverInUse, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
+export { AmbiguousTarget, EntityConflict, MediatorRefused, NoTarget, NotificationConflict, ReceiverClosed, ReceiverInUse, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
   createVault,
   inspectRuntime,
@@ -78,7 +78,7 @@ export {
   type PinnedResolverOptions,
   type ResolutionEvidence,
 } from "./evidence.js";
-export { automaticDraft, send, type AutomaticDraft, type Content, type Effect, type EffectContent, type SendOptions, type Sent, type Target } from "./send.js";
+export { automaticDraft, manualNotificationDraft, send, type AutomaticDraft, type Content, type Effect, type EffectContent, type SendOptions, type Sent, type Target } from "./send.js";
 export { MAX_CONTENT_BYTES, hasExpired, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
 export { LiveAction, LiveInput, type ActionKind } from "./action.js";
 export { DISPATCH_TIMEOUT_MS, MAX_ENVELOPE_BYTES, cancel, dispatch, type Cancelled, type DispatchOptions, type Dispatched } from "./dispatch.js";
@@ -109,4 +109,6 @@ export { receiptOf, recordReceipt } from "./receive/receipt.js";
 export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
 export { afterReceipt, type AfterReceipt, type AfterReceiptOptions } from "./receive/after.js";
 export { completeResponse, reactTo, type Called, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
+export { completeNotification, rotate, type RotateOptions, type Rotated, type RotationTarget } from "./rotate.js";
+export { privacyPolicy, privateAddress, type PrivacyPolicy, type PrivateAddress } from "./privacy.js";
 export { BUILT_IN_HANDLERS, basicMessage, claimedName, effectTypesOf, empty, handlerFor, handlersOf, reportProblem, trustPing, userProfile, type Handler, type Input, type Response } from "./handlers/index.js";
