@@ -45,7 +45,6 @@ export function receiptOf(runtime: VaultRuntime, keys: Keys): Receipt {
   return (authenticated) => recordReceipt(runtime, keys, authenticated);
 }
 
-/** The observation short of what the lock decides: its ordinal and the resolution event it names. */
 type Observed = Omit<MessageIn, "receiptOrdinal" | "peerResolutionEventId">;
 
 type Objects = { cid: Cid; source: Uint8Array }[];

@@ -3,16 +3,18 @@ import { describe, expect, it } from "vitest";
 import { anonymousMessageId, didKeyName, inboundMessageId, readPlaintext, scanVault, signFromPrior, vaultDraft, type DidId, type MediationId, type VaultEvent, type VaultEventType, type VaultFold, type WireMessageId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import type { IMessage } from "../../src/protocol/didcomm.js";
+import { PLAIN_TYP, packEncrypted, secretsResolverFor, type IMessage } from "../../src/protocol/didcomm.js";
 import { AgentTrace, Keyring, MAX_CONTENT_BYTES, Pickup, Receiver, createDid, deliveryKey, receiptOf, reconcile, recordReceipt, type Authenticated, type Delivery, type ReceiverOptions, type Source } from "../../src/v3/index.js";
 import { didcomm, directParty, freshVault, mediatedParty, newMediator, peerSealer, refuseCommits, reloaded, sealed, type DirectParty, type Fresh } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
 const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
+const CAROL = "019b0000-0000-7000-8000-0000000000c0" as DidId;
 const MEDIATION = "019b0000-0000-7000-8000-000000000201" as MediationId;
 const ALICE_ENDPOINT = "https://alice.example/didcomm";
 const BOB_ENDPOINT = "https://bob.example/didcomm";
+const CAROL_ENDPOINT = "https://carol.example/didcomm";
 const IAT = 1_757_700_000;
 
 const DIRECT: Source = { kind: "direct" };
@@ -64,7 +66,6 @@ async function eventsOf<T extends VaultEventType>(holder: Fresh, type: T): Promi
   return (await foldOf(holder)).set.of(type);
 }
 
-/** The events of `types` as the store holds them: what a copy of the vault ingests. */
 async function rawEventsOf(holder: Fresh, ...types: string[]): Promise<unknown[]> {
   const events: unknown[] = [];
   for await (const event of holder.runtime.vault.events.scan()) if (types.includes(event.type)) events.push(event);
@@ -128,6 +129,31 @@ describe("the receipt", () => {
     ]);
     expect(await eventsOf(alice, "peer.resolved")).toHaveLength(1);
     await closeAll(alice, bob);
+  });
+
+  it("the recipient is the key that opened the envelope, whatever the plaintext says of its audience: a message whose `to` names someone else and one with no `to` are recorded in the channel of the key that opened them", async () => {
+    const { alice, bob } = await parties();
+    const carol = await directParty(3, CAROL_ENDPOINT, CAROL);
+    const { receiver, seen } = await receiving(alice);
+    const sealer = await peerSealer(bob);
+    const asIfCarol = { ...sealer, resolver: { resolve: (did: string) => (did === carol.longFormDid ? sealer.resolver.resolve(alice.longFormDid) : sealer.resolver.resolve(did)) } };
+    const toCarol = await sealed(asIfCarol, carol.longFormDid);
+    const plain = { id: crypto.randomUUID(), typ: PLAIN_TYP, type: BASIC_MESSAGE, from: bob.longFormDid, body: { content: "hello" } } as IMessage;
+    const [toNoOne] = await packEncrypted(didcomm, plain, alice.longFormDid, bob.longFormDid, null, sealer.resolver, secretsResolverFor(sealer.secrets), { forward: false });
+
+    expect((await receiver.receive({ packed: toCarol, source: DIRECT })).outcome).toBe("received");
+    expect((await receiver.receive({ packed: toNoOne, source: DIRECT })).outcome).toBe("received");
+    expect(seen.map(({ plaintext, recipient }) => [plaintext.to, recipient.did])).toEqual([
+      [[carol.longFormDid], alice.did],
+      [undefined, alice.did],
+    ]);
+    const fold = await foldOf(alice);
+    const events = await eventsOf(alice, "message.in");
+    expect(events.map(({ eventId, data }) => [data.localKeyName, fold.channels.sources.get(eventId)?.standing.status, fold.channels.sources.get(eventId)?.channel])).toEqual([
+      [didKeyName(DID, "key-agreement"), "complete", { localDid: alice.did, peerDid: bob.did }],
+      [didKeyName(DID, "key-agreement"), "complete", { localDid: alice.did, peerDid: bob.did }],
+    ]);
+    await closeAll(alice, bob, carol);
   });
 
   it("a message delivered again is another observation of the same input under its own ordinal: one execution, no second resolution; the same wire ID with other content is recorded as the contradiction it is", async () => {
