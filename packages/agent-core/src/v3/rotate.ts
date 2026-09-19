@@ -50,6 +50,7 @@ import {
   signFromPrior,
   vaultDraft,
   type Channel,
+  type Conflict,
   type Did,
   type DidId,
   type EventId,
@@ -126,7 +127,7 @@ export async function rotate(runtime: VaultRuntime, keys: Keys, target: Rotation
     const iat = Math.floor((options.now ?? Date.now)() / 1000);
     const fromPrior = await signFromPrior(keys, { didId: predecessor.didId, longFormDid: predecessor.created.longFormDid }, successor.longFormDid, iat);
     drafts.push(vaultDraft("did.rotationSelected", { fromDidId: predecessor.didId, peerDid: channel.peerDid, toDidId: successor.didId, sourceEventId, fromPrior }));
-    const refusal = await foreseen(held, runtime, keys, fold, drafts);
+    const refusal = await rotationRefusal(held, runtime, keys, fold, drafts);
     if (refusal !== null) throw new Unusable("DID", successor.didId, [refusal]);
     const events = (await held.commit([], drafts)).map(readVaultEvent);
     const decision = events[events.length - 1] as VaultEvent<"did.rotationSelected">;
@@ -198,15 +199,13 @@ async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEnt
 }
 
 /**
- * The fold as it would be with the drafts committed, the decision
- * last: the events here and the candidates, checked against the seed
- * and the retained documents and folded again, so that every join,
- * confirmation and conflict the decision implies — a waiting decision
- * it would confirm, a path it would close — is the continuity fold's
- * own verdict and not an approximation of it. Why the decision is
- * refused, or null when the fold takes it.
+ * Why the fold would refuse the decision once the drafts, the
+ * decision last, are committed with the evidence here, or null: a
+ * join it implies may confirm a decision still waiting, and a channel
+ * no conflict reached before may be reached now. The candidates exist
+ * only in this set; nothing is appended here.
  */
-async function foreseen(held: Held, runtime: VaultRuntime, keys: Keys, fold: VaultFold, drafts: readonly VaultDraft[]): Promise<string | null> {
+async function rotationRefusal(held: Held, runtime: VaultRuntime, keys: Keys, fold: VaultFold, drafts: readonly VaultDraft[]): Promise<string | null> {
   const at = new Date().toISOString();
   const candidates: Event[] = drafts.map((draft) => ({ eventId: uuidv7() as EventId, at, author: runtime.author, type: draft.type, roots: draft.roots ?? [], data: draft.data }));
   const set = VaultEventSet.of([...fold.set.all(), ...candidates]);
@@ -216,14 +215,19 @@ async function foreseen(held: Held, runtime: VaultRuntime, keys: Keys, fold: Vau
   if (decision.status.status === "invalid" || decision.status.status === "conflict") return `the decision would be ${decision.status.status}: ${decision.status.because}`;
   const continuity = next.continuity.status(decisionId);
   if (continuity.status === "conflict") return `the decision would be in conflict: ${continuity.because}`;
-  const before = new Map<string, number>();
-  for (const conflict of fold.continuity.conflicts) before.set(conflict.kind, (before.get(conflict.kind) ?? 0) + 1);
-  for (const conflict of next.continuity.conflicts) {
-    const seen = before.get(conflict.kind) ?? 0;
-    if (seen === 0) return `the decision would bring the evidence here a conflict: ${conflict.kind}`;
-    before.set(conflict.kind, seen - 1);
-  }
+  const before = conflictedChannels(fold.continuity.conflicts);
+  for (const [key, kind] of conflictedChannels(next.continuity.conflicts)) if (!before.has(key)) return `the decision would put ${key} in conflict: ${kind}`;
   return null;
+}
+
+/** Every channel a conflict reaches, by key, with the conflict's kind. */
+function conflictedChannels(conflicts: readonly Conflict[]): Map<string, Conflict["kind"]> {
+  const reached = new Map<string, Conflict["kind"]>();
+  for (const conflict of conflicts) {
+    const channels = conflict.kind === "cycle" || conflict.kind === "identity" ? conflict.channels : [...conflict.context, ...conflict.successors];
+    for (const channel of channels) reached.set(channelKey(channel), conflict.kind);
+  }
+  return reached;
 }
 
 /** The state of a recorded decision's notification, for a rotation that reuses the decision: nothing is made or called for it here. */

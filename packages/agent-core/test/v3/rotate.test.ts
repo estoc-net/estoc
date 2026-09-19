@@ -18,6 +18,7 @@ import {
   signFromPrior,
   unfinishedWork,
   vaultDraft,
+  type Did,
   type DidId,
   type EventReference,
   type MessageId,
@@ -59,6 +60,8 @@ const ALICE_NEXT = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const ALICE_OTHER = "019b0000-0000-7000-8000-00000000000c" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
 const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
+const BOB_FORK = "019b0000-0000-7000-8000-0000000000b2" as DidId;
+const BOB_OTHER_FORK = "019b0000-0000-7000-8000-0000000000b3" as DidId;
 const CHARLIE = "019b0000-0000-7000-8000-0000000000c0" as DidId;
 const CREATED = 1_757_700_000;
 const IAT = 1_757_700_000;
@@ -262,6 +265,39 @@ describe("a local rotation", () => {
       { localDid: three.alice.did, peerDid: charlie.did },
     ]);
     await closeAll(three.alice, three.bob, charlie);
+  });
+
+  it("a decision whose joins would carry an existing peer fork into a channel no conflict reached is refused with nothing written, while a rotation the fork does not touch goes through beside it", async () => {
+    const { alice, bob } = await parties();
+    const { wire, options, receive } = await rotating(alice);
+    const bobRoute = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
+    const { minted: prior } = await createDid(bob.runtime, bob.keys, bobRoute, BOB_PRIOR);
+    const { minted: fork } = await createDid(bob.runtime, bob.keys, bobRoute, BOB_FORK);
+    const { minted: otherFork } = await createDid(bob.runtime, bob.keys, bobRoute, BOB_OTHER_FORK);
+    const aliceRoute = (await foldOf(alice)).routes.dids.get(ALICE)!.created!.boundRouteId;
+    const { minted: next } = await createDid(alice.runtime, alice.keys, aliceRoute, ALICE_NEXT);
+    await receive(bob, { type: BASIC_MESSAGE }, prior.longFormDid);
+    const proofs: [{ didId: DidId; longFormDid: Did }, Did][] = [
+      [{ didId: BOB_PRIOR, longFormDid: prior.longFormDid }, bob.longFormDid],
+      [{ didId: BOB, longFormDid: bob.longFormDid }, fork.longFormDid],
+      [{ didId: BOB, longFormDid: bob.longFormDid }, otherFork.longFormDid],
+    ];
+    for (const [from, to] of proofs) await receive(bob, { type: BASIC_MESSAGE, from_prior: await signFromPrior(bob.keys, from, to, IAT) }, to);
+    await receive(bob, { type: BASIC_MESSAGE }, fork.longFormDid, next.longFormDid);
+    const healthy = { localDid: next.did, peerDid: fork.did };
+    let fold = await foldOf(alice);
+    expect([fold.continuity.conflicts.map((conflict) => conflict.kind), fold.continuity.conflicted(healthy), fold.continuity.head(healthy), fold.continuity.confirmed(alice.did, prior.did)]).toEqual([["competing-peer-successors"], false, healthy, true]);
+
+    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: prior.did }, { ...options, didId: ALICE_NEXT })).rejects.toThrow(/^DID 019b0000-0000-7000-8000-00000000000b is not usable: the decision would put \[.*\] in conflict: competing-peer-successors$/);
+    fold = await foldOf(alice);
+    expect([fold.set.of("did.rotationSelected").length, fold.set.of("message.out").length, fold.routes.dids.size, fold.continuity.conflicted(healthy), fold.continuity.head(healthy), wire.posts.length]).toEqual([0, 0, 2, false, healthy, 0]);
+
+    const charlie = await directParty(3, "https://charlie.example/didcomm", CHARLIE);
+    await receive(charlie, { type: BASIC_MESSAGE }, undefined, next.longFormDid);
+    const beside = await rotate(alice.runtime, alice.keys, { localDidId: ALICE_NEXT, peerDid: charlie.did }, options);
+    fold = await foldOf(alice);
+    expect([beside.existed, fold.continuity.status(beside.decision.eventId), fold.continuity.conflicts.length, beside.notification.outcome, wire.posts.length, fold.routes.dids.size]).toEqual([false, { status: "verified" }, 1, "created", 1, 3]);
+    await closeAll(alice, bob, charlie);
   });
 
   it("the private-address policy: the first live application input at a disclosed address selects a successor over that input and notifies on its thread; a later input reuses the decision; one at the undisclosed successor, a control input or an undisclosed address selects nothing", async () => {
