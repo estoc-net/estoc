@@ -58,6 +58,7 @@ import {
 } from "@estoc/vault/v3";
 
 import { packEncrypted, secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
+import { recordOwedAcceptance } from "./acceptance.js";
 import { UnknownEntity } from "./errors.js";
 import { authorizedKeys, commitResolution, didcommDocumentOf, pinnedResolver } from "./evidence.js";
 import { secretsOf } from "./keyring.js";
@@ -85,7 +86,7 @@ export type Prepared =
   | { outcome: "none"; messageId: MessageId; because: string }
   /** the package cannot be made from what is here now, and what is missing may still arrive: the message stays queued */
   | { outcome: "pending"; messageId: MessageId; because: string }
-  /** the expiry passed before a package was made: the message is terminated */
+  /** the expiry had come when the message was looked at, whether or not a package was made: the message is terminated */
   | { outcome: "expired"; messageId: MessageId; failed: VaultEvent<"delivery.failed"> };
 
 /** The key every piece of work on one outbound runs under, serially per runtime (`serially`): its preparation here, its transport call after. */
@@ -117,9 +118,10 @@ export function expiryPhase(outbound: Outbound): "preparation" | "dispatch" {
   return outbound.package === null ? "preparation" : "dispatch";
 }
 
-/** The package of one queued outbound: made here, or the one the fold already holds. */
+/** The package of one queued outbound: made here, or the one the fold already holds. An acceptance this runtime saw and has not recorded yet is recorded first, so that the fold read here shows the message submitted rather than open to expiry. */
 export function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
   return serially(runtime, outboundWorkKey(messageId), async () => {
+    await recordOwedAcceptance(runtime, messageId);
     const { result, notes } = await runtime.locked((held) => prepareUnderLock(held, keys, messageId, options));
     await noteAll(options.trace ?? null, notes);
     return result;

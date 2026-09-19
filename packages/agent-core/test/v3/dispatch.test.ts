@@ -197,6 +197,29 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
+  it("an acceptance still owed is recorded before a prepare looks at the expiry: the message is submitted, not expired, and one that cannot be recorded stops the prepare", async () => {
+    const { alice, bob } = await parties();
+    const wire = posting(accepted);
+    const timed: Content = { ...HELLO, createdTime: 1_000, expiresTime: 2_000 };
+    const sent = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, timed, { messageId: MESSAGE });
+    refuseSubmissions(alice.runtime, 2);
+    await expect(dispatch(alice.runtime, alice.keys, sent.action, { didcomm, fetch: wire.fetch, now: () => 1_999_999 })).rejects.toThrow(/disk is full/);
+    expect(wire.posts).toHaveLength(1);
+
+    await expect(prepare(alice.runtime, alice.keys, MESSAGE, { didcomm, now: () => 2_000_000 })).rejects.toThrow(/disk is full/);
+    let f = await fold(alice);
+    expect(f.outbound.outbounds.get(MESSAGE)).toMatchObject({ submitted: false, terminal: null, outcome: { status: "prepared" } });
+    expect(f.set.of("delivery.failed")).toEqual([]);
+
+    expect(await prepare(alice.runtime, alice.keys, MESSAGE, { didcomm, now: () => 2_000_000 })).toEqual({ outcome: "none", messageId: MESSAGE, because: "submitted" });
+    f = await fold(alice);
+    expect(f.outbound.outbounds.get(MESSAGE)).toMatchObject({ submitted: true, outcome: { status: "submitted" } });
+    expect(f.set.of("delivery.submitted")).toHaveLength(1);
+    expect(f.set.of("delivery.failed")).toEqual([]);
+    expect(wire.posts).toHaveLength(1);
+    await closeAll(alice, bob);
+  });
+
   it("an expiry that has come terminates the message before the call, before or after preparation", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);

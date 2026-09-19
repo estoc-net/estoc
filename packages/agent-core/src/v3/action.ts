@@ -6,8 +6,8 @@
  * or by an explicit manual step: a retry, a completion. Opening a
  * vault, importing, restoring or rebuilding views mints none; a message
  * such a runtime finds waiting is shown for manual action. An action
- * carries exactly one invocation, consumed under the lock right before
- * the call, so that a crash before or after the call, or a call whose
+ * carries exactly one invocation, consumed in the same step that calls
+ * transport, so that a crash before or after the call, or a call whose
  * outcome is unknown, leaves the message where a fresh manual action is
  * needed and nothing repeats the call on its own.
  */
