@@ -93,3 +93,19 @@ export class NoTarget extends Error {
     this.name = "NoTarget";
   }
 }
+
+/** The runtime already receives through another receiver: two would each keep their own account of what waits and what ended. */
+export class ReceiverInUse extends Error {
+  constructor() {
+    super("the runtime already has a receiver open");
+    this.name = "ReceiverInUse";
+  }
+}
+
+/** The receiver was closed before this delivery reached the receipt: it stays wherever it came from. */
+export class ReceiverClosed extends Error {
+  constructor() {
+    super("the receiver is closed");
+    this.name = "ReceiverClosed";
+  }
+}
