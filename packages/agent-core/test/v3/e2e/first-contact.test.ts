@@ -1,55 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PING_RESPONSE_EFFECT, PING_TYPE, PURE_ACK_EFFECT, kindOf, scanVault, type DidId, type MessageId, type VaultFold } from "@estoc/vault/v3";
+import { PING_RESPONSE_EFFECT, PING_TYPE, PURE_ACK_EFFECT, kindOf, type DidId, type MessageId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../../src/protocol/basicmessage.js";
 import type { IMessage } from "../../../src/protocol/didcomm.js";
 import { FORWARD } from "../../../src/protocol/spec.js";
-import { Agent, type AgentOptions, type Inbound } from "../../../src/v3/index.js";
-import type { FakeMediator } from "../../fake-mediator.js";
-import { didcomm, mediatedParty, newMediator, until as untilWithin, type MediatedParty } from "../helpers.js";
+import { newMediator } from "../helpers.js";
+import { foldOf as fold, run, stopAll, until } from "./running.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
 const PING = "019b0000-0000-7000-8000-000000000101" as MessageId;
 const HELLO = "019b0000-0000-7000-8000-000000000102" as MessageId;
 
-interface Running {
-  party: MediatedParty;
-  agent: Agent;
-  inbounds: Inbound[];
-  /** the next call to the mediator is answered 503 instead of reaching it */
-  refuseNext: { armed: boolean };
-}
-
-/** What is waited for here is a whole receipt with everything that follows it, several commits and transport calls on a machine that may be busy with other suites. */
-const until = (what: string, condition: () => boolean): Promise<void> => untilWithin(what, condition, 10_000);
-
-const running: Running[] = [];
-
-async function run(mediator: FakeMediator, fill: number, didId: DidId, over: Partial<AgentOptions> = {}): Promise<Running> {
-  const party = await mediatedParty(mediator, fill, didId);
-  const inbounds: Inbound[] = [];
-  const refuseNext = { armed: false };
-  const fetch: typeof globalThis.fetch = (input, init) => {
-    if (!refuseNext.armed) return mediator.fetch(input, init);
-    refuseNext.armed = false;
-    return Promise.resolve(new Response(null, { status: 503 }));
-  };
-  const agent = await Agent.start(party, { didcomm, fetch, WebSocket: mediator.WebSocket, trace: party.trace, privateAddresses: false, onInbound: (inbound) => inbounds.push(inbound), ...over });
-  const started = { party, agent, inbounds, refuseNext };
-  running.push(started);
-  return started;
-}
-
-const fold = ({ party }: Running): Promise<VaultFold> => scanVault(party.runtime.vault, party.keys);
-
-afterEach(async () => {
-  for (const { agent, party } of running.splice(0)) {
-    agent.close();
-    await party.runtime.close();
-  }
-});
+afterEach(stopAll);
 
 describe("first contact over a mediator", () => {
   it("a Ping to a one-use invitation is consumed, answered and acknowledged once, however often it is delivered; a refused call is made again only by a retry, with the same package", async () => {
@@ -59,8 +23,8 @@ describe("first contact over a mediator", () => {
       if (msg.type === FORWARD) forwards.push(msg);
       return undefined;
     };
-    const alice = await run(mediator, 1, ALICE);
-    const bob = await run(mediator, 2, BOB);
+    const alice = await run(mediator, 1, ALICE, { privateAddresses: false });
+    const bob = await run(mediator, 2, BOB, { privateAddresses: false });
     expect(alice.agent.connections()).toMatchObject([{ unreachable: null, drained: { ended: "empty" }, live: true }]);
 
     const { invitation } = await alice.agent.disclose(ALICE, { as: "oob", uses: "one" });

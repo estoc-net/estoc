@@ -367,6 +367,11 @@ export class FakeMediator {
     return new Response(blob.bytes, { status: 200, headers: { "content-type": "application/octet-stream" } });
   }
 
+  /** The type of the plaintext sealed to this mediator in `text`, read without handling it: what a transport may ask of its own request. */
+  async typeOf(text: string): Promise<string> {
+    return (await this.unpack(text)).msg.type;
+  }
+
   async handleHttp(text: string): Promise<string | null> {
     const { msg, from } = await this.unpack(text);
     const reply = await this.dispatch(msg, from);
