@@ -161,7 +161,6 @@ export async function restart(running: Running, options: Partial<AgentOptions> =
   self.agent = await agentOver(self.party.mediator, () => self, life, vault, await AgentTrace.open(vault.runtime.local), { ...self.options, ...options });
 }
 
-/** The party's process ended, with nothing started in its place. */
 export async function stop(running: Running): Promise<void> {
   await end(running as Started);
 }
@@ -198,7 +197,6 @@ export async function restoredFrom(running: Running, snapshot: string, options: 
   return self;
 }
 
-/** `snapshot` imported into the party's running vault. */
 export async function imported(running: Running, snapshot: string): Promise<Imported> {
   const source = openPortable(openNodeSqlite(snapshot, { mode: "readonly" }));
   try {
