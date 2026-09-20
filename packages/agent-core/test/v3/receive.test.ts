@@ -68,7 +68,7 @@ function addressedTo(packed: string, kid: string): string {
   return JSON.stringify({ ...envelope, recipients: envelope.recipients.map((recipient) => ({ ...recipient, header: { ...recipient.header, kid } })) });
 }
 
-function recording(answer: () => ReceiptOutcome = () => ({ outcome: "received", eventId: RECORDED })): { receipt: ReceiverOptions["receipt"]; seen: Authenticated[] } {
+function recording(answer: () => ReceiptOutcome = () => ({ outcome: "received", eventId: RECORDED, first: true })): { receipt: ReceiverOptions["receipt"]; seen: Authenticated[] } {
   const seen: Authenticated[] = [];
   return {
     seen,
@@ -389,7 +389,7 @@ describe("the gate before the vault", () => {
       receipt: async ({ recipient }) => {
         calls.push(recipient.didId);
         if (failing) throw new Error("the disk is full");
-        if (recipient.didId !== DID) return { outcome: "received", eventId: RECORDED };
+        if (recipient.didId !== DID) return { outcome: "received", eventId: RECORDED, first: true };
         return { outcome: "deferred", reason: "the receipt waits for the recipient's disclosure", watch: (fold) => String(fold.routes.dids.get(DID)?.disclosures.length ?? 0) };
       },
     });
@@ -480,7 +480,7 @@ describe("the gate before the vault", () => {
         receipt: async ({ recipient }) => {
           seen.push(recipient.didId);
           if (failing && failure === "write") throw new Error("the disk is full");
-          return { outcome: "received", eventId: RECORDED };
+          return { outcome: "received", eventId: RECORDED, first: true };
         },
       });
       const delivery: Delivery = { packed: await sealed(await peerSealer(bob), alice.longFormDid), source: PICKUP };
@@ -662,7 +662,7 @@ describe("the receiver's lifecycle", () => {
     const receipt: ReceiverOptions["receipt"] = async (authenticated) => {
       seen.push(authenticated);
       await gate;
-      return { outcome: "received", eventId: RECORDED };
+      return { outcome: "received", eventId: RECORDED, first: true };
     };
     const receiver = await receiverOver(alice, { receipt });
     expect(() => new Receiver(alice.runtime, alice.keys, null as unknown as Keyring, { didcomm, receipt })).toThrow(ReceiverInUse);

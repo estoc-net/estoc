@@ -13,12 +13,16 @@
  * holds, by the ordinary pickup of the account.
  *
  * Only two things here authorize a transport call by themselves: the
- * user's send, and an observation this agent recorded just now. Such
- * a live input, in the call that recorded it, has what the vault owes
- * recorded, then its automatic effects decided and called, then the
- * private-address policy applied; each step stands alone, so that one
- * that fails leaves the others done and the observation recorded all
- * the same. A delivery only told again how it ended is no live input.
+ * user's send, and the first observation the vault holds of an input,
+ * in the call that recorded it. Such a live input has what the vault
+ * owes recorded, then its automatic effects decided and called, then
+ * the private-address policy applied; each step stands alone, so that
+ * one that fails leaves the others done and the observation recorded
+ * all the same. An input the vault already held is no live input when
+ * it is delivered again, whether this agent recorded it or one before
+ * it, and whether or not what it earned was ever sent: it is observed
+ * again, what the vault owes is recorded, and a reply it still earns
+ * stays listed for the user.
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
@@ -41,7 +45,7 @@ import { afterReceipt, recordOwed, type AfterReceipt, type Owed } from "./receiv
 import { receiptOf } from "./receive/receipt.js";
 import { Receiver, type Discarded, type Received, type ReceiverOptions, type WaitingDelivery } from "./receive/receiver.js";
 import type { PendingWork, Recorder } from "./records.js";
-import { resolve } from "./resolver.js";
+import { knownLongForms, resolve } from "./resolver.js";
 import { send, type Content, type SendOptions, type Sent, type Target } from "./send.js";
 import type { AgentTrace } from "./trace.js";
 import { manualProcedures, readRecords, type Manual } from "./views.js";
@@ -59,7 +63,7 @@ export interface AgentOptions extends Omit<DispatcherOptions, "links" | "effectT
   onInbound?: (inbound: Inbound) => void;
 }
 
-/** A delivery and what followed it; the three steps are null for a delivery that is no live input, and each alone when it threw. */
+/** A delivery and what followed it: `after` for every delivery recorded, the other two for a live input alone; each is null where it did not run, or threw. */
 export interface Inbound {
   received: Received;
   after: AfterReceipt | null;
@@ -85,11 +89,12 @@ export interface Submitted extends Sent {
 interface Line {
   link: MediatorLink;
   pickup: Pickup;
-  connection: Connection;
 }
 
 export class Agent {
   private closed = false;
+  /** by arrangement, from the first attempt to connect it: one whose line could not even be made has a connection to say why */
+  private readonly attempts = new Map<MediationId, Connection>();
 
   /** Every manual procedure, each transport call of theirs through this agent's dispatcher. */
   readonly manual: Manual;
@@ -133,10 +138,15 @@ export class Agent {
     return new Agent(runtime, keys, options, ring, dispatcher, receiver, lines, recovered);
   }
 
-  /** `open`, then `connect`. */
+  /** An agent that fails to connect at all is closed before the failure is thrown: nobody else could close it, and the runtime could have no other. */
   static async start(vault: { runtime: VaultRuntime; keys: Keys }, options: AgentOptions): Promise<Agent> {
     const agent = await Agent.open(vault, options);
-    await agent.connect();
+    try {
+      await agent.connect();
+    } catch (err) {
+      agent.close();
+      throw err;
+    }
     return agent;
   }
 
@@ -172,7 +182,7 @@ export class Agent {
   }
 
   connections(): Connection[] {
-    return [...this.lines.values()].map(({ link, connection }) => ({ ...connection, live: link.live }));
+    return [...this.attempts.values()].map((connection) => this.shown(connection));
   }
 
   /** The intent committed, then its one transport call under the action the send minted. */
@@ -247,15 +257,15 @@ export class Agent {
     }
   }
 
+  private shown(connection: Connection): Connection {
+    return { ...connection, live: this.lines.get(connection.mediationId)?.link.live ?? false };
+  }
+
   private async connectTo(mediationId: MediationId): Promise<Connection> {
-    let line: Line;
+    const connection: Connection = this.attempts.get(mediationId) ?? { mediationId, unreachable: null, reconciled: null, drained: null, live: false };
+    this.attempts.set(mediationId, connection);
     try {
-      line = await this.lineOf(mediationId);
-    } catch (err) {
-      return { mediationId, unreachable: messageOf(err), reconciled: null, drained: null, live: false };
-    }
-    const { link, pickup, connection } = line;
-    try {
+      const { link, pickup } = await this.lineOf(mediationId);
       connection.reconciled = await reconcile(link, this.runtime, this.keys, mediationId);
       connection.drained = await pickup.drain();
       if ((this.options.liveDelivery ?? true) && !link.live && !this.closed) link.openSocket((opened) => pickup.onFrame(opened));
@@ -264,7 +274,7 @@ export class Agent {
       connection.unreachable = messageOf(err);
       this.log(`the mediator of ${mediationId} was not reached: ${connection.unreachable}`);
     }
-    return { ...connection, live: link.live };
+    return this.shown(connection);
   }
 
   /** The one line of an arrangement for as long as the agent lives: a link speaks as one account to one mediator. */
@@ -276,22 +286,21 @@ export class Agent {
     const mediation = mediationOf(fold, mediationId);
     if (mediation.me === null || mediation.mediatorDid === null) throw new Error(`the arrangement ${mediationId} has no creation`);
     await this.ring.reload(fold);
-    const resolveDid = (did: string): Promise<DIDDoc | null> => this.documentOf(did);
+    // The mediator may answer under its short form: the long form it was arranged under is in the fold, and an arrangement's creation never changes.
+    const known = knownLongForms(fold);
+    const resolveDid = async (did: string): Promise<DIDDoc | null> => {
+      const answer = await resolve(did, known, this.options);
+      return answer.outcome === "resolved" ? didcommDocumentOf(answer.resolution) : null;
+    };
     const mediatorDoc = await resolveDid(mediation.mediatorDid);
     if (mediatorDoc === null) throw new Error(`the mediator ${mediation.mediatorDid} does not resolve`);
     const { didcomm, fetch, WebSocket, trace, timeoutMs, log } = this.options;
     const link = new MediatorLink({ didcomm, resolveDid, fetch, WebSocket, trace, secrets: () => this.ring.secrets(), me: mediation.me.did, mediatorDid: mediation.mediatorDid, mediatorDoc, timeoutMs, log });
-    const line: Line = { link, pickup: new Pickup(link, this.handleOf(mediationId), { log }), connection: { mediationId, unreachable: null, reconciled: null, drained: null, live: false } };
+    const line: Line = { link, pickup: new Pickup(link, this.handleOf(mediationId), { log }) };
     const raced = this.lines.get(mediationId);
     if (raced !== undefined) return raced;
     this.lines.set(mediationId, line);
     return line;
-  }
-
-  /** A document for the line's own envelopes — the account's, the mediator's: a long form from itself, a `did:web` over the host's transport, and nothing out of the vault. */
-  private async documentOf(did: string): Promise<DIDDoc | null> {
-    const answer = await resolve(did, () => null, this.options);
-    return answer.outcome === "resolved" ? didcommDocumentOf(answer.resolution) : null;
   }
 
   /** The receiver's pickup handle, with what follows a delivery run before the mediator is told of it. */
@@ -308,14 +317,19 @@ export class Agent {
 
   private async follow(received: Received): Promise<Inbound> {
     const inbound: Inbound = { received, after: null, reacted: null, address: null };
-    if (received.outcome === "received" && received.live) {
+    if (received.outcome !== "received") return this.tell(inbound);
+    const { handlers, acknowledge, now, trace } = this.options;
+    inbound.after = await this.step("what the vault owes", () => afterReceipt(this.runtime, this.keys, received.eventId, { trace }));
+    if (received.live) {
       const live = new LiveInput(received.eventId);
-      const { handlers, acknowledge, now, trace } = this.options;
       const dispatch = (action: LiveAction): Promise<Dispatched> => this.dispatcher.run(action);
-      inbound.after = await this.step("what the vault owes", () => afterReceipt(this.runtime, this.keys, live.eventId, { trace }));
       inbound.reacted = await this.step("the automatic effects", () => reactTo(this.runtime, this.keys, live, { handlers, acknowledge, now, trace, dispatch }));
       if (this.options.privateAddresses ?? true) inbound.address = await this.step("the private address", () => privateAddress(this.runtime, this.keys, live, { now, trace, dispatch }));
     }
+    return this.tell(inbound);
+  }
+
+  private tell(inbound: Inbound): Inbound {
     try {
       this.options.onInbound?.(inbound);
     } catch (err) {

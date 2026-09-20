@@ -104,7 +104,7 @@ describe("first contact over a mediator", () => {
     mediator.queues.get(alice.party.created.data.me.did)!.push({ id: "again", packed: JSON.stringify(envelope) });
     expect(await alice.agent.connect()).toMatchObject([{ drained: { acked: 1, ended: "empty" } }]);
     expect(alice.inbounds).toHaveLength(2);
-    expect(alice.inbounds[1]!.reacted!.effects.map((effect) => effect.outcome)).toEqual(["existing", "existing"]);
+    expect(alice.inbounds[1]).toMatchObject({ received: { outcome: "received", live: false }, reacted: null, address: null });
     const again = await fold(alice);
     expect(again.set.of("message.in")).toHaveLength(2);
     expect(again.inbound.executions.size).toBe(1);

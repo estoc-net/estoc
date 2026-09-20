@@ -12,6 +12,10 @@
  * the ID its commit returned and taking the next receipt ordinal. Each
  * delivery is its own observation with its own ordinal, a message
  * delivered again included; the fold groups observations of one input.
+ * Whether the vault already held one of the same input is read under
+ * that lock too, and told with the record: only the first observation
+ * of an input may earn automatic work, whichever runtime recorded the
+ * others and whatever became of it.
  */
 
 import { v7 as uuidv7 } from "uuid";
@@ -143,8 +147,9 @@ async function settle(held: Held, keys: Keys, { recipient, sender }: Authenticat
     case "pending":
       return { outcome: "deferred", reason: `${recipient.did} may not receive yet: ${fold.routes.dids.get(recipient.didId)?.faults.join("; ")}`, watch: recipientWatch([recipient.didId]) };
   }
+  const first = !fold.set.of("message.in").some((event) => event.data.messageId === observed.messageId);
   const receiptOrdinal = String(fold.channels.receipts.nextReceiptOrdinal) as ReceiptOrdinal;
   const resolved = sender === null ? null : await commitResolution(held, { resolution: sender.resolution, localKeyName: recipient.localKeyName, peerPublicKey: sender.peerPublicKey });
   const [event] = (await held.commit(objects, [vaultDraft("message.in", { ...observed, receiptOrdinal, peerResolutionEventId: (resolved?.eventId ?? null) as EventReference<"peer.resolved"> | null })])).map(readVaultEvent);
-  return { outcome: "received", eventId: (event as VaultEvent<"message.in">).eventId as EventReference<"message.in"> };
+  return { outcome: "received", eventId: (event as VaultEvent<"message.in">).eventId as EventReference<"message.in">, first };
 }

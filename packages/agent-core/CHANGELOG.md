@@ -76,11 +76,18 @@
   out of reach throws nothing and is told in `connections`. `send`
   commits the intent and makes its one call through the agent's
   dispatcher. A delivery, from a pickup, the socket, `receive` or a
-  retry after `localStateChanged`, is followed only when this call
-  recorded it (`Received.live`): what the vault owes, then the automatic
-  effects, then the private-address policy (`privateAddresses`, on by
-  default), each step standing alone, all before the mediator is told.
-  One agent per runtime; closing it leaves the runtime open.
+  retry after `localStateChanged`, has what the vault owes recorded;
+  the automatic effects and the private-address policy
+  (`privateAddresses`, on by default) follow only the call that recorded
+  the first observation the vault holds of the input (`Received.live`,
+  which the receipt decides under the writer lock: `ReceiptOutcome`
+  gains `first`). An input the vault already held earns nothing when it
+  comes again, under any delivery and to any agent, and what it still
+  earns stays listed. Each step stands alone, all before the mediator is
+  told. A line resolves its mediator's short form through the long form
+  the arrangement was created with. One agent per runtime; closing it
+  leaves the runtime open, and a `start` that cannot connect at all
+  closes its agent before it throws.
 - **The rotation proof is the vault's to judge.** The didcomm binding is
   now Estoc's build of didcomm-rust, `@estoc/didcomm` (peer, types) and
   `@estoc/didcomm-node`, whose `unpack` can leave a `from_prior` header

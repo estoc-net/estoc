@@ -84,18 +84,22 @@ export type Watch = (fold: VaultFold) => string;
  * What the receipt made of an authenticated delivery: recorded as the
  * observation named, which ends it; terminal; or deferred for
  * something of this runtime's that the fold can show is not ready,
- * with a watch over it. A receipt that cannot record for another
- * reason throws instead, and the delivery is not kept.
+ * with a watch over it. `first` says the vault held no observation of
+ * the same input when this one was recorded. A receipt that cannot
+ * record for another reason throws instead, and the delivery is not
+ * kept.
  */
-export type ReceiptOutcome = { outcome: "received"; eventId: EventReference<"message.in"> } | { outcome: "terminal"; reason: string } | { outcome: "deferred"; reason: string; watch: Watch };
+export type ReceiptOutcome = { outcome: "received"; eventId: EventReference<"message.in">; first: boolean } | { outcome: "terminal"; reason: string } | { outcome: "deferred"; reason: string; watch: Watch };
 
 export type Receipt = (authenticated: Authenticated) => Promise<ReceiptOutcome>;
 
 /**
  * What became of a delivery. `key` is what it is kept under; null only
- * for a direct post that is not strict JSON. `live` tells the call that
- * recorded the observation from one only told how the delivery ended
- * before: the first alone is a live input.
+ * for a direct post that is not strict JSON. `live` is true of one call
+ * alone for any input: the one that recorded the first observation the
+ * vault holds of it. An input the vault already held, delivered again
+ * under any delivery and to any receiver, is observed again and is not
+ * live, and neither is a delivery only told how it ended before.
  */
 export type Received =
   | { outcome: "received"; key: string; eventId: EventReference<"message.in">; live: boolean }
@@ -401,7 +405,7 @@ export class Receiver {
     }
     switch (outcome.outcome) {
       case "received":
-        return this.record(key, delivery, outcome.eventId);
+        return this.record(key, delivery, outcome.eventId, outcome.first);
       case "terminal":
         return this.finish(key, delivery, outcome.reason);
       case "deferred":
@@ -443,10 +447,10 @@ export class Receiver {
     return { outcome: "deferred", key, reason: left };
   }
 
-  private async record(key: string, delivery: Delivery, eventId: EventReference<"message.in">): Promise<Received> {
+  private async record(key: string, delivery: Delivery, eventId: EventReference<"message.in">, live: boolean): Promise<Received> {
     this.waits.delete(key);
     this.release(key);
-    const ended: Ended = { outcome: "received", key, eventId, live: true };
+    const ended: Ended = { outcome: "received", key, eventId, live };
     if (!this.closed) this.remember(key, ended);
     await this.diag(delivery, { outcome: "received", eventId });
     return ended;
