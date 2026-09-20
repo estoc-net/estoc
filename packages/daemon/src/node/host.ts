@@ -12,10 +12,9 @@ import { guardedFetch } from "./guarded-fetch.js";
  * The daemon in a folder on disk: `<root>/.estoc/` is the vault (the git
  * model — the person's files stay theirs, the machinery is in `.estoc`).
  * One daemon per folder is kept by a pid file under `.estoc/local/daemon/`
- * — this copy's own state, which snapshots leave out (vault-folder.md
- * §7, §10.1); the seed unlocked from the keystore lives in this
- * process's memory only, so every start is a locked vault until a UI
- * types the passphrase.
+ * — this copy's own state, which snapshots leave out; the seed
+ * unlocked from the keystore lives in this process's memory only, so
+ * every start is a locked vault until a UI types the passphrase.
  */
 export function nodeHost(root: string): DaemonHost {
   const dir = path.join(root, ESTOC_DIR);

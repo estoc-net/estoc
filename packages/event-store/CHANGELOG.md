@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **An import folds its union over the objects the target will hold.**
+  The prospective union was folded over its events alone, so a
+  retention that reads an object — the vault's release of a submitted
+  package's envelope waits for the recipient's document to verify —
+  released nothing there: every such root counted as newly held, and
+  once the target had collected it, or had been restored without it,
+  the import was refused as `IncompleteImport`, the target's own
+  snapshot included. The union's fold now reads a sound target object
+  as it is and the source's verified bytes otherwise. A target object
+  the fold streams is verified only as it is consumed: when that finds
+  damage the source can answer, the fold is run again from the start
+  with the damage known, at most once per such object, and the repair
+  is published by the same import.
+
 - **The SQLite vault in Chromium, as on Node.** The three conformance
   suites — `eventStoreSuite`, `objectStoreSuite`, `vaultSuite` — now
   run over the wasm pool in the Chromium Worker as they run over

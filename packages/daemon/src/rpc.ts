@@ -22,16 +22,23 @@ type Wire =
 
 type Handlers = Record<string, (...args: never[]) => unknown>;
 
-/** Answer calls on `port` from `target`'s methods; returns the way to raise events. */
+type Call = Extract<Wire, { kind: "call" }>;
+
+function isCall(wire: unknown): wire is Call {
+  if (typeof wire !== "object" || wire === null) return false;
+  const { kind, id, method, args } = wire as Record<string, unknown>;
+  return kind === "call" && typeof id === "number" && typeof method === "string" && Array.isArray(args);
+}
+
+/** Answer calls on `port` from `target`'s own methods; returns the way to raise events. */
 export function serve(port: Port, target: object): (name: string, ...args: unknown[]) => void {
-  port.addEventListener("message", (event: MessageEvent<Wire>) => {
+  port.addEventListener("message", (event: MessageEvent<unknown>) => {
     const wire = event.data;
-    if (wire.kind !== "call") {
-      return;
-    }
-    const method = (target as Record<string, unknown>)[wire.method];
+    // Whoever holds the port writes what it likes on it: anything that is no call is not answered.
+    if (!isCall(wire)) return;
     void (async () => {
       try {
+        const method: unknown = Object.hasOwn(target, wire.method) ? (target as Record<string, unknown>)[wire.method] : undefined;
         if (typeof method !== "function") {
           throw new Error(`no such method: ${wire.method}`);
         }

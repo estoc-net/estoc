@@ -21,6 +21,14 @@
     "./node": {
       "types": "./dist/node/index.d.ts",
       "default": "./dist/node/index.js"
+    },
+    "./v3": {
+      "types": "./dist/v3/index.d.ts",
+      "default": "./dist/v3/index.js"
+    },
+    "./v3/node": {
+      "types": "./dist/v3/node/index.d.ts",
+      "default": "./dist/v3/node/index.js"
     }
   },
   "files": [
@@ -39,6 +47,7 @@
   },
   "dependencies": {
     "@estoc/agent-core": "workspace:^",
+    "@estoc/didcomm-node": "^0.4.1-estoc.3",
     "@estoc/event-store": "workspace:^",
     "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
@@ -46,6 +55,7 @@
     "didcomm-node": "^0.4.1",
     "ipaddr.js": "^2.2.0",
     "undici": "^7.29.0",
+    "uuid": "^11.1.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

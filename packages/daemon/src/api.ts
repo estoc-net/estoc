@@ -26,18 +26,15 @@ import type {
  */
 
 /**
- * The app's screens, in the order a fresh install meets them:
- * booting → (elsewhere: another tab has the vault) → onboarding (no vault)
- * | locked (a vault, no cached seed) → open.
- */
-/**
- * Which screen the vault dictates. `unreachable` is the one phase no
- * daemon says: a client over a socket says it when nothing answers before
- * anything was heard (no daemon there, or no token to show it).
+ * Which screen the vault dictates, in the order a fresh install meets
+ * them: booting → (elsewhere: another tab has the vault) → onboarding
+ * (no vault) | locked (a vault, no cached seed) → open. `unreachable` is
+ * the one phase no daemon says: a client over a socket says it when
+ * nothing answers before anything was heard (no daemon there, or no
+ * token to show it).
  */
 export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open" | "unreachable";
 
-/** The vault as records, read whole when it opens; the UI projects from here and keeps up by events. */
 /** A message with the fold's word on whose it is: the app homes it by `contactCid`, never by guessing from DIDs. */
 export interface SnapshotMessage {
   record: MessageRecord;
@@ -45,6 +42,7 @@ export interface SnapshotMessage {
   contactCid: string | null;
 }
 
+/** The vault as records, read whole when it opens; the UI projects from here and keeps up by events. */
 export interface Snapshot {
   label: string;
   mediatorDid: string | null;
@@ -114,7 +112,7 @@ export interface Daemon {
 
   /**
    * One message's onion: every observation this device's trace
-   * (`local/agent/trace/`, vault-folder.md §7) holds around the record
+   * (`local/agent/trace/`) holds around the record
    * `mid` — the frame it rode, each envelope inside, the rituals with
    * mediators — outermost first. Empty when the trace is off, or that
    * part of it is pruned. Read from the vault, not the agent, so it

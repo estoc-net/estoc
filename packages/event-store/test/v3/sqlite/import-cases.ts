@@ -11,11 +11,13 @@
  * repairs, and what it leaves; the source checked before the lock;
  * a reference the union fold released beside one it holds under the
  * same CID; a reused object found damaged while the source streams;
- * and an import interrupted at every statement of its transaction.
+ * damage the union's fold meets in a stream of the target's; and an
+ * import interrupted at every statement of its transaction.
  */
 
 import {
   Connection,
+  DamagedObject,
   MemoryVault,
   SqliteError,
   SqliteVault,
@@ -37,6 +39,7 @@ import {
   type RestoreOptions,
   type RetainedRoots,
   type SqliteDriver,
+  type VaultObjects,
   type VaultRuntime,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
@@ -118,6 +121,42 @@ const contestable: RetainedRoots = async (vault) => {
     .flatMap((event) => event.roots.map((root) => ({ eventId: event.eventId, root })));
 };
 const contestableHeld = heldRootsOf(contestable);
+
+const witnessed = (of: Event, witness: Cid): Draft => ({ type: "release", roots: [witness], data: { of: of.eventId, witness } });
+
+/**
+ * A fold whose rule reads an object: a `release` releases the roots of
+ * the `package` it names only while the witness it retains reads back,
+ * `readsBack` being how the fold reads it.
+ */
+const evidencedBy =
+  (readsBack: (objects: VaultObjects, witness: Cid) => Promise<boolean>): RetainedRoots =>
+  async (vault) => {
+    const events = await all(vault.events.scan());
+    const released = new Set<string>();
+    for (const event of events) {
+      if (event.type === "release" && (await readsBack(vault.objects, event.data["witness"] as Cid))) released.add(String(event.data["of"]));
+    }
+    return events.filter((event) => !(event.type === "package" && released.has(event.eventId))).flatMap((event) => event.roots.map((root) => ({ eventId: event.eventId, root })));
+  };
+const evidenced = evidencedBy(async (objects, witness) => (await objects.read(witness, MIB)) !== null);
+const evidencedHeld = heldRootsOf(evidenced);
+
+async function streamsBack(objects: VaultObjects, witness: Cid): Promise<boolean> {
+  const stream = await objects.open(witness);
+  if (stream === null) return false;
+  await drained(stream);
+  return true;
+}
+/** The same rule read through a stream, damage met on the way failing the fold. */
+const evidencedStreaming = evidencedBy(streamsBack);
+/** The same again, a damaged witness taken for one that does not read back. */
+const evidencedForgiving = evidencedBy((objects, witness) =>
+  streamsBack(objects, witness).catch((err: unknown) => {
+    if (err instanceof DamagedObject) return false;
+    throw err;
+  })
+);
 
 /**
  * `snapshot` with the read of the object `cid` held at a gate: the
@@ -555,6 +594,62 @@ export const importCases: ImportCase[] = [
       assertEqual(await open.vault.vault.objects.has(WORLD_CID), false, "the world is not revived");
       withWorld.snapshot.close();
       await open.vault.close();
+    },
+  },
+  {
+    name: "the union is folded over the objects the target will hold: a root released on the word of an object stays released, whether that object is the target's or comes with the source, and needs no bytes once it is collected",
+    run: async (h) => {
+      const c = clock();
+      const { vault } = await make(h, h.fresh(), c.now);
+      const [pkg] = await vault.vault.commit([{ cid: WORLD_CID, source: WORLD }], [pack("W", [WORLD_CID])]);
+      await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [witnessed(pkg as Event, HELLO_CID)]);
+      assertEqual(await vault.collect(evidencedHeld), { removed: [WORLD_CID] }, "the world released and collected");
+      const own = await snapshotOf(h, vault, evidencedHeld);
+      assertEqual(await importVault(vault, own.snapshot, { retainedRoots: evidenced }), { added: 0, duplicates: 2, conflicts: [], objects: 0, repaired: 0 }, "the target's own snapshot, its witness read from the target");
+      await vault.close();
+      const elsewhere = new MemoryVault({ metadata: META, wrapped: WRAPPED, now: c.now });
+      assertEqual(await importVault(elsewhere, own.snapshot, { retainedRoots: evidenced }), { added: 2, duplicates: 0, conflicts: [], objects: 1, repaired: 0 }, "into a vault with neither object, the witness read from the source");
+      assertEqual(await elsewhere.vault.objects.has(WORLD_CID), false, "the world is asked of nobody");
+      assertBytes((await elsewhere.vault.objects.read(HELLO_CID, 5)) as Uint8Array, HELLO, "the witness came along");
+      own.snapshot.close();
+    },
+  },
+  {
+    name: "a witness the union's fold streams from the target, damaged where no read has met it, is answered by the source within the one import — whether the fold fails on the damage or takes the witness for unreadable — and repaired with the events; one the source lacks fails the fold as any read of it would, with nothing written",
+    run: async (h) => {
+      const c = clock();
+      const damagedTarget = async (): Promise<Made> => {
+        const target = await make(h, h.fresh(), c.now);
+        await target.vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+        corruptChunk(target.driver, HELLO_CID);
+        return target;
+      };
+      for (const retainedRoots of [evidencedStreaming, evidencedForgiving]) {
+        const origin = await make(h, h.fresh(), c.now);
+        const [pkg] = await origin.vault.vault.commit([{ cid: WORLD_CID, source: WORLD }], [pack("W", [WORLD_CID])]);
+        await origin.vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [witnessed(pkg as Event, HELLO_CID)]);
+        assertEqual(await origin.vault.collect(heldRootsOf(retainedRoots)), { removed: [WORLD_CID] }, "the world released and collected");
+        const { snapshot } = await snapshotOf(h, origin.vault, heldRootsOf(retainedRoots));
+        await origin.vault.close();
+        const target = await damagedTarget();
+        assertEqual(await importVault(target.vault, snapshot, { retainedRoots }), { added: 2, duplicates: 0, conflicts: [], objects: 0, repaired: 1 }, "one import, the witness repaired");
+        assertBytes((await target.vault.vault.objects.read(HELLO_CID, 5)) as Uint8Array, HELLO, "the witness reads back");
+        assertEqual(await target.vault.vault.objects.has(WORLD_CID), false, "the world is asked of nobody");
+        snapshot.close();
+        await target.vault.close();
+      }
+      // a release whose witness its own vault never held: the snapshot carries the world and no witness
+      const origin = await make(h, h.fresh(), c.now);
+      const [pkg] = await origin.vault.vault.commit([{ cid: WORLD_CID, source: WORLD }], [pack("W", [WORLD_CID])]);
+      await origin.vault.vault.commit([], [{ type: "release", roots: [], data: { of: (pkg as Event).eventId, witness: HELLO_CID } }]);
+      const { snapshot } = await snapshotOf(h, origin.vault, heldRootsOf(evidencedStreaming));
+      await origin.vault.close();
+      const target = await damagedTarget();
+      const before = tables(target.driver);
+      await assertRejects(() => importVault(target.vault, snapshot, { retainedRoots: evidencedStreaming }), "DamagedObject", "nobody has the witness sound");
+      assertEqual(tables(target.driver), before, "nothing written");
+      snapshot.close();
+      await target.vault.close();
     },
   },
   {
