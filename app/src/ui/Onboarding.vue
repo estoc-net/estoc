@@ -5,7 +5,7 @@ import { createIdentity, restoreIdentity, state } from "../core/store.js";
 import { bytesOf } from "./util.js";
 
 /**
- * First run: mint an identity here, or restore one from a backup zip. Both
+ * First run: mint an identity here, or restore one from a backup file. Both
  * end in the same place — a vault in this browser's private file system,
  * its seed sealed under the passphrase typed here. A mediator is not asked
  * for: an identity is a name and a seed; being reachable comes after, in
@@ -47,24 +47,24 @@ async function create() {
 }
 
 // restore
-const zipFile = ref<File | null>(null);
+const backupFile = ref<File | null>(null);
 const restorePass = ref("");
 const restoring = ref(false);
 const restoreError = ref<string | null>(null);
 
-function pickZip(event: Event) {
-  zipFile.value = (event.target as HTMLInputElement).files?.[0] ?? null;
+function pickBackup(event: Event) {
+  backupFile.value = (event.target as HTMLInputElement).files?.[0] ?? null;
 }
 
 async function restore() {
   restoreError.value = null;
-  if (zipFile.value === null) {
-    restoreError.value = "Choose the backup zip first.";
+  if (backupFile.value === null) {
+    restoreError.value = "Choose the backup file first.";
     return;
   }
   restoring.value = true;
   try {
-    await restoreIdentity(await bytesOf(zipFile.value), restorePass.value);
+    await restoreIdentity(await bytesOf(backupFile.value), restorePass.value);
   } catch (err) {
     restoreError.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -81,13 +81,11 @@ async function restore() {
       <p>
         Estoc is a messenger that runs on DIDComm through a mediator of your
         choosing. Your identity is minted here, in this browser, from a single
-        seed; your messages stay here, in a vault you can zip up and walk away
-        with. Nothing about you lives on our servers — a mediator only holds
+        seed; your messages stay here, in a vault you can export as one file and
+        walk away with. Nothing about you lives on our servers — a mediator only holds
         sealed envelopes until you pick them up.
       </p>
-      <p v-if="state.status.state === 'error'" class="status-line error">
-        {{ state.status.detail }}
-      </p>
+      <p v-if="state.away" class="status-line error">{{ state.away }}</p>
 
       <div class="tabs">
         <button class="tab" :class="{ active: mode === 'create' }" @click="mode = 'create'">
@@ -127,7 +125,7 @@ async function restore() {
       </form>
 
       <form v-else @submit.prevent="restore">
-        <input class="field" type="file" accept=".zip,application/zip" @change="pickZip" />
+        <input class="field" type="file" accept=".sqlite,application/vnd.sqlite3" @change="pickBackup" />
         <input
           v-model="restorePass"
           class="field"
@@ -140,9 +138,10 @@ async function restore() {
           {{ restoring ? "Restoring…" : "Restore" }}
         </button>
         <p class="fine">
-          A backup is the vault as it was zipped: identity, contacts, message
-          history. Restoring it here makes this browser that identity's home;
-          if it is still open elsewhere, only one of the two receives at a time.
+          A backup is the vault as it was exported: identity, contacts, message
+          history, all of it readable by whoever has the file except the seed.
+          Restoring brings back that moment and nothing after it; what that
+          means for your conversations is explained before anything is sent.
         </p>
       </form>
     </div>

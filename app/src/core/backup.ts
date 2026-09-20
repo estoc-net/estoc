@@ -1,6 +1,6 @@
 /** Hand the bytes to the browser as a download. */
 export function saveFile(name: string, bytes: Uint8Array): void {
-  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/zip" }));
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/vnd.sqlite3" }));
   const a = document.createElement("a");
   a.href = url;
   a.download = name;

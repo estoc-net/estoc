@@ -1,55 +1,44 @@
-import { reactive, toRaw } from "vue";
-import type { FolderObject } from "@estoc/folder-object";
-import type { Imported } from "@estoc/event-store";
-import type { Delivery } from "@estoc/vault";
-import {
-  BASIC_MESSAGE,
-  invitationMessage,
-  invitationUrl,
-  parseInvitation,
-  type ContactRecord,
-  type Invitation,
-  type InvitationRecord,
-  type MessageRecord,
-  type SendOptions,
-  type TraceEvent,
-  type TraceLevel,
-  type VerifiedShare,
-} from "@estoc/agent-core";
+import { shallowReactive, toRaw } from "vue";
+import { BASIC_MESSAGE, GOAL_CONNECT, PROFILE, invitationUrl, parseInvitation, type Invitation } from "@estoc/agent-core";
+import type { InvitationRecord, TraceLevel } from "@estoc/agent-core/v3";
+import type { EventReference, ExecutionId } from "@estoc/vault/v3";
+import type { Daemon, Outcome } from "@estoc/daemon/v3";
 
-import type { Daemon, Snapshot } from "@estoc/daemon";
 import { startDaemon } from "../daemon/client.js";
+import { forgetSeedKey } from "../daemon/keycache.js";
+import { FOLDER_VAULT } from "../daemon/places.js";
 import { saveFile } from "./backup.js";
-import { entryOf } from "./entries.js";
+import { conversationsOf } from "./conversations.js";
 import { isInstalled, setupPwa } from "./pwa.js";
 import { isStoragePersisted, persistStorage } from "./storage.js";
-import type {
-  AgentStatus,
-  Contact,
-  DeliveryView,
-  Identity,
-  InvitationView,
-  Phase,
-} from "./types.js";
+import type { Channel, ContactId, Conversation, Did, DidId, Lines, Merged, MessageId, Phase, Snapshot } from "./types.js";
 
 /**
- * The one store: this install's identity as Vue-reactive views, plus the
- * runtime around it (agent status, activity log, storage and install
- * state). The vault and the agent live in the daemon (src/daemon); it
- * reports back through events, which update the views — so the UI
- * renders what the vault holds, never the other way round — and every
- * action here is a call across to it.
+ * The one store: the vault as the daemon last told it, plus the runtime
+ * around it (the lines to the mediators, the activity log, storage and
+ * install state). The vault and the agent live in the daemon
+ * (src/daemon); every snapshot it sends replaces the one before, whole,
+ * so the UI renders what the vault holds and never the other way round,
+ * and every action here is a call across to it. The state is reactive
+ * one level deep for that reason: a field changes by being replaced, and
+ * what it holds stays the plain value that crossed from the daemon, which
+ * a call can hand back as it is.
  *
  * The passphrase is typed when the identity is created or restored, and
  * again only after "Lock"; the daemon keeps the unlocked seed between
- * sessions. The zip a backup exports carries the seed sealed under that
- * passphrase.
+ * sessions. The file a backup exports carries the seed sealed under that
+ * passphrase, and everything else in the clear.
  */
 
-export const state = reactive({
+export const state = shallowReactive({
   phase: "booting" as Phase,
-  identity: null as Identity | null,
-  status: { state: "idle" } as AgentStatus,
+  /** what the daemon said with the phase: why a vault is unreadable */
+  phaseDetail: null as string | null,
+  snapshot: null as Snapshot | null,
+  conversations: [] as Conversation[],
+  lines: null as Lines | null,
+  /** why a daemon over a socket is not answering; null in the worker, and while it answers */
+  away: null as string | null,
   log: [] as string[],
   /** whether the browser has promised not to evict this origin's storage */
   persisted: false,
@@ -70,159 +59,53 @@ export const state = reactive({
    */
   pendingInvitation: null as Invitation | null,
   pendingMediatorInvitation: null as string | null,
-  /**
-   * What this device keeps of what its agent observes (envelopes, frames,
-   * the mediator's rituals): this copy's own state, in the vault's
-   * `local/agent/` and never in a backup. `off` means no lens has a trace
-   * to read.
-   */
+  /** the invitations made since this page opened, by ID, as the links they were handed over as: the vault keeps the disclosure and not what it was said to be for */
+  links: {} as Record<string, string>,
+  /** what this device keeps of what its agent observes: this copy's own state, never in a backup */
   traceLevel: "normal" as TraceLevel,
 });
 
 let daemon: Daemon | null = null;
 
 function log(line: string): void {
-  state.log.push(`${new Date().toLocaleTimeString()}  ${line}`);
-  if (state.log.length > 200) {
-    state.log.shift();
-  }
+  state.log = [...state.log, `${new Date().toLocaleTimeString()}  ${line}`].slice(-200);
 }
 
-/**
- * The link an invitation of ours is handed over as: this deployment's
- * origin, so tapping it opens *an* Estoc — the same one that issued it,
- * or any other; only `_oob` matters to the app that opens it.
- */
-export function invitationLink(record: InvitationRecord): string {
-  return invitationUrl(`${location.origin}${location.pathname}`, invitationMessage(record));
+function said(what: string, { outcome, because }: Outcome): void {
+  log(because === null ? `${what}: ${outcome}` : `${what}: ${outcome} (${because})`);
 }
 
-function invitationView(record: InvitationRecord): InvitationView {
-  return {
-    id: record.id,
-    goal: record.goal ?? "",
-    createdAt: record.at,
-    url: invitationLink(record),
-    ready: record.registered,
-    takenBy: record.takenBy[0] ?? null,
-  };
+function take(snapshot: Snapshot): void {
+  state.snapshot = snapshot;
+  state.conversations = conversationsOf(snapshot);
 }
 
-function upsertInvitation(identity: Identity, record: InvitationRecord, gone = false): void {
-  const index = identity.invitations.findIndex((i) => i.id === record.id);
-  if (gone) {
-    if (index !== -1) {
-      identity.invitations.splice(index, 1);
-    }
-    return;
-  }
-  const view = invitationView(record);
-  if (index === -1) {
-    identity.invitations.push(view);
-  } else {
-    identity.invitations[index] = view;
-  }
-}
-
-function contactView(record: ContactRecord): Contact {
-  return {
-    cid: record.cid,
-    did: record.currentDids.at(-1) ?? "",
-    myDid: record.keys.at(-1)?.did ?? null,
-    label: record.name,
-    ...(record.claimedName === null ? {} : { claimedName: record.claimedName }),
-  };
-}
-
-function upsertContact(identity: Identity, record: ContactRecord): void {
-  const view = contactView(record);
-  const index = identity.contacts.findIndex((c) => c.cid === record.cid);
-  if (index === -1) {
-    identity.contacts.push(view);
-  } else {
-    identity.contacts[index] = view;
-  }
-}
-
-/** The fold's word on one message of ours, thinned for a bubble. */
-function deliveryView(delivery: Delivery): DeliveryView {
-  const last = delivery.attempts.at(-1);
-  return {
-    status: delivery.status,
-    attempts: delivery.attempts.length,
-    ...(last === undefined ? {} : { at: last.at, ...(last.error === null ? {} : { error: last.error }) }),
-  };
-}
-
-/** Project the vault's records into views. */
-function viewsOf(snapshot: Snapshot): Identity {
-  // Threads are keyed by contact, not by DID: the daemon says whose each
-  // message is (the fold's attribution of its channel), and it is homed by that.
-  const messages = snapshot.messages.map(({ record, contactCid }) => entryOf(record, contactCid));
-  if (snapshot.damaged > 0) {
-    log(`skipped ${snapshot.damaged} damaged line${snapshot.damaged === 1 ? "" : "s"} in the logs`);
-  }
-  return {
-    name: snapshot.label,
-    mediatorDid: snapshot.mediatorDid,
-    did: snapshot.did,
-    contacts: snapshot.contacts.map(contactView),
-    invitations: snapshot.invitations.map(invitationView),
-    messages,
-    deliveries: Object.fromEntries(snapshot.deliveries.map((delivery) => [delivery.mid, deliveryView(delivery)])),
-  };
-}
-
-/** The daemon's word is the store's state. */
 function connectDaemon(): Daemon {
   const started = startDaemon({
-    phase(phase) {
+    phase(phase, detail) {
       if (phase !== "open") {
-        state.identity = null;
+        state.snapshot = null;
+        state.conversations = [];
+        state.lines = null;
       }
       state.phase = phase;
+      state.phaseDetail = detail;
     },
     opened(snapshot) {
-      state.identity = viewsOf(snapshot);
+      take(snapshot);
       state.phase = "open";
+      // the level is the open vault's own local state
+      void running().traceLevel().then((level) => (state.traceLevel = level));
       if (state.daemonAt === null) {
         void isStoragePersisted().then((persisted) => (state.persisted = persisted));
       }
     },
-    status(status, did) {
-      state.status = status;
-      if (state.identity !== null && did !== null) {
-        state.identity.did = did;
-      }
+    changed: take,
+    lines(lines) {
+      state.lines = lines;
     },
-    message(record, contact) {
-      const identity = state.identity;
-      if (identity === null || identity.messages.some((m) => m.mid === record.mid)) {
-        return;
-      }
-      identity.messages.push(entryOf(record, contact?.cid ?? null));
-    },
-    delivery(delivery) {
-      const identity = state.identity;
-      if (identity === null) {
-        return;
-      }
-      identity.deliveries[delivery.mid] = deliveryView(delivery);
-    },
-    contact(record, gone) {
-      if (state.identity === null) {
-        return;
-      }
-      if (gone) {
-        state.identity.contacts = state.identity.contacts.filter((c) => c.cid !== record.cid);
-      } else {
-        upsertContact(state.identity, record);
-      }
-    },
-    invitation(record, gone) {
-      if (state.identity !== null) {
-        upsertInvitation(state.identity, record, gone);
-      }
+    away(detail) {
+      state.away = detail;
     },
     log,
   });
@@ -238,8 +121,8 @@ function running(): Daemon {
 }
 
 /**
- * Bring the app up: the daemon takes the vault lock (or waits for the tab
- * that has it), then lands on the screen the disk dictates — nothing
+ * Bring the app up: the daemon takes the vault's files (or waits for the
+ * tab that has them), then lands on the screen they dictate: nothing
  * there, a vault without its cached seed, or straight in.
  */
 export async function boot(): Promise<void> {
@@ -250,8 +133,13 @@ export async function boot(): Promise<void> {
     onInstallable: (prompt) => (state.install = prompt),
   });
   daemon = connectDaemon();
+  // What the dispatcher does on its own timer is told by no event: ask again when the person looks.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state.phase === "open") {
+      void daemon?.refresh().catch(() => undefined);
+    }
+  });
   await daemon.boot();
-  state.traceLevel = await daemon.traceLevel();
 }
 
 /**
@@ -281,38 +169,26 @@ function takePendingInvitation(): void {
 
 /**
  * Mint an identity: a fresh seed sealed under `passphrase`, a vault around
- * it. No mediator yet — an identity is a seed and a name; how it is reached
- * is decided afterwards (`chooseMediator`).
+ * it. No mediator yet: how it is reached is decided afterwards
+ * (`chooseMediator`).
  */
 export async function createIdentity(name: string, passphrase: string): Promise<void> {
   await running().createIdentity(name, passphrase);
   state.persisted = state.daemonAt === null ? await persistStorage() : false;
 }
 
-/**
- * Name the mediator this identity will be reached through, and go live:
- * mediation, the public DID, pickup. For an identity that has one already
- * this is a move: every DID is minted anew on the new mediator (the agent
- * tells each contact by `from_prior`; open invitations are withdrawn —
- * the contact and invitation events keep the views current), and the
- * public DID on the rail is replaced.
- */
-export async function chooseMediator(mediatorDid: string): Promise<void> {
-  if (state.identity === null) {
-    throw new Error("the agent is not running");
-  }
-  const did = await running().setMediator(mediatorDid);
-  state.identity.mediatorDid = mediatorDid;
-  state.identity.did = did;
-}
-
-/** Restore a backup zip into an empty install, unlocking it with its passphrase. */
-export async function restoreIdentity(zip: Uint8Array, passphrase: string): Promise<void> {
-  await running().restoreIdentity(zip, passphrase);
+/** Restore a backup file into an empty install, unlocking it with its passphrase. */
+export async function restoreIdentity(file: Uint8Array, passphrase: string): Promise<void> {
+  await running().restoreIdentity(file, passphrase);
   state.persisted = state.daemonAt === null ? await persistStorage() : false;
 }
 
-/** The vault is here but its seed is not cached: the passphrase opens it. */
+/** The person has read what a restore cannot bring back: sending opens. */
+export async function explainedRestore(): Promise<void> {
+  await running().explainedRestore();
+  await running().refresh();
+}
+
 export async function unlock(passphrase: string): Promise<void> {
   await running().unlock(passphrase);
 }
@@ -326,84 +202,103 @@ export async function lock(): Promise<void> {
 export async function forgetIdentity(): Promise<void> {
   await running().forgetIdentity();
   state.log = [];
-  // the level lived in the vault's local state and went with it; ask again so the rail says so
-  state.traceLevel = await running().traceLevel();
+  state.links = {};
 }
 
-/** Zip the vault and hand it to the browser as a download. */
+/**
+ * Delete the folder-format vault an earlier version left in this
+ * browser, with its cached seed, and come up again on what is left.
+ * The daemon never touches that folder; the page is what removes it.
+ */
+export async function discardFolderVault(): Promise<void> {
+  const root = await navigator.storage.getDirectory();
+  await root.removeEntry(FOLDER_VAULT, { recursive: true });
+  await forgetSeedKey();
+  location.reload();
+}
+
 export async function downloadBackup(): Promise<void> {
-  if (state.identity === null) {
-    return;
-  }
   const { name, bytes } = await running().exportBackup();
   saveFile(name, bytes);
   log(`exported ${name} (${(bytes.length / 1024).toFixed(0)} KB)`);
 }
 
-/** Merge a backup zip into the open vault; the daemon reopens on the merged vault after. */
-export async function mergeBackup(zip: Uint8Array): Promise<Imported> {
-  const outcome = await running().mergeBackup(zip);
-  if (outcome.kind === "merged") {
-    const added = Object.values(outcome.events).reduce((sum, ingested) => sum + ingested.added, 0);
-    log(
-      `merged a backup: ${added} new event${added === 1 ? "" : "s"}, ` +
-        `${outcome.blobs.copied} block${outcome.blobs.copied === 1 ? "" : "s"} copied` +
-        (outcome.damaged.length === 0 ? "" : `; ${outcome.damaged.length} damaged line${outcome.damaged.length === 1 ? "" : "s"} skipped`)
-    );
-  }
-  return outcome;
+/** Merge a backup file into the open vault; the daemon goes on over the merged vault. */
+export async function mergeBackup(file: Uint8Array): Promise<Merged> {
+  const merged = await running().mergeBackup(file);
+  log(`merged a backup: ${merged.added} new event${merged.added === 1 ? "" : "s"}, ${merged.objects} object${merged.objects === 1 ? "" : "s"}` + (merged.conflicts === 0 ? "" : `, ${merged.conflicts} kept as this vault has them`));
+  return merged;
 }
 
-export async function addContact(did: string, label: string): Promise<Contact | null> {
-  if (state.identity === null) {
-    return null;
-  }
-  // Adding a DID that already arrived as a stranger renames the auto-created
-  // contact instead of duplicating it — the agent handles that.
-  const record = await running().addContact(did, label);
-  upsertContact(state.identity, record);
-  return state.identity.contacts.find((c) => c.cid === record.cid) ?? null;
-}
-
-export async function removeContact(cid: string): Promise<void> {
-  if (state.identity === null) {
-    return;
-  }
-  await running().removeContact(cid);
-  state.identity.contacts = state.identity.contacts.filter((c) => c.cid !== cid);
+export async function chooseMediator(mediatorDid: string): Promise<void> {
+  await running().setMediator(mediatorDid);
 }
 
 /**
- * Add a contact from whatever was pasted: an invitation link (or its
- * `_oob`) is accepted — the contact by the DID inside, our introduction
- * sent at once — and a DID is added as before.
+ * The link an invitation is handed over as: this deployment's origin, so
+ * tapping it opens an Estoc, the one that issued it or any other; only
+ * `_oob` matters to the app that opens it.
  */
-export async function addContactFrom(input: string, label: string): Promise<Contact | null> {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("did:")) {
-    return addContact(trimmed, label);
-  }
-  let invitation: Invitation;
-  try {
-    invitation = parseInvitation(trimmed);
-  } catch {
-    throw new Error("that is neither a DID (did:…) nor an invitation link");
-  }
-  return acceptInvitation(invitation, label);
+function linkOf(invitation: Invitation): string {
+  return invitationUrl(`${location.origin}${location.pathname}`, invitation);
 }
 
-export async function acceptInvitation(input: string | Invitation, label: string): Promise<Contact | null> {
-  if (state.identity === null) {
+/** The link of an invitation the vault holds: the one it was made as while this page remembers it, and otherwise one that says the same without what it was for. */
+export function invitationLink(record: InvitationRecord): string | null {
+  const made = state.links[record.oobId];
+  if (made !== undefined) {
+    return made;
+  }
+  if (record.localDid === null) {
     return null;
   }
+  return linkOf(
+    parseInvitation(
+      JSON.stringify({
+        type: "https://didcomm.org/out-of-band/2.0/invitation",
+        id: record.oobId,
+        from: record.localDid,
+        body: { goal_code: GOAL_CONNECT, accept: ["didcomm/v2"] },
+      })
+    )
+  );
+}
+
+/** A link for one person: whoever opens it and writes first is the one it is for. */
+export async function createInvitation(): Promise<string> {
+  const { invitation } = await running().createInvitation("one");
+  state.links = { ...state.links, [invitation.id]: linkOf(invitation) };
+  return invitation.id;
+}
+
+function profileOf(snapshot: Snapshot | null): { type: string; body: { profile: { displayName: string } } } {
+  return { type: PROFILE, body: { profile: { displayName: snapshot?.label ?? "" } } };
+}
+
+/** Say who we are in `channel`: the name this vault goes by, which the peer holds as a claim of ours. */
+export async function introduce(channel: Channel): Promise<void> {
+  said("introduction", await running().send({ channel }, profileOf(state.snapshot)));
+}
+
+/**
+ * Accept an invitation under the name we give its issuer: a DID of ours
+ * for them alone, a contact that selects the pair, a Ping under the
+ * invitation's ID, and our introduction after it.
+ */
+export async function acceptInvitation(input: string | Invitation, petname: string): Promise<ContactId> {
   // what crosses to the daemon must be plain: a Vue proxy does not clone
   const invitation = typeof input === "string" ? parseInvitation(input) : toRaw(input);
-  const record = await running().acceptInvitation(invitation, label);
-  upsertContact(state.identity, record);
+  const accepted = await running().acceptInvitation(invitation, petname);
+  said("invitation accepted", accepted);
   if (state.pendingInvitation?.id === invitation.id) {
     state.pendingInvitation = null;
   }
-  return state.identity.contacts.find((c) => c.cid === record.cid) ?? null;
+  try {
+    await introduce(accepted.channel);
+  } catch (err) {
+    log(`the introduction was not sent: ${err instanceof Error ? err.message : err}`);
+  }
+  return accepted.contactId;
 }
 
 /** Decline the invitation this page was opened with; nothing is written. */
@@ -411,85 +306,59 @@ export function dismissPendingInvitation(): void {
   state.pendingInvitation = null;
 }
 
-/** Issue a single-use invitation link: the first person to open it and write becomes a contact. */
-export async function createInvitation(): Promise<InvitationView> {
-  if (state.identity === null) {
-    throw new Error("the agent is not running");
-  }
-  // on failure the daemon reports whatever record was left, by event
-  const record = await running().createInvitation();
-  upsertInvitation(state.identity, record);
-  return invitationView(record);
+/** A name of ours for a conversation that has none: a contact that selects its channels. */
+export async function nameConversation(channels: Channel[], petname: string): Promise<ContactId> {
+  return running().createContact(petname, channels);
 }
 
-export async function revokeInvitation(id: string): Promise<void> {
-  if (state.identity === null) {
-    return;
-  }
-  await running().revokeInvitation(id);
-  state.identity.invitations = state.identity.invitations.filter((i) => i.id !== id);
+export async function renameContact(contactId: ContactId, petname: string): Promise<void> {
+  await running().renameContact(contactId, petname);
 }
 
-/**
- * Send a message of any type to a contact. The agent introduces us on the
- * first message and logs the record; the record comes back through the
- * message event and lands in the views like any other.
- */
-export async function send(
-  contactDid: string,
-  type: string,
-  body: Record<string, unknown>,
-  options?: SendOptions
-): Promise<MessageRecord> {
-  return running().send(contactDid, type, body, options);
+export async function deleteContact(contactId: ContactId, options: { block: boolean; erase: boolean }): Promise<void> {
+  await running().deleteContact(contactId, {
+    ...(options.block ? { block: { includeSuccessors: true } } : {}),
+    ...(options.erase ? { erase: "the contact was deleted" } : {}),
+  });
 }
 
-/**
- * An object, whole: object-share/1.0. Plain, the share only hands the
- * object over; `sign` makes it a signed object under the anchor; `card`
- * (a signed object passed on) must be about this very object.
- */
-export async function shareObject(
-  contactDid: string,
-  object: FolderObject,
-  options: { sign?: boolean; card?: string } = {}
-): Promise<void> {
-  await running().shareObject(contactDid, toRaw(object), options);
+/** Refuse the channels and whatever their peers move to. */
+export async function blockChannels(channels: Channel[]): Promise<void> {
+  await running().blockChannels(channels, true);
 }
 
-/**
- * Fetch the package a partial share names (`docs/object-share.md` §8) and
- * fill the object in from it; resolves to the share as verified after.
- */
-export async function fetchPackage(record: MessageRecord): Promise<VerifiedShare> {
-  return running().fetchPackage(toRaw(record));
+export async function eraseMessage(messageId: MessageId): Promise<void> {
+  await running().eraseMessage(messageId);
 }
 
-/**
- * A block held in the vault's `blobs/`, by CID — what a renderer hands
- * `verifyShare` so leaves that came by any road count as present.
- */
-export async function heldBlock(cid: string): Promise<Uint8Array | null> {
-  return daemon === null ? null : daemon.block(cid);
+/** A line of chat, to a contact where its channels say which one, or in the channel picked. */
+export async function sendMessage(target: { contactId: ContactId } | { channel: Channel; preRotation?: boolean }, text: string): Promise<void> {
+  said("sent", await running().send(target, { type: BASIC_MESSAGE, body: { content: text } }));
 }
 
-/** A line of chat: basicmessage/2.0. */
-export async function sendMessage(contactDid: string, text: string): Promise<void> {
-  await send(contactDid, BASIC_MESSAGE, { content: text });
+export async function retry(messageId: MessageId): Promise<void> {
+  said("retry", await running().retry(messageId));
 }
 
-/**
- * Try again to deliver one message of ours that did not go — failed, or
- * held since a backup brought it in. The outcome lands through the
- * delivery event like any other try.
- */
-export async function retry(mid: string): Promise<void> {
-  await running().retry(mid);
+export async function cancel(messageId: MessageId): Promise<void> {
+  said("cancel", await running().cancel(messageId));
 }
 
-/** The trace events that ended in a record: what the onion lens is fed. Empty when the trace is off or that part is pruned. */
-export async function traceOf(mid: string): Promise<TraceEvent[]> {
-  return running().traceOf(mid);
+export async function completeResponse(executionId: ExecutionId, effectType: string): Promise<void> {
+  said(`reply ${effectType}`, await running().completeResponse(executionId, effectType));
+}
+
+export async function completeNotification(rotationEventId: string): Promise<void> {
+  said("rotation notification", await running().completeNotification(rotationEventId as EventReference<"did.rotationSelected">));
+}
+
+/** A fresh DID of ours toward `peerDid`, in place of `localDidId`, and the peer told. */
+export async function rotate(localDidId: DidId, peerDid: Did): Promise<void> {
+  said("rotation", await running().rotate(localDidId, peerDid));
+}
+
+export async function reconnect(): Promise<void> {
+  await running().reconnect();
 }
 
 /** Set what this device keeps of what it observes; a stricter level prunes at once. */

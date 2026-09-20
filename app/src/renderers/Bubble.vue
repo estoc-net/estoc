@@ -1,121 +1,122 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 
-import type { Entry } from "../core/entries.js";
-import { retry, state, traceOf } from "../core/store.js";
-import { lensesFor, type Lens } from "../lenses/index.js";
-import type { TraceEvent } from "../lenses/registry.js";
+import { cancel, completeResponse, eraseMessage, retry, state } from "../core/store.js";
+import type { MessageRecord } from "../core/types.js";
 import { timeOf } from "../ui/util.js";
 
 /**
  * The frame every renderer sits in: sent to the right, received to the
  * left, or a system aside in the middle; the time underneath. Renderers
- * put their reading of the message in the slot.
+ * put their reading of the message in the slot, which is shown only
+ * while the content is here to read.
  *
- * A sent entry also shows what became of it — the delivery log's word,
- * not the renderer's: nothing once it went, "sending" while no try has
- * ended, and otherwise why it did not go, with a retry. The record is a
- * fact either way; delivery is a separate one (see agent-core's
- * `vault/deliveries.ts`).
- *
- * And the lenses (src/lenses): the other way of looking at a record, by
- * what the vault's trace observed of it rather than by what it says. The
- * bubble is their host: it offers the entry point of every lens that has
- * something to say, and when one is opened fetches the record's trace
- * over the daemon and hands it in.
+ * Under it, the vault's own account of the message, never the
+ * renderer's: for one of ours, where its delivery stands and what is
+ * left to do by hand; for one received, whether it is taken in, what
+ * became of a continuity proof it brought, and the replies it may still
+ * be given.
  */
 const props = defineProps<{
-  entry: Entry;
+  message: MessageRecord;
   /** a protocol aside — centered, quieter than chat */
   system?: boolean;
 }>();
 
-const delivery = computed(() => {
-  if (props.entry.direction !== "sent") {
+const VERIFICATION: Record<string, string> = {
+  "pending-proof": "new address: the proof waits for its issuer's document",
+  "pending-history": "new address: the proof waits for history",
+  verified: "new address verified",
+  invalid: "new address: the proof is invalid",
+  conflict: "new address: continuity is in conflict",
+};
+
+const verification = computed(() => {
+  const status = props.message.verification;
+  if (status.status === "not-present") {
     return null;
   }
-  return state.identity?.deliveries[props.entry.mid] ?? { status: "pending" as const };
+  return { status: status.status, word: VERIFICATION[status.status] ?? status.status, because: "because" in status ? status.because : undefined };
 });
 
-const lenses = computed(() => lensesFor(props.entry, { traceLevel: state.traceLevel }));
-const open = ref<Lens | null>(null);
-const events = ref<TraceEvent[]>([]);
-const peeling = ref(false);
-
-async function toggle(lens: Lens) {
-  if (open.value?.id === lens.id) {
-    open.value = null;
-    events.value = [];
-    return;
+const delivery = computed(() => {
+  const { outcome, acknowledged, late } = props.message;
+  if (outcome === null) {
+    return null;
   }
-  peeling.value = true;
+  switch (outcome.status) {
+    case "queued":
+      return { status: "queued", word: "queued", because: undefined };
+    case "prepared":
+      return { status: "prepared", word: "sealed, not handed over", because: undefined };
+    case "submitted":
+      return { status: acknowledged ? "acknowledged" : "submitted", word: acknowledged ? (late ? "received, after it expired" : "received") : "handed over", because: undefined };
+    case "terminal":
+      return { status: "terminal", word: outcome.code, because: undefined };
+    case "conflict":
+      return { status: "conflict", word: "conflict", because: outcome.because };
+  }
+});
+
+const input = computed(() => {
+  const status = props.message.input;
+  return status === null || status.status === "complete" ? null : status;
+});
+
+const open = computed(() => state.snapshot?.pending.pendingOutbounds.find((outbound) => outbound.messageId === props.message.messageId) ?? null);
+const owed = computed(() => (state.snapshot?.pending.missingResponses ?? []).filter((response) => response.messageId === props.message.messageId && response.entries.includes("completeResponse")));
+
+const busy = ref(false);
+const failure = ref<string | null>(null);
+
+async function act(action: () => Promise<void>) {
+  if (busy.value) return;
+  busy.value = true;
+  failure.value = null;
   try {
-    const fetched = await traceOf(props.entry.mid);
-    // the trace may have been turned off while we asked: then there is nothing to open
-    if (lenses.value.some((l) => l.id === lens.id)) {
-      events.value = fetched;
-      open.value = lens;
-    }
+    await action();
+  } catch (err) {
+    failure.value = err instanceof Error ? err.message : String(err);
   } finally {
-    peeling.value = false;
+    busy.value = false;
   }
 }
 
-// a lens that is no longer offered (the trace turned off) closes with its events
-watch(lenses, (offered) => {
-  if (open.value !== null && !offered.some((l) => l.id === open.value?.id)) {
-    open.value = null;
-    events.value = [];
-  }
-});
-
-const retrying = ref(false);
-async function tryAgain() {
-  if (retrying.value) return;
-  retrying.value = true;
-  try {
-    await retry(props.entry.mid);
-  } finally {
-    retrying.value = false;
+function erase() {
+  if (confirm("Erase this message's content from the vault? What is erased here is erased in every copy this vault is merged with; the other side keeps theirs.")) {
+    void act(() => eraseMessage(props.message.messageId));
   }
 }
 </script>
 
 <template>
-  <div class="bubble" :class="[entry.direction, { system }]">
-    <div><slot /></div>
+  <div class="bubble" :class="[message.direction === 'out' ? 'sent' : 'received', { system }]" :data-message="message.messageId">
+    <div v-if="message.body.state === 'available'"><slot /></div>
+    <div v-else class="gone">{{ message.body.state === "erased" ? "erased" : "the content is not here" }}</div>
     <div class="meta">
-      <span>{{ timeOf(entry.time) }}</span>
+      <span>{{ timeOf(Date.parse(message.at)) }}</span>
       <slot name="meta" />
-      <button
-        v-for="lens in lenses"
-        :key="lens.id"
-        type="button"
-        class="link-quiet lens-entry"
-        :class="{ active: open?.id === lens.id }"
-        :data-lens="lens.id"
-        :disabled="peeling"
-        @click="toggle(lens)"
-      >
-        {{ open?.id === lens.id ? "close" : lens.label }}
+      <span v-if="delivery" class="delivery" :class="delivery.status" :title="delivery.because ?? open?.because ?? undefined" data-delivery>{{ delivery.word }}</span>
+      <span v-if="input" class="delivery" :class="input.status" :title="input.because">{{ input.status === "pending" ? "not taken in yet" : "conflict" }}</span>
+      <span v-if="verification" class="delivery" :class="verification.status" :title="verification.because" data-verification>{{ verification.word }}</span>
+      <button v-if="message.manualAction === 'retry'" type="button" class="link-quiet" :disabled="busy" data-retry @click="act(() => retry(message.messageId))">
+        {{ busy ? "…" : "send again" }}
       </button>
-      <template v-if="delivery && delivery.status !== 'sent'">
-        <span v-if="delivery.status === 'pending'" class="delivery pending">sending…</span>
-        <span
-          v-else
-          class="delivery"
-          :class="delivery.status"
-          :title="'error' in delivery ? delivery.error : undefined"
-        >
-          {{ delivery.status === "held" ? "not sent — from a backup" : "not sent" }}
-          <button type="button" class="link-quiet" :disabled="retrying" @click="tryAgain">
-            {{ retrying ? "retrying…" : "retry" }}
-          </button>
-        </span>
-      </template>
+      <button v-if="open?.entries.includes('cancel')" type="button" class="link-quiet" :disabled="busy" @click="act(() => cancel(message.messageId))">cancel</button>
+      <button
+        v-for="response in owed"
+        :key="response.effectType"
+        type="button"
+        class="link-quiet"
+        :disabled="busy"
+        :title="`give the reply this message still earns: ${response.effectType}`"
+        @click="act(() => completeResponse(response.executionId, response.effectType))"
+      >
+        reply: {{ response.effectType }}
+      </button>
+      <button v-if="message.body.state === 'available'" type="button" class="link-quiet erase" :disabled="busy" @click="erase">erase</button>
     </div>
-    <div v-if="open" class="lens" :data-lens-open="open.id">
-      <component :is="open.component" :entry="entry" :events="events" />
-    </div>
+    <p v-for="(diagnostic, i) in message.diagnostics" :key="i" class="diagnostic">{{ diagnostic.kind }}: {{ diagnostic.because }}</p>
+    <p v-if="failure" class="diagnostic error">{{ failure }}</p>
   </div>
 </template>

@@ -25,7 +25,7 @@ async function submit() {
 function forget() {
   if (
     confirm(
-      "Delete this identity from this browser? Its keys and messages here are gone for good — only a backup zip could bring them back."
+      "Delete this identity from this browser? Its keys and messages here are gone for good — only a backup could bring them back."
     )
   ) {
     void forgetIdentity();

@@ -1,6 +1,6 @@
 /**
- * The unlocked seed between sessions. `keystore.json` seals the seed under
- * the passphrase — that is what a backup zip carries and what a new device
+ * The unlocked seed between sessions. The vault keeps the seed sealed under
+ * the passphrase: that is what a backup carries and what a new device
  * needs typed. Here, the passphrase is typed once: the unlocked seed is a
  * WebCrypto key that never leaves the browser (HKDF, non-extractable, so
  * `deriveBits` works but reading it out does not), and IndexedDB stores

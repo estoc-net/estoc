@@ -1,73 +1,33 @@
-import type { Imported } from "@estoc/event-store";
-import type { Delivery, DeliveryStatus } from "@estoc/vault";
-import type { AgentStatus, Invitation } from "@estoc/agent-core";
-import type { Entry } from "./entries.js";
+import type { Channel, ContactId } from "@estoc/vault/v3";
+import type { ChannelRecord, MessageRecord } from "@estoc/agent-core/v3";
 
-export type { AgentStatus, Delivery, DeliveryStatus, Entry, Imported, Invitation };
+export type { Channel, ContactId, Did, DidId, MessageId } from "@estoc/vault/v3";
+export type { ChannelRecord, MessageRecord, PendingWork } from "@estoc/agent-core/v3";
+export type { Lines, Merged, Phase, Snapshot } from "@estoc/daemon/v3";
+
+/** A channel as a conversation shows it: whether the contact selects it, or it is history reached from one it selects. */
+export interface ConversationChannel extends ChannelRecord {
+  selected: boolean;
+}
 
 /**
- * What the UI renders: reactive views mirrored from the vault. The vault
- * (in OPFS, via @estoc/agent-core) is the record; these are projections
- * kept in step by agent events.
+ * What the chat pane opens: a contact with every channel it shows, or
+ * the channels no contact selects that lead to one head, which are
+ * somebody's until they are given a name. The messages stay in the
+ * channel they were observed or sent in; a thread is them read together.
  */
-
-export interface Contact {
-  /** the contact's cid in the vault */
-  cid: string;
-  /** their current DID */
-  did: string;
-  /** our DID toward them — pairwise, minted on the first message; null before */
-  myDid: string | null;
-  /** our petname for them */
-  label: string;
-  /**
-   * The displayName the contact announced over user-profile/1.0 — what they
-   * call themself, which is not what we necessarily call them, and never a
-   * verified claim.
-   */
-  claimedName?: string;
+export interface Conversation {
+  /** stable across snapshots: the contact's ID, or the pair a nameless conversation leads to */
+  key: string;
+  contactId: ContactId | null;
+  petname: string | null;
+  /** what the peer last called itself in a channel shown here: a claim, never a name of ours */
+  claimedName: string | null;
+  channels: ConversationChannel[];
+  /** the channels a send may go out in, heads of what is shown */
+  writeTo: Channel[];
+  /** the one a send goes out in when none is picked; null while there are several and nothing prefers one */
+  defaultWriteTo: Channel | null;
+  messages: MessageRecord[];
+  diagnostics: string[];
 }
-
-/** An invitation this identity issued: a link for one person, open until someone takes it. */
-export interface InvitationView {
-  id: string;
-  /** what the link says it is for */
-  goal: string;
-  createdAt: string;
-  /** the URL to hand over — this deployment's origin carrying `?_oob=`; every Estoc client reads only the parameter */
-  url: string;
-  /** whether the mediator has accepted its DID yet — before that, the link leads nowhere */
-  ready: boolean;
-  /** the cid of the contact who took it, once someone has */
-  takenBy: string | null;
-}
-
-/** The fold's `Delivery`, thinned for a bubble: where it stands, how many tries, the last try's word. */
-export interface DeliveryView {
-  status: DeliveryStatus;
-  attempts: number;
-  /** when the last try ended */
-  at?: string;
-  /** why the last try failed */
-  error?: string;
-}
-
-export interface Identity {
-  name: string;
-  /** the mediator this identity is reached through; null until one is chosen */
-  mediatorDid: string | null;
-  /** the public DID, minted after mediate-grant with the routing DID as its service */
-  did: string | null;
-  contacts: Contact[];
-  invitations: InvitationView[];
-  /** every log record, homed to its contact; what a thread shows of them is the renderers' call */
-  messages: Entry[];
-  /**
-   * The fold's delivery per message of ours, by mid: what became of it.
-   * A sent entry with no state here is pending — written, not yet tried.
-   * Received entries have none.
-   */
-  deliveries: Record<string, DeliveryView>;
-}
-
-export type { Phase } from "@estoc/daemon";

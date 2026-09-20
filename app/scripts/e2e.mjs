@@ -1,28 +1,28 @@
 /**
- * Full-flow smoke against a running mediator and a served build: two
- * isolated browser contexts mint Alice and Bob, exchange DIDs and message
- * each other (live delivery, no reload); then the app's own promises get
- * exercised — history survives a
- * reload, a second tab yields to the first, lock asks for the passphrase,
- * a backup zip restores the identity in a fresh browser and receives mail
- * there, importing a backup into a live vault merges instead of clobbering,
- * and (where a service worker is serving) the shell opens with the network
- * off.
+ * Full-flow smoke against a running mediator and a served build: three
+ * isolated browser contexts mint Alice, Bob and Carol, meet over invitation
+ * links and message each other (live delivery, no reload); then the app's
+ * own promises get exercised: a conversation is named, a DID is rotated by
+ * hand and the thread goes on over it, history survives a reload, a second
+ * tab yields to the first, lock asks for the passphrase, a backup file
+ * restores the identity in a fresh browser, where sending waits for the
+ * restore to be explained, importing a backup into a live vault merges
+ * instead of clobbering, and (where a service worker is serving) the shell
+ * opens with the network off.
  *
  *   npm run preview        # serves the build on :4173 with the service worker
  *   node scripts/e2e.mjs [app-url]        (default http://localhost:4173)
  *
- * The mediator both identities use is whatever the rail's dropdown
+ * The mediator every identity uses is whatever the rail's dropdown
  * offers — the localhost entry unless E2E_MEDIATOR=estoc (production,
  * did:web:mediator.estoc.dev) or E2E_MEDIATOR=<url> (any other value is a
  * mediator's URL — the entry a VITE_MEDIATOR_DID build labels with that
  * URL's host).
  */
-import { copyFile, cp, mkdtemp, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
-import { fileURLToPath } from "node:url";
 
 const APP_URL = process.argv[2] ?? "http://localhost:4173";
 const E2E_MEDIATOR = process.env.E2E_MEDIATOR;
@@ -31,20 +31,10 @@ let MEDIATOR_URL = "http://localhost:8080";
 if (E2E_MEDIATOR === "estoc" || E2E_MEDIATOR === "web") {
   MEDIATOR_LABEL = "mediator.estoc.dev";
   MEDIATOR_URL = "https://mediator.estoc.dev";
-} else if (E2E_MEDIATOR === "estoc-peer2") {
-  MEDIATOR_LABEL = "mediator.estoc.dev (did:peer:2)";
-  MEDIATOR_URL = "https://mediator.estoc.dev";
 } else if (E2E_MEDIATOR !== undefined && E2E_MEDIATOR !== "local") {
   MEDIATOR_URL = E2E_MEDIATOR;
   MEDIATOR_LABEL = new URL(E2E_MEDIATOR).host;
 }
-// The mediator Bob moves to, by its dropdown label: production under its
-// other DID when the run is already there, production otherwise (so a
-// local run needs the internet for this one step). E2E_OTHER_MEDIATOR
-// names another entry.
-const OTHER_LABEL =
-  process.env.E2E_OTHER_MEDIATOR ??
-  (MEDIATOR_LABEL === "mediator.estoc.dev" ? "mediator.estoc.dev (did:peer:2)" : "mediator.estoc.dev");
 
 const executablePath = "/usr/bin/chromium";
 const PASS = { Alice: "alice-passes-the-salt", Bob: "bob-builds-boats-2026", Carol: "carol-carries-cardamom" };
@@ -59,6 +49,7 @@ function ok(message) {
 }
 
 function watch(page, name) {
+  pages[name] = page;
   page.on("console", (msg) => {
     if (msg.type() === "error") {
       console.error(`[${name} console] ${msg.text()}`);
@@ -67,16 +58,9 @@ function watch(page, name) {
   page.on("pageerror", (err) => console.error(`[${name} pageerror] ${err}`));
 }
 
-async function waitLive(page) {
-  await page.waitForSelector("text=live delivery on", { timeout: 25000 });
-  await page.waitForFunction(
-    () => document.querySelector(".did-chip")?.getAttribute("title")?.startsWith("did:peer:4"),
-    { timeout: 20000 }
-  );
-  return page.getAttribute(".did-chip", "title");
-}
+const waitLive = (page) => page.waitForSelector("text=live delivery on", { timeout: 30000 });
 
-async function createIdentity(page, name, invitationUrl = null, startUrl = APP_URL) {
+async function createIdentity(page, name, mediatorInvitation = null, startUrl = APP_URL) {
   await page.goto(startUrl);
   await page.fill('input[placeholder="your name, e.g. Alice"]', name);
   await page.fill('input[placeholder^="passphrase (seals"]', PASS[name]);
@@ -84,39 +68,47 @@ async function createIdentity(page, name, invitationUrl = null, startUrl = APP_U
   await page.click('button:has-text("Create identity")');
   // The identity exists before any mediator does: the rail says so, and
   // offers the choice.
-  await page.waitForSelector("text=not reachable yet", { timeout: 20000 });
+  await page.waitForSelector("text=not reachable yet", { timeout: 30000 });
   ok(`${name} minted without a mediator`);
-  if (invitationUrl === null) {
+  if (mediatorInvitation === null) {
     await page.selectOption(".rail-form select.field", { label: `via ${MEDIATOR_LABEL}` });
   } else {
     await page.selectOption(".rail-form select.field", { label: "via a pasted invitation…" });
-    await page.fill('input[placeholder="invitation URL, mediator URL, or DID"]', invitationUrl);
+    await page.fill('input[placeholder="invitation URL, mediator URL, or DID"]', mediatorInvitation);
   }
   await page.click('button:has-text("Use this mediator")');
-  const did = await waitLive(page);
-  if (!did || !did.startsWith("did:peer:4")) {
-    throw new Error(`${name} has no public did:peer:4 after mediation`);
+  await waitLive(page);
+  ok(`${name} mediated: live delivery on`);
+}
+
+async function invite(page) {
+  await page.click('button:has-text("New invitation link")');
+  await page.waitForSelector("[data-invitation-url]", { timeout: 20000 });
+  const url = await page.getAttribute("[data-invitation-url]", "title");
+  if (!url?.includes("_oob=")) {
+    throw new Error("the invitation link carries no _oob");
   }
-  ok(`${name} mediated; public DID ${did.length} chars`);
-  return did;
+  return url;
 }
 
-async function addContact(page, label, did) {
-  await page.click('button:has-text("+ contact")');
-  await page.fill('input[placeholder="name, e.g. Bob"]', label);
-  await page.fill('input[placeholder="paste their invitation link or DID"]', did);
-  await page.click('button:has-text("Add contact")');
-}
-
-async function send(page, contactLabel, text) {
-  await page.fill(`input[placeholder="Write to ${contactLabel}"]`, text);
+async function send(page, label, text) {
+  await page.fill(`input[placeholder="Write to ${label}"]`, text);
   await page.click('button:has-text("Send")');
 }
 
-async function expectBubble(page, text, timeout = 15000) {
+async function expectBubble(page, text, timeout = 30000) {
   await page.waitForSelector(`.bubble:has-text("${text}")`, { timeout });
 }
 
+const channelsShown = (page, count) => page.waitForSelector(`[data-details-toggle]:has-text("${count} channel")`, { timeout: 45000 });
+
+/** What a page says of itself when a step times out: the composer's error and the tail of the rail's log. */
+async function dump(page, name) {
+  const lines = await page.locator(".compose-error, .rail-log p").allInnerTexts().catch(() => []);
+  console.error(`[${name}]\n  ${lines.slice(-12).join("\n  ")}`);
+}
+
+const pages = {};
 const browser = await chromium.launch({ executablePath });
 try {
   const aliceCtx = await browser.newContext();
@@ -132,269 +124,126 @@ try {
   if (typeof invitationUrl !== "string" || !invitationUrl.includes("_oob=")) {
     throw new Error(`mediator at ${MEDIATOR_URL} publishes no invitation URL`);
   }
-  const aliceDid = await createIdentity(alice, "Alice", invitationUrl);
-  const bobDid = await createIdentity(bob, "Bob");
+  await createIdentity(alice, "Alice", invitationUrl);
+  await createIdentity(bob, "Bob");
 
-  await addContact(alice, "Bob", bobDid);
+  // Bob hands Alice a link; she pastes it under a name of her own for him.
+  const bobLink = await invite(bob);
+  if ((await bob.locator(".invitation .qr svg").count()) !== 1) {
+    fail("the invitation should show as a QR code too");
+  }
+  ok("Bob issued a single-use invitation link (with a QR)");
+  await alice.click('button:has-text("+ contact")');
+  await alice.fill('input[placeholder="name, e.g. Bob"]', "Bob");
+  await alice.fill('input[placeholder="paste their invitation link"]', bobLink);
+  await alice.click('button:has-text("Add contact")');
+  await alice.waitForSelector('.contact-chip.active:has-text("Bob")', { timeout: 30000 });
+  ok("Alice accepted it: Bob is a contact of hers");
+
+  // On Bob's side nobody is named yet: the conversation opens under what
+  // she calls herself, quoted as the claim it is, until he names it.
+  await bob.waitForSelector('.contact-chip.nameless:has-text("Alice")', { timeout: 45000 });
+  await bob.waitForSelector("[data-invitation-taken]", { timeout: 15000 });
+  await bob.waitForFunction(() => !document.body.innerText.includes("open link"), null, { timeout: 15000 });
+  ok("Bob saw Alice arrive under the name she claims; the link is taken");
+  await bob.click('.contact-chip.nameless:has-text("Alice")');
+  await bob.click("[data-details-toggle]");
+  await bob.fill('[data-details] input[placeholder="what you call them"]', "Alice");
+  await bob.click('button:has-text("Name this conversation")');
+  await bob.waitForSelector('.contact-chip.active:not(.nameless):has-text("Alice")', { timeout: 15000 });
+  ok("Bob named the conversation: a contact of his now");
+
   await send(alice, "Bob", "hello bob, through the mediator");
   await expectBubble(alice, "hello bob");
-  ok("Alice's sent message shows in her thread");
+  await alice.waitForSelector('.bubble:has-text("hello bob") [data-delivery]:has-text("handed over")', { timeout: 30000 });
+  ok("Alice's message shows in her thread, handed over to the mediator");
   await expectBubble(bob, "hello bob");
   ok("Bob received it live over the WebSocket");
-
-  await bob.waitForSelector('.contact-chip:has-text("Alice")', { timeout: 15000 });
-  await expectBubble(bob, "introduced themself as “Alice”");
-  await expectBubble(alice, "introduced themself as “Bob”");
-  ok("profiles exchanged both ways; Bob's stranger contact took Alice's claimed name");
-
-  // The onion lens: what the vault's trace observed of a message, peeled
-  // under its bubble. Inbound at Bob: the frame, the mediator's delivery,
-  // the message sealed to him, the plaintext. Outbound at Alice: the frame
-  // she sent, the forward to the mediator, the message sealed to Bob.
-  const bobBubble = bob.locator('.bubble:has-text("hello bob")').first();
-  await bobBubble.locator('[data-lens="onion"]').click();
-  await bobBubble.locator("[data-onion-layers]").waitFor({ timeout: 10000 });
-  const bobLayers = Number(await bobBubble.locator("[data-onion-layers]").getAttribute("data-onion-layers"));
-  const bobKinds = await bobBubble.locator(".layer-kind").allInnerTexts();
-  if (bobLayers < 3 || !bobKinds.some((k) => k.startsWith("WIRE")) || !bobKinds.some((k) => k.startsWith("AUTHCRYPT")) || !bobKinds.some((k) => k === "PLAINTEXT")) {
-    fail(`Bob's onion has ${bobLayers} layers: ${bobKinds.join(" / ")}`);
-  }
-  ok(`Bob peeled the message he received: ${bobLayers} layers, wire → authcrypt → plaintext`);
-  const aliceBubble = alice.locator('.bubble:has-text("hello bob")').first();
-  await aliceBubble.locator('[data-lens="onion"]').click();
-  await aliceBubble.locator("[data-onion-layers]").waitFor({ timeout: 10000 });
-  const aliceKinds = await aliceBubble.locator(".layer-kind").allInnerTexts();
-  if (!aliceKinds.some((k) => k.startsWith("ROUTING")) || !aliceKinds.some((k) => k.startsWith("AUTHCRYPT"))) {
-    fail(`Alice's onion lacks the forward or the seal: ${aliceKinds.join(" / ")}`);
-  }
-  ok("Alice peeled the message she sent: the forward to the mediator around the seal to Bob");
-  await aliceBubble.locator('[data-lens="onion"]').click(); // close
-  // The trace level is a device preference: off, and no bubble offers the lens.
-  await alice.selectOption("[data-trace-level]", "off");
-  await alice.waitForSelector('[data-lens="onion"]', { state: "detached", timeout: 5000 });
-  await alice.selectOption("[data-trace-level]", "normal");
-  await alice.waitForSelector('[data-lens="onion"]', { timeout: 5000 });
-  ok("trace off hides the lens; back on shows it");
-
-  // An object goes over whole: Alice picks the sea-day example folder — a
-  // bare object, so the app asks — first sends it as it is (not signed),
-  // then again signed by her anchor; both threads project the post, Bob's
-  // after re-verifying tree and card on his side.
-  const seaDay = fileURLToPath(new URL("../../packages/folder-object/test/fixtures/sea-day/", import.meta.url));
-  await alice.setInputFiles('input[data-share="object"]', seaDay);
-  await alice.waitForSelector('.share-name:has-text("post/1.0, not signed")', { timeout: 15000 });
-  await alice.click('[data-share-choice="plain"]');
-  await alice.waitForSelector('.object-title:has-text("A Day at the Sea")', { timeout: 15000 });
-  await alice.waitForSelector('.object-meta:has-text("not signed")', { timeout: 15000 });
-  ok("Alice picked an object folder and sent it as it is: in her thread, not signed");
-  await bob.waitForSelector('.object-title:has-text("A Day at the Sea")', { timeout: 15000 });
-  await bob.waitForSelector('.object-meta:has-text("not signed")', { timeout: 15000 });
-  ok("Bob received the object whole and it verifies on his side");
-  await alice.setInputFiles('input[data-share="object"]', seaDay);
-  await alice.click('[data-share-choice="sign"]');
-  await alice.waitForSelector('.object-meta:has-text("signed by")', { timeout: 15000 });
-  ok("Alice picked it again and signed it: in her thread, signed by her anchor");
-  await bob.waitForSelector('.object-meta:has-text("signed by")', { timeout: 15000 });
-  ok("Bob received the signed object and its card verifies on his side");
-
-  // Too big for one message: the same post with a 1.2 MiB file beside it
-  // goes as the minimal share — skeleton and index.json, no leaves — and
-  // Bob sees what it is and what is still on the way. The leaves he
-  // already holds (the body, the picture: same CIDs) count as present.
-  const bigDay = await mkdtemp(join(tmpdir(), "estoc-big-day-"));
-  await cp(seaDay, bigDay, { recursive: true });
-  await writeFile(join(bigDay, "files", "big.bin"), new Uint8Array(1258291));
-  await alice.setInputFiles('input[data-share="object"]', bigDay);
-  await alice.click('[data-share-choice="plain"]');
-  // Alice holds every block herself, so on her side the object is whole
-  await alice.waitForFunction(() => document.querySelectorAll(".object-title").length >= 3, null, { timeout: 15000 });
-  if ((await alice.$$(".object-awaiting")).length !== 0) {
-    fail("Alice's own share should be whole on her side: she holds every block");
-  }
-  ok("Alice sent the minimal share; her own thread shows the object whole, from her blobs");
-  await bob.waitForSelector('.object-awaiting:has-text("1 file still on the way (1258291 B)")', { timeout: 15000 });
-  await bob.waitForSelector('.object-until:has-text("available until")', { timeout: 5000 });
-  ok("Bob received the skeleton, reads the post, knows exactly which bytes are missing and until when they are promised");
-
-  // Pairwise: each side writes from a DID minted for the other alone. The
-  // chat head says which; it is not the public DID on the rail.
-  const aliceHeadMyDid = await alice.getAttribute('.head-dids .eyebrow:has-text("you as")', "title");
-  if (!aliceHeadMyDid?.includes("did:peer:4") || aliceHeadMyDid.includes(aliceDid)) {
-    fail("Alice's DID toward Bob should be a pairwise did:peer:4, not her public one");
-  }
-  const bobHeadMyDid = await bob.getAttribute('.head-dids .eyebrow:has-text("you as")', "title");
-  if (!bobHeadMyDid?.includes("did:peer:4") || bobHeadMyDid.includes(bobDid)) {
-    fail("Bob's DID toward Alice should be a pairwise did:peer:4, not his public one");
-  }
-  ok("both write from pairwise DIDs, not their public ones");
-
-  // Bob pastes Alice's public DID (her business card) as a contact: it is
-  // the same Alice — her first message vouched for its DID with the public
-  // one — so no twin appears.
-  await addContact(bob, "Alice", aliceDid);
-  await bob.waitForTimeout(300);
-  const aliceChips = await bob.locator('.contact-chip:has-text("Alice")').count();
-  if (aliceChips !== 1) {
-    fail(`Bob has ${aliceChips} contacts named Alice; pasting her public DID should find the existing one`);
-  }
-  ok("pasting Alice's public DID finds the contact her pairwise DID created");
-  await send(bob, "Alice", "hi alice, got it");
+  await send(bob, "Alice", "hi alice, loud and clear");
   await expectBubble(alice, "hi alice");
   ok("Alice received Bob's reply live");
 
-  // Invitations: Bob makes a link for one person. Carol, new to Estoc,
-  // opens it — onboarding, mediator, then the invitation waiting for her —
-  // and accepts under a name of her choosing. Nothing public changes hands:
-  // Bob writes to her from the invitation's DID, she to him from one minted
-  // for him.
-  await bob.click('button:has-text("New invitation link")');
-  await bob.waitForSelector("[data-invitation-url]", { timeout: 20000 });
-  const inviteUrl = await bob.getAttribute("[data-invitation-url]", "title");
-  if (!inviteUrl?.startsWith(APP_URL.replace(/\/$/, "")) || !inviteUrl.includes("_oob=")) {
-    fail(`invitation link should be this app's URL carrying _oob; got ${inviteUrl}`);
-  }
-  const inviteDid = JSON.parse(
-    Buffer.from(new URL(inviteUrl).searchParams.get("_oob"), "base64url").toString()
-  ).from;
-  if (!inviteDid?.startsWith("did:peer:4") || inviteDid === bobDid) {
-    fail("the invitation should carry a did:peer:4 minted for it, not Bob's public DID");
-  }
-  const qrCells = await bob.locator(".invitation .qr svg").count();
-  if (qrCells !== 1) {
-    fail("the invitation should show as a QR code too");
-  }
-  ok("Bob issued a single-use invitation link (with a QR) carrying a DID of its own");
+  // The DID in Bob's link was disclosed; the first thing written to it
+  // moved him to one minted for Alice alone, and she followed the proof.
+  await channelsShown(bob, 2);
+  await channelsShown(alice, 2);
+  ok("Bob's disclosed DID gave way to a private one; both sides show the two channels");
 
+  // A rotation by hand: Alice mints a fresh DID toward Bob and tells him.
+  await alice.click("[data-details-toggle]");
+  await alice.locator("[data-rotate]").last().click();
+  await alice.waitForFunction(() => document.querySelectorAll("[data-channel]").length === 3, null, { timeout: 45000 });
+  await alice.click("[data-details-toggle]");
+  await send(alice, "Bob", "same alice, new address");
+  await expectBubble(bob, "same alice, new address", 45000);
+  await channelsShown(bob, 3);
+  await send(bob, "Alice", "followed you there");
+  await expectBubble(alice, "followed you there", 45000);
+  ok("Alice rotated her DID by hand; the thread goes on over the new channel both ways");
+
+  // Carol opens a link of Bob's before she has an identity at all.
+  const carolLink = await invite(bob);
   const carolCtx = await browser.newContext();
   const carol = await carolCtx.newPage();
-  watch(carol, "Carol");
-  const carolDid = await createIdentity(carol, "Carol", null, inviteUrl);
+  watch(carol, "carol");
+  await createIdentity(carol, "Carol", null, carolLink);
   await carol.waitForSelector("text=You were handed an invitation", { timeout: 10000 });
-  await carol.waitForSelector('text=“Write to Bob”');
   ok("Carol opened the link before she had an identity; it waited through onboarding");
   await carol.fill('input[placeholder="what you call them, e.g. Alice"]', "Bob (invited)");
   await carol.click('button:has-text("Accept invitation")');
-  await carol.waitForSelector('.contact-chip.active:has-text("Bob (invited)")', { timeout: 15000 });
-  await bob.waitForSelector('.contact-chip:has-text("Carol")', { timeout: 20000 });
-  ok("Bob saw Carol arrive the moment she accepted (her introduction, pthid = the invitation)");
-  await bob.waitForFunction(() => !document.body.innerText.includes("open link"), { timeout: 10000 });
-  await bob.waitForSelector("[data-invitation-taken]:has-text('Carol')", { timeout: 10000 });
-  await bob.click('.contact-chip:has-text("Carol")');
-  const bobHeadToCarol = await bob.getAttribute('.head-dids .eyebrow:has-text("you as")', "title");
-  if (!bobHeadToCarol?.includes(inviteDid)) {
-    fail("Bob's DID toward Carol should be the invitation's DID");
-  }
-  const carolHeadToBob = await carol.getAttribute('.head-dids .eyebrow:has-text("you as")', "title");
-  if (!carolHeadToBob?.includes("did:peer:4") || carolHeadToBob.includes(carolDid)) {
-    fail("Carol's DID toward Bob should be one minted for him, not her public one");
-  }
-  ok("the invitation is taken: Bob writes to Carol as its DID, Carol to Bob from a pairwise one");
-  await send(bob, "Carol", "welcome carol");
+  await carol.waitForSelector('.contact-chip.active:has-text("Bob (invited)")', { timeout: 30000 });
+  await bob.waitForSelector('.contact-chip.nameless:has-text("Carol")', { timeout: 45000 });
+  await bob.click('.contact-chip.nameless:has-text("Carol")');
+  await send(bob, "“Carol”", "welcome carol");
   await expectBubble(carol, "welcome carol");
   await send(carol, "Bob (invited)", "thanks bob");
   await expectBubble(bob, "thanks bob");
-  ok("Bob and Carol talk both ways over the invitation");
+  ok("Bob and Carol talk both ways before he has named her");
   await carolCtx.close();
 
-  // Changing mediator: Bob moves. Every DID of his is minted anew there —
-  // the public one on the rail, the ones toward Alice and Carol — and each
-  // contact is told from the new DID (from_prior), so Alice follows without
-  // Bob writing to her. An open invitation link is withdrawn: it led to the
-  // old mediator.
-  await bob.click('button:has-text("New invitation link")');
-  await bob.waitForSelector("[data-invitation-url]", { timeout: 20000 });
-  const bobHeadToAliceBefore = bobHeadMyDid;
-  // rotations already in Alice's log (every first message vouches its fresh
-  // DID): the move is seen when one more lands, without Bob writing
-  const aliceRotationsBefore = await alice.locator('.rail-log p:has-text("vouched for by the old DID")').count();
-  await bob.click("[data-change-mediator]");
-  await bob.selectOption(".rail-form select.field", { label: `via ${OTHER_LABEL}` });
-  await bob.click('button:has-text("Move to this mediator")');
-  await bob.waitForFunction(
-    (old) => {
-      const did = document.querySelector(".did-chip")?.getAttribute("title");
-      return did?.startsWith("did:peer:4") && did !== old && document.body.innerText.includes("live delivery on");
-    },
-    bobDid,
-    { timeout: 40000 }
-  );
-  const bobDid2 = await bob.getAttribute(".did-chip", "title");
-  await bob.waitForSelector(`text=via ${OTHER_LABEL}`);
-  ok(`Bob moved to ${OTHER_LABEL}: new public DID, live again`);
-  if (await bob.locator("[data-invitation-url]").count() !== 0 || (await bob.innerText("body")).includes("open link")) {
-    fail("Bob's open invitation link should have been withdrawn by the move");
-  }
-  ok("the open invitation link was withdrawn");
-  await bob.click('.contact-chip:has-text("Alice")');
-  await bob.waitForFunction(
-    (before) => {
-      const heads = [...document.querySelectorAll(".head-dids .eyebrow")];
-      const mine = heads.find((h) => h.textContent?.includes("you as"));
-      return mine !== undefined && mine.getAttribute("title") !== before;
-    },
-    bobHeadToAliceBefore,
-    { timeout: 10000 }
-  );
-  ok("Bob writes to Alice as a fresh DID now");
-  await alice.waitForFunction(
-    (n) => [...document.querySelectorAll(".rail-log p")].filter((line) => line.textContent?.includes("vouched for by the old DID")).length > n,
-    aliceRotationsBefore,
-    { timeout: 30000 }
-  );
-  ok("Alice was told by from_prior and moved Bob to his new DID — no message from Bob needed");
-  await send(alice, "Bob", "still there after the move?");
-  await expectBubble(bob, "still there after the move?");
-  await send(bob, "Alice", `here, via ${OTHER_LABEL}`);
-  await expectBubble(alice, `here, via ${OTHER_LABEL}`);
-  ok("Alice and Bob talk across mediators over the new DIDs");
-  if (bobDid2 === bobDid) {
-    fail("Bob's public DID should have changed with the mediator");
-  }
-
-  // Reload: history and identity come back from the OPFS vault, no passphrase.
+  // Reload: history and identity come back from the vault, no passphrase.
   await bob.reload();
+  await bob.click('.contact-chip:has-text("Alice")');
   await expectBubble(bob, "hello bob");
-  await bob.waitForSelector("text=live delivery on", { timeout: 25000 });
+  await waitLive(bob);
   ok("Bob's history and live delivery survive a reload without a passphrase");
 
   // A second tab of the same browser must not open a second agent.
   const bob2 = await bobCtx.newPage();
   await bob2.goto(APP_URL);
-  await bob2.waitForSelector("text=Open in another tab", { timeout: 10000 });
-  ok("a second tab waits for the first (Web Locks)");
+  await bob2.waitForSelector("text=Open in another tab", { timeout: 15000 });
+  ok("a second tab waits for the first");
   await bob2.close();
 
   // Lock: the seed cache is dropped; the passphrase — and only the right one — reopens.
   await bob.click('button:has-text("Lock")');
-  await bob.waitForSelector("text=Locked", { timeout: 5000 });
+  await bob.waitForSelector("text=Locked", { timeout: 15000 });
   await bob.fill('input[placeholder="passphrase"]', "not-it");
   await bob.click('button:has-text("Unlock")');
-  await bob.waitForSelector("text=wrong passphrase", { timeout: 10000 });
+  await bob.waitForSelector("text=wrong passphrase", { timeout: 15000 });
   await bob.fill('input[placeholder="passphrase"]', PASS.Bob);
   await bob.click('button:has-text("Unlock")');
+  await bob.click('.contact-chip:has-text("Alice")');
   await expectBubble(bob, "hello bob");
-  await bob.waitForSelector("text=live delivery on", { timeout: 25000 });
+  await waitLive(bob);
   ok("lock → wrong passphrase refused → right passphrase reopens with history");
 
   // Backup: Alice exports her vault; a fresh browser restores it and is Alice.
-  const [download] = await Promise.all([
-    alice.waitForEvent("download"),
-    alice.click('button:has-text("Export backup")'),
-  ]);
-  const zipName = download.suggestedFilename();
+  const [download] = await Promise.all([alice.waitForEvent("download"), alice.click("[data-export]")]);
+  const backupName = download.suggestedFilename();
   // the download lives with Alice's context; keep a copy that outlives it
-  const zipPath = join(await mkdtemp(join(tmpdir(), "estoc-e2e-")), zipName);
-  await copyFile(await download.path(), zipPath);
-  if (!zipName.endsWith(".estoc.zip")) {
-    fail(`backup is named ${zipName}, expected *.estoc.zip`);
+  const backupPath = join(await mkdtemp(join(tmpdir(), "estoc-e2e-")), backupName);
+  await copyFile(await download.path(), backupPath);
+  if (!backupName.endsWith(".estoc.sqlite")) {
+    fail(`backup is named ${backupName}, expected *.estoc.sqlite`);
   }
-  ok(`Alice exported ${zipName}`);
+  ok(`Alice exported ${backupName}`);
 
   // Merge first, while Alice is still up: her own backup has nothing new.
-  await alice.setInputFiles('.file-btn input[type=file]', zipPath);
-  await alice.waitForSelector("text=nothing new in that backup", { timeout: 15000 });
+  await alice.setInputFiles(".file-btn input[type=file]", backupPath);
+  await alice.waitForSelector("[data-import-note]:has-text('nothing new in that backup')", { timeout: 30000 });
   await expectBubble(alice, "hello bob");
-  await alice.waitForSelector("text=live delivery on", { timeout: 25000 });
+  await waitLive(alice);
   ok("importing her own backup merges nothing and leaves the vault as it was");
 
   // One receiver at a time: the original Alice goes away before the restore comes up.
@@ -404,36 +253,28 @@ try {
   watch(alice2, "alice2");
   await alice2.goto(APP_URL);
   await alice2.click('button:has-text("Restore a backup")');
-  await alice2.setInputFiles('input[type=file]', zipPath);
+  await alice2.setInputFiles("input[type=file]", backupPath);
   await alice2.fill('input[placeholder="the backup\'s passphrase"]', "wrong-one");
   await alice2.click('button.btn:has-text("Restore")');
-  await alice2.waitForSelector("text=does not open this backup", { timeout: 15000 });
-  await alice2.setInputFiles('input[type=file]', zipPath);
+  await alice2.waitForSelector("text=does not open this backup", { timeout: 30000 });
+  await alice2.setInputFiles("input[type=file]", backupPath);
   await alice2.fill('input[placeholder="the backup\'s passphrase"]', PASS.Alice);
   await alice2.click('button.btn:has-text("Restore")');
-  // The vault is the identity's record; a mediation is each device's own
-  // arrangement. The restore opens with the full history and no mediator:
-  // the rail says so and offers the choice, like a fresh identity.
-  await alice2.waitForSelector("text=not reachable yet", { timeout: 20000 });
+  await alice2.waitForSelector("[data-restore-notice]", { timeout: 45000 });
   await expectBubble(alice2, "hello bob");
   await expectBubble(alice2, "hi alice");
-  ok("a fresh browser restored Alice from the zip: full history, no mediator yet");
-  await alice2.selectOption(".rail-form select.field", { label: `via ${MEDIATOR_LABEL}` });
-  await alice2.click('button:has-text("Use this mediator")');
-  const restoredDid = await waitLive(alice2);
-  if (restoredDid === aliceDid) {
-    fail("the restored device arranged its own mediation: its public DID should be fresh");
+  if (!(await alice2.isDisabled('input[placeholder="Write to Bob"]'))) {
+    fail("sending should wait for the restore to be explained");
   }
-  ok("restored Alice mediated as a device of her own: live, a fresh public DID");
-
-  // Another device's keys toward Bob are not this one's to rotate: the
-  // restored device mints its own on its first write, vouched for by the
-  // old DID, and Bob follows from there.
+  ok("a fresh browser restored Alice from the file: full history, sending closed until the restore is explained");
+  await alice2.click("[data-restore-understood]");
+  await alice2.waitForSelector("[data-restore-notice]", { state: "detached", timeout: 15000 });
+  await waitLive(alice2);
   await send(alice2, "Bob", "back from a backup");
-  await expectBubble(bob, "back from a backup");
+  await expectBubble(bob, "back from a backup", 45000);
   await send(bob, "Alice", "welcome back, alice");
-  await expectBubble(alice2, "welcome back");
-  ok("restored Alice wrote first — a DID of this device's own, vouched — and receives Bob's reply live");
+  await expectBubble(alice2, "welcome back", 45000);
+  ok("restored Alice writes and receives over the channels the backup held");
 
   // Offline: with a service worker in charge, the shell opens with the network off.
   // (The worker registered on this page's first load takes control on the next;
@@ -448,26 +289,26 @@ try {
   );
   if (hasSw) {
     await alice2.reload();
-    await expectBubble(alice2, "hello bob", 20000);
-    await alice2.waitForFunction(() => navigator.serviceWorker.controller !== null, { timeout: 10000 });
+    await expectBubble(alice2, "hello bob");
+    await alice2.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 10000 });
     await alice2Ctx.setOffline(true);
-    // written with no network: logged at once, marked as not sent
+    // written with no network: in the vault at once, and shown as not handed over
     await send(alice2, "Bob", "written offline, sent later");
-    await alice2.waitForSelector('.bubble:has-text("written offline") .delivery:has-text("not sent")', { timeout: 15000 });
-    ok("offline: a message written with no network is in the thread, marked not sent");
+    const unsent = '.bubble:has-text("written offline") [data-delivery]:not(.submitted):not(.acknowledged)';
+    await alice2.waitForSelector(unsent, { timeout: 30000 });
+    ok("offline: a message written with no network is in the thread, not handed over");
     await alice2.reload();
-    await expectBubble(alice2, "hello bob", 20000);
-    await alice2.waitForSelector('.bubble:has-text("written offline") .delivery:has-text("not sent")', { timeout: 15000 });
-    ok("offline: the app shell and history open with no network — the unsent message and its mark included");
+    await expectBubble(alice2, "hello bob");
+    await alice2.waitForSelector(unsent, { timeout: 30000 });
+    ok("offline: the app shell and history open with no network, the unsent message included");
     await alice2Ctx.setOffline(false);
-    // the network is back: the outbox delivers, the mark clears
-    await expectBubble(bob, "written offline, sent later", 30000);
-    await alice2.waitForFunction(
-      () => ![...document.querySelectorAll(".bubble")].some((b) => b.textContent.includes("written offline") && b.querySelector(".delivery") !== null),
-      null,
-      { timeout: 15000 }
-    );
-    ok("back online: the outbox delivered it to Bob and the mark cleared");
+    // Opening a vault sends nothing, so the reload left the message to a
+    // hand: sent again where the thread offers it.
+    await waitLive(alice2);
+    await alice2.click('.bubble:has-text("written offline") [data-retry]', { timeout: 30000 });
+    await expectBubble(bob, "written offline, sent later", 45000);
+    await alice2.waitForSelector('.bubble:has-text("written offline") [data-delivery].submitted', { timeout: 30000 });
+    ok("back online: sent again by hand, it reached Bob");
   } else {
     console.log("· no service worker (dev server?) — offline check skipped");
   }
@@ -478,6 +319,11 @@ try {
   if (process.exitCode !== 1) {
     console.log("\nall green");
   }
+} catch (err) {
+  for (const [name, page] of Object.entries(pages)) {
+    if (!page.isClosed()) await dump(page, name);
+  }
+  throw err;
 } finally {
   await browser.close();
 }

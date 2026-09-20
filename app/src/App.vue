@@ -1,39 +1,36 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 
-import { forgetIdentity, state } from "./core/store.js";
+import { discardFolderVault, state } from "./core/store.js";
 import ChatPane from "./ui/ChatPane.vue";
 import Onboarding from "./ui/Onboarding.vue";
 import Rail from "./ui/Rail.vue";
 import Unlock from "./ui/Unlock.vue";
 
-const identity = computed(() => state.identity);
-
-function forget() {
-  if (confirm("Delete this vault from this browser? There is no way back except a backup zip.")) {
-    void forgetIdentity();
+function startOver() {
+  if (confirm("Delete the old vault from this browser? There is no way back except a backup made by the version that wrote it.")) {
+    void discardFolderVault();
   }
 }
 
-// Conversations are selected by the contact's cid — their DID is a history
-// that can move under a thread; the cid does not.
-const selectedContactCid = ref<string | null>(null);
+// A conversation is selected by its key: a contact's ID, or for one not
+// named yet the pair it leads to. The DIDs under it can move; the key of
+// a contact does not.
+const selected = ref<string | null>(null);
 
-// The first contact (added by hand or auto-created by an incoming message)
-// becomes the open conversation if none is.
+// The first conversation, opened by an invitation either way, becomes the
+// open one if none is.
 watch(
-  () => identity.value?.contacts.length ?? 0,
-  () => {
-    if (
-      selectedContactCid.value === null ||
-      !identity.value?.contacts.some((c) => c.cid === selectedContactCid.value)
-    ) {
-      selectedContactCid.value = identity.value?.contacts[0]?.cid ?? null;
+  () => state.conversations,
+  (conversations) => {
+    if (selected.value === null || !conversations.some((c) => c.key === selected.value)) {
+      selected.value = conversations[0]?.key ?? null;
     }
   },
   { immediate: true }
 );
 
+const mediated = computed(() => state.snapshot?.mediations.some((m) => m.selected) ?? false);
 const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new URL(state.daemonAt).host));
 </script>
 
@@ -46,8 +43,8 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
       <h1>Open in another tab</h1>
       <p>
         Your vault is in use by another tab or window of this browser. One
-        agent at a time keeps the message log honest — close the other one
-        and this tab takes over on its own.
+        agent at a time holds the vault: close the other one and this tab
+        takes over on its own.
       </p>
     </div>
   </div>
@@ -58,17 +55,14 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
     <div class="hollow-card">
       <div class="eyebrow">Estoc</div>
       <h1>Vault not readable</h1>
-      <p>
-        There is a vault in this browser, but this version of the app cannot
-        open it{{ state.status.state === "error" ? `: ${state.status.detail}` : "." }}
-      </p>
+      <p>This version of the app cannot open what is here{{ state.phaseDetail === null ? "." : `: ${state.phaseDetail}` }}</p>
       <p class="fine">
-        Nothing has been changed. If it came from a newer version, update the app.
-        If it is a version 1 vault from before the format change, this version
-        cannot read it: export a backup with the app version that wrote it if
-        you want to keep it, then
-        <button class="link" @click="forget">start over</button> to delete it
-        and begin a new identity.
+        Nothing has been changed. If it came from a newer version, update the
+        app. A vault of the earlier folder format is not read or converted:
+        export a backup with the app version that wrote it if you want to keep
+        it<template v-if="state.daemonAt === null"
+          >, then <button class="link" @click="startOver">start over</button> to delete it and begin a new identity</template
+        >.
       </p>
     </div>
   </div>
@@ -95,10 +89,12 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
   <div v-else class="frame">
     <Rail />
     <ChatPane
-      v-if="identity"
-      :identity="identity"
-      :selected-contact-cid="selectedContactCid"
-      @select-contact="(cid) => (selectedContactCid = cid)"
+      v-if="state.snapshot"
+      :conversations="state.conversations"
+      :selected="selected"
+      :mediated="mediated"
+      :sends-closed="state.snapshot.restoreUnexplained"
+      @select="(key) => (selected = key)"
     />
   </div>
 

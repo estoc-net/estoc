@@ -29,24 +29,15 @@ importers:
       '@estoc/event-store':
         specifier: workspace:^
         version: link:../packages/event-store
-      '@estoc/folder-object':
-        specifier: workspace:^
-        version: link:../packages/folder-object
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../packages/keystore
-      '@estoc/post':
-        specifier: workspace:^
-        version: link:../packages/post
       '@estoc/vault':
         specifier: workspace:^
         version: link:../packages/vault
       '@vitejs/plugin-vue':
         specifier: ^5.2.0
         version: 5.2.4(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(vue@3.5.41(typescript@5.8.3))
-      fflate:
-        specifier: ^0.8.2
-        version: 0.8.3
       playwright-core:
         specifier: ^1.62.1
         version: 1.62.1
