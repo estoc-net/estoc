@@ -287,6 +287,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     }
     for (const channel of records.channels()) if (!channels.has(keyOf(channel))) channels.set(keyOf(channel), await records.channel(channel));
     return {
+      anchor: runtime.metadata.anchor as Did,
       label: fold.label ?? "",
       restoreUnexplained: !(await explained(runtime)),
       mediations: [...fold.mediations.mediations.values()].map((mediation) => ({

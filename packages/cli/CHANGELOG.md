@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- **The vault is version 3**: `estoc init` makes `.estoc/vault.sqlite` as
+  the daemon's Node host keeps it (`@estoc/daemon/v3/node`), with the
+  seed sealed inside it and the label as its first `identity.label`, and
+  `estoc serve` runs the version-3 daemon on it. A `.estoc` of the
+  folder format is refused by every command and nothing is written
+  beside it.
+- **One process has the folder at a time.** A command takes the folder
+  the way a daemon does and lets go when it ends. Where a daemon holds
+  it, `init` and `status` ask that daemon at the socket it left word of
+  in `.estoc/daemon.url`: `init` has it make the vault, `status` shows
+  its phase and, of an open vault, the label and the anchor. `object
+  sign` is refused there: the seed stays in the process that unlocked
+  it.
+- **`estoc key list` and `estoc key new` are gone.** The vault keeps no
+  list of key names; `object sign --key <name>` derives the key of that
+  name as before. `readConfig`, `readKeystore`, `createVaultKey`,
+  `VaultConfig` and `KeyRef` leave the library with them; `vaultStatus`
+  is what `status` reads.
+
 ## 0.5.0 — 2026-09-01
 
 - The vault `estoc init` writes and `estoc serve` opens is version 2

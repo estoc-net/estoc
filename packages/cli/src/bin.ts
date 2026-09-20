@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { listKeys } from "@estoc/keystore";
 import {
   hashObject,
   readAny,
@@ -17,33 +16,25 @@ import { readTree, writeTree } from "@estoc/folder-object/fs";
 import { isPost, renderPost, validatePost } from "@estoc/post";
 import { unzipTree, zipTree } from "@estoc/folder-object/zip";
 import { appDir } from "@estoc/app";
-import { exitOnSignal, runDaemon } from "@estoc/daemon/node";
+import { exitOnSignal, runDaemon } from "@estoc/daemon/v3/node";
 import { promptNewPassphrase, promptPassphrase } from "./prompt.js";
 import { fill } from "./template.js";
-import {
-  ANCHOR_KEY_NAME,
-  createVaultKey,
-  findVault,
-  initVault,
-  openVault,
-  openVaultKey,
-  readConfig,
-  readKeystore,
-  type Vault,
-} from "./vault.js";
+import { ANCHOR_KEY_NAME, findVault, initVault, openVault, openVaultKey, vaultStatus, type Vault } from "./vault.js";
 
 const USAGE = `usage: estoc <command>
 
   init [--label <label>]         create a vault here: a .estoc directory with
-                                 one seed-sealed keystore and its anchor key
-  status                         show the enclosing vault and its keys
-  key list                       list keys as JSON (no passphrase needed)
-  key new <name>                 derive a key by name and record it
+                                 one SQLite vault, its seed sealed under a
+                                 passphrase
+  status                         show the enclosing vault: its anchor, its
+                                 label, the daemon that holds it if one does
+                                 (no passphrase needed)
 
   object hash   [<dir>]          root CID of a folder-object (default: .)
   object sign   [<dir>] [--key <name>] [--out <signedDir>] [--zip <file>]
-                                 sign the object with a vault key (default:
-                                 anchor); prints the card, or lays the signed
+                                 sign the object with the key <name> derives
+                                 under the vault's seed (default: anchor);
+                                 prints the card, or lays the signed
                                  object ({object/, card.jws}) out under --out
                                  and/or zips it to --zip
   object verify [<signedDir | signed.zip | objectDir>] [--card card.jws]
@@ -62,7 +53,7 @@ const USAGE = `usage: estoc <command>
                                  run the daemon on the enclosing vault (make
                                  one with init) and serve the app for it at
                                  http://127.0.0.1:37862/; the page talks to
-                                 this process, the vault is that .estoc.
+                                 this process, the vault is in that .estoc.
                                  --app <url> also prints a ?_daemon= link
                                  for an app served elsewhere
 
@@ -71,6 +62,9 @@ options:
                   the working directory (env: ESTOC_VAULT)
   --version       print the version
   -h, --help      show this help
+
+While a daemon runs on the vault the folder is its own: init and status
+ask it, and sign waits until it is stopped.
 
 Passphrase prompts read ESTOC_PASSPHRASE if set, else a no-echo prompt on a
 TTY, else one line of stdin.
@@ -101,26 +95,16 @@ async function cmdInit(label: string | undefined) {
 
 async function cmdStatus(vaultFlag: string | undefined) {
   const vault = await requireVault(vaultFlag);
-  const config = await readConfig(vault);
-  const keys = listKeys(await readKeystore(vault));
+  const status = await vaultStatus(vault);
   process.stdout.write(`vault   ${vault.root}\n`);
-  process.stdout.write(`label   ${config.label ?? "(none)"}\n`);
-  process.stdout.write(`anchor  ${config.identity.anchor.did}\n`);
-  for (const key of keys) {
-    process.stdout.write(`key     ${key.name}  ${key.did}  ${key.createdAt}\n`);
+  if (status.daemon !== null) {
+    const { at, phase, detail } = status.daemon;
+    process.stdout.write(`daemon  ${at}  ${phase}${detail === null ? "" : `: ${detail}`}\n`);
   }
-}
-
-async function cmdKeyList(vaultFlag: string | undefined) {
-  const vault = await requireVault(vaultFlag);
-  const keys = listKeys(await readKeystore(vault));
-  process.stdout.write(JSON.stringify(keys, null, 2) + "\n");
-}
-
-async function cmdKeyNew(vaultFlag: string | undefined, name: string) {
-  const vault = await requireVault(vaultFlag);
-  const did = await createVaultKey(vault, name, await promptPassphrase());
-  process.stdout.write(`${name}  ${did}\n`);
+  if (status.anchor !== null) {
+    process.stdout.write(`label   ${status.label ?? "(none)"}\n`);
+    process.stdout.write(`anchor  ${status.anchor}\n`);
+  }
 }
 
 interface ServeFlags {
@@ -284,16 +268,6 @@ async function main() {
     case "status":
       await cmdStatus(values.vault);
       return;
-    case "key": {
-      const sub = rest[0];
-      if (sub === "list") return cmdKeyList(values.vault);
-      if (sub === "new") {
-        const name = rest[1];
-        if (!name) throw new Error("usage: estoc key new <name>");
-        return cmdKeyNew(values.vault, name);
-      }
-      throw new Error(`unknown key subcommand: ${sub ?? "(none)"}`);
-    }
     case "object":
       await cmdObject(rest[0], rest[1] ?? ".", values);
       return;

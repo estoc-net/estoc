@@ -56,6 +56,8 @@ export interface ContactSummary extends Omit<ContactRecord, "channels"> {
 
 /** The vault as records, read off one fold. The UI projects from here, and takes the next snapshot whole. */
 export interface Snapshot {
+  /** the did:key the vault's seed derives: the identity every replica of this vault shares */
+  anchor: Did;
   label: string;
   /**
    * The vault was restored from a snapshot and the person has not yet

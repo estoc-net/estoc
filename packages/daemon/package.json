@@ -11,7 +11,7 @@
   },
   "type": "module",
   "bin": {
-    "estoc-daemon": "./dist/node/bin.js"
+    "estoc-daemon": "./dist/v3/node/bin.js"
   },
   "exports": {
     ".": {

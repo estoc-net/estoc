@@ -1,63 +1,46 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { listKeys, parseSeedKeystore } from "@estoc/keystore";
+import { SOCKET_FILE, runDaemon, type Served } from "@estoc/daemon/v3/node";
 import { hashObject, readObject, signObject, verifyObjectCard } from "@estoc/folder-object";
 import { readTree } from "@estoc/folder-object/fs";
-import {
-  ANCHOR_KEY_NAME,
-  ESTOC_DIR,
-  createVaultKey,
-  findVault,
-  initVault,
-  openVault,
-  openVaultKey,
-  readConfig,
-  readKeystore,
-} from "../src/vault.js";
+import { ANCHOR_KEY_NAME, ESTOC_DIR, findVault, initVault, openVault, openVaultKey, vaultStatus } from "../src/vault.js";
 
 const PASSPHRASE = "correct horse battery staple";
 const seaDay = fileURLToPath(new URL("../../folder-object/test/fixtures/sea-day/", import.meta.url));
 
 let base: string;
+let daemons: Served[];
 
 beforeEach(async () => {
   base = await mkdtemp(path.join(os.tmpdir(), "estoc-cli-"));
+  daemons = [];
 });
 
 afterEach(async () => {
+  for (const daemon of daemons) await daemon.close();
   await rm(base, { recursive: true, force: true });
 });
 
+async function daemonOn(root: string): Promise<Served> {
+  const served = await runDaemon({ root, port: 0, appDir: null, log: () => undefined });
+  daemons.push(served);
+  return served;
+}
+
 describe("initVault", () => {
-  it("creates .estoc with a config and a v3 keystore holding the anchor", async () => {
+  it("makes a vault the passphrase opens, under the anchor its seed derives", async () => {
     const root = path.join(base, "my-vault");
     const { vault, did } = await initVault(root, "my-vault", PASSPHRASE);
 
     expect(vault.dir).toBe(path.join(root, ESTOC_DIR));
     expect(did).toMatch(/^did:key:z6Mk/);
+    expect((await readdir(vault.dir)).filter((name) => name.endsWith(".sqlite")).sort()).toEqual(["owner.sqlite", "vault.sqlite"]);
+    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "my-vault", daemon: null });
 
-    const config = await readConfig(vault);
-    expect(config).toEqual({
-      format: "estoc",
-      version: 2,
-      label: "my-vault",
-      identity: { anchor: { key: ANCHOR_KEY_NAME, did } },
-    });
-    // version 2 on disk: the config carries the anchor only, the label is an event
-    const onDisk = JSON.parse(await readFile(path.join(vault.dir, "config.json"), "utf8"));
-    expect(onDisk).toEqual({ format: "estoc", version: 2, identity: { anchor: { key: ANCHOR_KEY_NAME, did } } });
-
-    const doc = parseSeedKeystore(await readFile(path.join(vault.dir, "keystore.json"), "utf8"));
-    expect(doc.version).toBe(3);
-    expect(listKeys(doc)).toHaveLength(1);
-    expect(listKeys(doc)[0]).toMatchObject({ name: ANCHOR_KEY_NAME, did });
-
-    // The seed actually unlocks with the init passphrase and derives the anchor.
-    const anchor = await openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE);
-    expect(anchor.did).toBe(did);
+    expect((await openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).did).toBe(did);
     await expect(openVaultKey(vault, ANCHOR_KEY_NAME, "wrong")).rejects.toThrow();
   });
 
@@ -67,17 +50,27 @@ describe("initVault", () => {
     expect((await stat(root)).isDirectory()).toBe(true);
   });
 
-  it("sets restrictive modes on .estoc and keystore.json", async () => {
+  it("keeps .estoc to its owner", async () => {
     const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
     expect((await stat(vault.dir)).mode & 0o777).toBe(0o700);
-    const keystoreMode = (await stat(path.join(vault.dir, "keystore.json"))).mode;
-    expect(keystoreMode & 0o777).toBe(0o600);
   });
 
-  it("refuses to init where .estoc already exists", async () => {
+  it("refuses a folder that holds a vault already, and leaves it as it is", async () => {
     const root = path.join(base, "v");
-    await initVault(root, "v", PASSPHRASE);
-    await expect(initVault(root, "v", PASSPHRASE)).rejects.toThrow(/already exists/);
+    const { vault, did } = await initVault(root, "first", PASSPHRASE);
+    await expect(initVault(root, "second", "another passphrase")).rejects.toThrow(/already holds a vault/);
+    expect(await vaultStatus(vault)).toMatchObject({ anchor: did, label: "first" });
+  });
+
+  it("writes nothing beside a vault of the folder format", async () => {
+    const root = path.join(base, "v");
+    await mkdir(path.join(root, ESTOC_DIR), { recursive: true });
+    await writeFile(path.join(root, ESTOC_DIR, "config.json"), JSON.stringify({ format: "estoc", version: 2 }));
+
+    await expect(initVault(root, "v", PASSPHRASE)).rejects.toThrow(/folder format/);
+    await expect(vaultStatus(await openVault(root))).rejects.toThrow(/folder format/);
+    await expect(runDaemon({ root, port: 0, appDir: null, log: () => undefined })).rejects.toThrow(/folder format/);
+    expect(await readdir(path.join(root, ESTOC_DIR))).toEqual(["config.json"]);
   });
 });
 
@@ -111,40 +104,13 @@ describe("openVault", () => {
   });
 });
 
-describe("createVaultKey", () => {
-  it("derives a key by name under the same seed and records it", async () => {
-    const { vault, did } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
-    const otherDid = await createVaultKey(vault, "org/estoc", PASSPHRASE);
-
-    const keys = listKeys(await readKeystore(vault));
-    expect(keys.map((k) => k.name)).toEqual([ANCHOR_KEY_NAME, "org/estoc"]);
-    expect(keys.map((k) => k.did)).toEqual([did, otherDid]);
-    expect(otherDid).not.toBe(did);
-
-    // One seed, one passphrase: the new key opens with the vault passphrase
-    // and derives the same DID it was recorded as.
-    const identity = await openVaultKey(vault, "org/estoc", PASSPHRASE);
-    expect(identity.did).toBe(otherDid);
-  });
-
-  it("rejects the wrong passphrase", async () => {
-    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
-    await expect(createVaultKey(vault, "x", "other passphrase")).rejects.toThrow();
-  });
-
-  it("rejects a duplicate name", async () => {
-    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
-    await expect(createVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).rejects.toThrow(/already exists/);
-  });
-});
-
 describe("openVaultKey", () => {
-  it("refuses a keystore that does not derive the recorded anchor", async () => {
-    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
-    const config = await readConfig(vault);
-    config.identity.anchor.did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-    await writeFile(path.join(vault.dir, "config.json"), JSON.stringify(config));
-    await expect(openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).rejects.toThrow(/anchor/);
+  it("derives the same key for a name every time, and another for another name", async () => {
+    const { vault, did } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
+    const blog = await openVaultKey(vault, "blog", PASSPHRASE);
+    expect(blog.did).toMatch(/^did:key:z6Mk/);
+    expect(blog.did).not.toBe(did);
+    expect((await openVaultKey(vault, "blog", PASSPHRASE)).did).toBe(blog.did);
   });
 
   it("signs a folder-object with a vault key that verifies", async () => {
@@ -157,34 +123,48 @@ describe("openVaultKey", () => {
     expect(verdict.matches).toBe(true);
     expect(verdict.root).toBe(await hashObject(object));
   });
+
+  it("says so where no vault was made yet", async () => {
+    const root = path.join(base, "v");
+    await mkdir(path.join(root, ESTOC_DIR), { recursive: true });
+    await expect(openVaultKey(await openVault(root), ANCHOR_KEY_NAME, PASSPHRASE)).rejects.toThrow(/no vault in .* yet/);
+  });
 });
 
-describe("readConfig", () => {
-  it("rejects a config that is not an estoc vault", async () => {
-    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
-    await writeFile(path.join(vault.dir, "config.json"), JSON.stringify({ format: "something-else" }));
-    await expect(readConfig(vault)).rejects.toThrow(/format is "something-else"/);
+describe("a folder a daemon holds", () => {
+  it("is asked of the daemon: a locked vault shows its phase, its keys stay where they are", async () => {
+    const root = path.join(base, "v");
+    const { vault, did } = await initVault(root, "v", PASSPHRASE);
+    const served = await daemonOn(root);
+    const at = new URL(served.url).origin;
+
+    expect(await vaultStatus(vault)).toEqual({ anchor: null, label: null, daemon: { at, phase: "locked", detail: null } });
+    await expect(openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).rejects.toThrow(/holds this vault/);
+    await expect(initVault(root, "again", PASSPHRASE)).rejects.toThrow(/already holds a vault/);
+
+    await served.daemon.unlock(PASSPHRASE);
+    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "v", daemon: { at, phase: "open", detail: null } });
   });
 
-  it("rejects a version 1 vault: this reader opens version 2 only", async () => {
-    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
-    const v1 = { format: "estoc", version: 1, label: "v", identity: { anchor: { key: ANCHOR_KEY_NAME, did: "did:key:z6Mk" } }, mediation: null };
-    await writeFile(path.join(vault.dir, "config.json"), JSON.stringify(v1));
-    await expect(readConfig(vault)).rejects.toThrow(/version 1 is not 2/);
-    // and nothing else of the folder is read (§11): the keystore, intact, is not listed
-    await expect(readKeystore(vault)).rejects.toThrow(/version 1 is not 2/);
-    await expect(createVaultKey(vault, "x", PASSPHRASE)).rejects.toThrow(/version 1 is not 2/);
+  it("has its vault made by the daemon, and is this process's again once the daemon is gone", async () => {
+    const root = path.join(base, "v");
+    const served = await daemonOn(root);
+
+    const { vault, did } = await initVault(root, "made over the socket", PASSPHRASE);
+    expect(await vaultStatus(vault)).toMatchObject({ anchor: did, label: "made over the socket", daemon: { phase: "open" } });
+
+    await served.close();
+    daemons = [];
+    await expect(readFile(path.join(vault.dir, SOCKET_FILE))).rejects.toThrow();
+    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "made over the socket", daemon: null });
+    expect((await openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).did).toBe(did);
   });
 
-  it("refuses to read the keystore of a folder whose config is damaged", async () => {
-    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
-    await writeFile(path.join(vault.dir, "config.json"), "{not json");
-    await expect(readKeystore(vault)).rejects.toThrow(/not JSON/);
-  });
-
-  it("rejects an unsupported version", async () => {
-    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
-    await writeFile(path.join(vault.dir, "config.json"), JSON.stringify({ format: "estoc", version: 99, label: "v" }));
-    await expect(readConfig(vault)).rejects.toThrow(/version 99 is not 2/);
+  it("says who holds it when nobody left word of a socket", async () => {
+    const root = path.join(base, "v");
+    const { vault } = await initVault(root, "v", PASSPHRASE);
+    await daemonOn(root);
+    await rm(path.join(vault.dir, SOCKET_FILE));
+    await expect(vaultStatus(vault)).rejects.toThrow(/held by another process/);
   });
 });

@@ -126,6 +126,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@estoc/agent-core':
+        specifier: workspace:^
+        version: link:../agent-core
       '@estoc/app':
         specifier: workspace:^
         version: link:../../app

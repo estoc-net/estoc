@@ -5,7 +5,7 @@ import { exitOnSignal, installedApp, runDaemon } from "./run.js";
 
 const USAGE = `usage: estoc-daemon [folder] [options]
 
-  Run the Estoc daemon on a folder: <folder>/.estoc is the vault, and the
+  Run the Estoc daemon on a folder: <folder>/.estoc holds the vault, and the
   app connects to this process instead of running its own agent. With
   @estoc/app installed (\`estoc serve\` brings it) the daemon serves the
   app itself: open the link it prints.
@@ -17,7 +17,7 @@ const USAGE = `usage: estoc-daemon [folder] [options]
   --app <url>       also print a link for an app served elsewhere (e.g. a dev
                     server): that page connects here with \`?_daemon=\` and the
                     token, and remembers it until \`?_daemon=off\`
-  --token <t>       the access token (default: kept in .estoc/local/daemon/daemon.token)
+  --token <t>       the access token (default: kept in .estoc/daemon.token)
 `;
 
 async function main(): Promise<void> {

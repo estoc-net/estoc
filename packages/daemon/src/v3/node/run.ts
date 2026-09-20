@@ -1,12 +1,22 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { ESTOC_DIR } from "@estoc/event-store";
 
-import { nodeHost } from "./host.js";
+import { ESTOC_DIR, nodeHost, type NodeHostOptions } from "./host.js";
 import { serveDaemon, type Served } from "./serve.js";
 
-export interface RunOptions {
+/** The access token that stays with the folder, minted the first time a daemon runs on it. */
+export const TOKEN_FILE = "daemon.token";
+
+/**
+ * Where the daemon that holds the folder listens, token included, for
+ * another process on this machine that finds the folder taken. A daemon
+ * that died leaves it behind, so it means something only to somebody
+ * the folder was just refused to.
+ */
+export const SOCKET_FILE = "daemon.url";
+
+export interface RunOptions extends NodeHostOptions {
   /** the folder whose .estoc is the vault */
   root: string;
   port?: number;
@@ -23,21 +33,27 @@ export interface RunOptions {
 /**
  * The daemon as a command: take the folder, mint or read its token, serve,
  * print where, boot. Resolves once the daemon is up; `close()` is the
- * caller's (a signal handler in the bins).
+ * caller's (a signal handler in the bins). A folder that holds a vault
+ * this version does not read is refused before anything is written to it.
  */
 export async function runDaemon(options: RunOptions): Promise<Served> {
   const root = path.resolve(options.root);
+  const dir = path.join(root, ESTOC_DIR);
   const log = options.log ?? ((line) => process.stderr.write(line + "\n"));
-  const token = options.token ?? (await storedToken(root));
+  const host = nodeHost(root, { fetch: options.fetch, WebSocket: options.WebSocket });
+  const refusal = await host.unreadable?.();
+  if (refusal != null) throw new Error(refusal);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const token = options.token ?? (await storedToken(dir));
   const served = await serveDaemon({
-    host: nodeHost(root),
+    host,
     bind: options.bind,
     // 3-7-8-6-2: E-S-T-O-C on a phone keypad
     port: options.port ?? 37862,
     token,
     appDir: options.appDir ?? undefined,
   });
-  log(`vault:  ${path.join(root, ESTOC_DIR)}`);
+  log(`vault:  ${dir}`);
   log(`socket: ${served.url}`);
   if (served.appUrl !== null) {
     log(`open:   ${served.appUrl}`);
@@ -51,7 +67,16 @@ export async function runDaemon(options: RunOptions): Promise<Served> {
   // the daemon comes up on its own so a UI that connects finds it booted;
   // a UI's own boot() is then a replay
   await served.daemon.boot();
-  return served;
+  // Past the boot the folder is this daemon's: one still waiting for it has nothing to say where it listens.
+  const socketFile = path.join(dir, SOCKET_FILE);
+  await writeFile(socketFile, served.url, { mode: 0o600 });
+  return {
+    ...served,
+    async close() {
+      await served.close();
+      await rm(socketFile, { force: true });
+    },
+  };
 }
 
 /** The built app, if `@estoc/app` is installed next to this package. */
@@ -77,9 +102,8 @@ export function exitOnSignal(served: Served): void {
   process.on("SIGTERM", stop);
 }
 
-/** The token that stays with the vault, minted the first time. */
-async function storedToken(root: string): Promise<string> {
-  const file = path.join(root, ESTOC_DIR, "local", "daemon", "daemon.token");
+async function storedToken(dir: string): Promise<string> {
+  const file = path.join(dir, TOKEN_FILE);
   try {
     const token = (await readFile(file, "utf8")).trim();
     if (token !== "") {
@@ -89,7 +113,6 @@ async function storedToken(root: string): Promise<string> {
     // none yet
   }
   const token = randomBytes(24).toString("base64url");
-  await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, token, { mode: 0o600 });
   return token;
 }
