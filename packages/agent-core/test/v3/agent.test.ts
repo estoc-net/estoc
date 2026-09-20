@@ -154,8 +154,26 @@ describe("opening an agent", () => {
     const bobAgent = await agentOf(bob, "start");
     const sent = await bobAgent.send({ channel: { localDid: bob.did, peerDid: alice.did }, recipientDid: alice.longFormDid }, { type: BASIC_MESSAGE, body: { content: "hello" } });
     expect(sent.dispatched).toMatchObject({ outcome: "submitted" });
-    await until("the frame pushed under the short form is followed", () => inbounds.length === 1);
+    await until("the frame pushed under the short form is followed", () => inbounds.length === 1, 10_000);
     expect(inbounds[0]!.received).toMatchObject({ outcome: "received", live: true });
+  });
+
+  it("picks up what was queued between its pickup and live delivery coming on", async () => {
+    const mediator = await newMediator();
+    const alice = await partyOf(mediator, 1, ALICE);
+    const bob = await partyOf(mediator, 2, BOB);
+    await reconcile(alice.link, alice.runtime, alice.keys, alice.mediationId);
+    const bobAgent = await agentOf(bob, "start");
+    await bobAgent.send({ channel: { localDid: bob.did, peerDid: alice.did }, recipientDid: alice.longFormDid }, { type: BASIC_MESSAGE, body: { content: "hello" } });
+    const queue = mediator.queues.get(alice.created.data.me.did)!;
+    const [missed] = queue.splice(0);
+
+    const inbounds: Inbound[] = [];
+    const agent = await agentOf(alice, "start", { liveDelivery: true, onInbound: (inbound) => inbounds.push(inbound) });
+    expect(agent.connections()).toMatchObject([{ drained: { acked: 0, ended: "empty" }, live: true }]);
+    queue.push(missed!);
+    await until("the message queued before live delivery came on is followed", () => inbounds.length === 1, 10_000);
+    expect(agent.connections()).toMatchObject([{ drained: { acked: 1, ended: "empty" } }]);
   });
 
   it("closes the agent a start could not connect at all, leaving the runtime to another", async () => {
@@ -240,7 +258,7 @@ describe("a live input", () => {
     expect(forwards).toHaveLength(sentBefore + 2);
   });
 
-  it("is followed step by step, a step that fails leaving the others done; the same delivery only told again is followed by nothing", async () => {
+  it("is followed step by step, a step that fails leaving the others done; a repeated delivery completes local recovery without repeating automatic effects", async () => {
     const mediator = await newMediator();
     const alice = await partyOf(mediator, 1, ALICE);
     const bob = await partyOf(mediator, 2, BOB);

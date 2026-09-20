@@ -277,6 +277,17 @@ export class Agent {
     return this.shown(connection);
   }
 
+  private async pickUpOnceLive(mediationId: MediationId, pickup: Pickup): Promise<void> {
+    if (this.closed) return;
+    try {
+      const drained = await pickup.drain();
+      const connection = this.attempts.get(mediationId);
+      if (connection !== undefined) connection.drained = drained;
+    } catch (err) {
+      this.log(`the pickup once live delivery came on failed for ${mediationId}: ${messageOf(err)}`);
+    }
+  }
+
   /** The one line of an arrangement for as long as the agent lives: a link speaks as one account to one mediator. */
   private async lineOf(mediationId: MediationId): Promise<Line> {
     this.refuseClosed();
@@ -296,7 +307,9 @@ export class Agent {
     if (mediatorDoc === null) throw new Error(`the mediator ${mediation.mediatorDid} does not resolve`);
     const { didcomm, fetch, WebSocket, trace, timeoutMs, log } = this.options;
     const link = new MediatorLink({ didcomm, resolveDid, fetch, WebSocket, trace, secrets: () => this.ring.secrets(), me: mediation.me.did, mediatorDid: mediation.mediatorDid, mediatorDoc, timeoutMs, log });
-    const line: Line = { link, pickup: new Pickup(link, this.handleOf(mediationId), { log }) };
+    // What reached the mediator between the pickup and live delivery coming on was queued without being pushed: it is picked up once the mediator says live delivery is on.
+    const pickup: Pickup = new Pickup(link, this.handleOf(mediationId), { log, onLive: () => void this.pickUpOnceLive(mediationId, pickup) });
+    const line: Line = { link, pickup };
     const raced = this.lines.get(mediationId);
     if (raced !== undefined) return raced;
     this.lines.set(mediationId, line);

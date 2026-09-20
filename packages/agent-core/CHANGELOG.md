@@ -84,10 +84,12 @@
   gains `first`). An input the vault already held earns nothing when it
   comes again, under any delivery and to any agent, and what it still
   earns stays listed. Each step stands alone, all before the mediator is
-  told. A line resolves its mediator's short form through the long form
-  the arrangement was created with. One agent per runtime; closing it
-  leaves the runtime open, and a `start` that cannot connect at all
-  closes its agent before it throws.
+  told. What the mediator queued between a connection's pickup and live
+  delivery coming on is picked up once it is on. A line resolves its
+  mediator's short form through the long form the arrangement was
+  created with. One agent per runtime; closing it leaves the runtime
+  open, and a `start` that cannot connect at all closes its agent before
+  it throws.
 - **The rotation proof is the vault's to judge.** The didcomm binding is
   now Estoc's build of didcomm-rust, `@estoc/didcomm` (peer, types) and
   `@estoc/didcomm-node`, whose `unpack` can leave a `from_prior` header

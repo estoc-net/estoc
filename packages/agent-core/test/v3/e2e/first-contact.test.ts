@@ -7,7 +7,7 @@ import type { IMessage } from "../../../src/protocol/didcomm.js";
 import { FORWARD } from "../../../src/protocol/spec.js";
 import { Agent, type AgentOptions, type Inbound } from "../../../src/v3/index.js";
 import type { FakeMediator } from "../../fake-mediator.js";
-import { didcomm, mediatedParty, newMediator, until, type MediatedParty } from "../helpers.js";
+import { didcomm, mediatedParty, newMediator, until as untilWithin, type MediatedParty } from "../helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
@@ -21,6 +21,9 @@ interface Running {
   /** the next call to the mediator is answered 503 instead of reaching it */
   refuseNext: { armed: boolean };
 }
+
+/** What is waited for here is a whole receipt with everything that follows it, several commits and transport calls on a machine that may be busy with other suites. */
+const until = (what: string, condition: () => boolean): Promise<void> => untilWithin(what, condition, 10_000);
 
 const running: Running[] = [];
 

@@ -116,11 +116,11 @@ export async function party(mediator: FakeMediator, fill = 1, over: Partial<Link
   return { ...fresh, fold, mediator, mediationId: created.data.mediationId, created, ring, trace, link, linkOptions, log, offline };
 }
 
-/** Waits for `condition`, giving up after two seconds with `what` in the error. */
-export async function until(what: string, condition: () => boolean): Promise<void> {
-  const deadline = Date.now() + 2000;
+/** Waits for `condition`, giving up after `ms` with `what` in the error. */
+export async function until(what: string, condition: () => boolean, ms = 2000): Promise<void> {
+  const deadline = Date.now() + ms;
   while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`${what}: still not, after two seconds`);
+    if (Date.now() > deadline) throw new Error(`${what}: still not, after ${ms} ms`);
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
