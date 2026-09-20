@@ -82,7 +82,6 @@ function die(self: Started, life: Life): Error {
   return gone();
 }
 
-/** Arms the death of the party's running process. */
 export function dieAt(running: Running, death: Death): void {
   const self = running as Started;
   const { life } = self;
