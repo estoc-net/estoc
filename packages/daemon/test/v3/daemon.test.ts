@@ -228,11 +228,14 @@ describe("two daemons over a mediator", () => {
       expect(after.outcome).toBe("submitted");
       await until("bob reads the restored vault", () => messagesOf(bob.heard.snapshot()).some((message) => message.body.state === "available" && message.body.body["content"] === "back again"));
 
-      const bobs = await bob.daemon.exportBackup();
-      const merged = await bob.daemon.mergeBackup(bobs.bytes);
+      // A restored vault never held the envelopes its submitted messages released, and an erasure collects the ones a vault did hold: neither is asked for them again.
+      const merged = await again.daemon.mergeBackup(backup.bytes);
       expect(merged).toMatchObject({ added: 0, conflicts: 0, objects: 0 });
       expect(merged.duplicates).toBeGreaterThan(0);
-      await until("the agent over the merged vault is live", () => bob.heard.events.at(-1)![0] === "lines" && bob.heard.lines()!.connections[0]!.live);
+      await until("the agent over the merged vault is live", () => again.heard.events.at(-1)![0] === "lines" && again.heard.lines()!.connections[0]!.live);
+      const bobs = await bob.daemon.exportBackup();
+      await bob.daemon.eraseMessage(reply.messageId);
+      expect(await bob.daemon.mergeBackup(bobs.bytes)).toMatchObject({ added: 0, conflicts: 0, objects: 0 });
 
       await again.daemon.forgetIdentity();
       expect(again.heard.phases().at(-1)).toBe("onboarding");

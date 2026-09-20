@@ -119,6 +119,22 @@ const contestable: RetainedRoots = async (vault) => {
 };
 const contestableHeld = heldRootsOf(contestable);
 
+const witnessed = (of: Event, witness: Cid): Draft => ({ type: "release", roots: [witness], data: { of: of.eventId, witness } });
+
+/**
+ * A fold whose rule reads an object: a `release` releases the roots of
+ * the `package` it names only while the witness it retains reads back.
+ */
+const evidenced: RetainedRoots = async (vault) => {
+  const events = await all(vault.events.scan());
+  const released = new Set<string>();
+  for (const event of events) {
+    if (event.type === "release" && (await vault.objects.read(event.data["witness"] as Cid, MIB)) !== null) released.add(String(event.data["of"]));
+  }
+  return events.filter((event) => !(event.type === "package" && released.has(event.eventId))).flatMap((event) => event.roots.map((root) => ({ eventId: event.eventId, root })));
+};
+const evidencedHeld = heldRootsOf(evidenced);
+
 /**
  * `snapshot` with the read of the object `cid` held at a gate: the
  * import is inside the lock and waiting on the source once `arrived`
@@ -555,6 +571,24 @@ export const importCases: ImportCase[] = [
       assertEqual(await open.vault.vault.objects.has(WORLD_CID), false, "the world is not revived");
       withWorld.snapshot.close();
       await open.vault.close();
+    },
+  },
+  {
+    name: "the union is folded over the objects the target will hold: a root released on the word of an object stays released, whether that object is the target's or comes with the source, and needs no bytes once it is collected",
+    run: async (h) => {
+      const c = clock();
+      const { vault } = await make(h, h.fresh(), c.now);
+      const [pkg] = await vault.vault.commit([{ cid: WORLD_CID, source: WORLD }], [pack("W", [WORLD_CID])]);
+      await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [witnessed(pkg as Event, HELLO_CID)]);
+      assertEqual(await vault.collect(evidencedHeld), { removed: [WORLD_CID] }, "the world released and collected");
+      const own = await snapshotOf(h, vault, evidencedHeld);
+      assertEqual(await importVault(vault, own.snapshot, { retainedRoots: evidenced }), { added: 0, duplicates: 2, conflicts: [], objects: 0, repaired: 0 }, "the target's own snapshot, its witness read from the target");
+      await vault.close();
+      const elsewhere = new MemoryVault({ metadata: META, wrapped: WRAPPED, now: c.now });
+      assertEqual(await importVault(elsewhere, own.snapshot, { retainedRoots: evidenced }), { added: 2, duplicates: 0, conflicts: [], objects: 1, repaired: 0 }, "into a vault with neither object, the witness read from the source");
+      assertEqual(await elsewhere.vault.objects.has(WORLD_CID), false, "the world is asked of nobody");
+      assertBytes((await elsewhere.vault.objects.read(HELLO_CID, 5)) as Uint8Array, HELLO, "the witness came along");
+      own.snapshot.close();
     },
   },
   {

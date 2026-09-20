@@ -15,7 +15,7 @@ import { AnchorMismatch, DamagedHistory, DamagedObject, ForkedAuthor, Incomplete
 import type { Cid, Conflict, Event, EventId } from "../event.js";
 import { canonicalText } from "../jcs.js";
 import { rawCidOf, sortCids } from "../objects.js";
-import { MemoryVault, heldRootsOf, type Held, type Retained, type RetainedRoots, type Vault, type VaultRuntime } from "../vault.js";
+import { MemoryVault, heldRootsOf, type Held, type Retained, type RetainedRoots, type Vault, type VaultObjects, type VaultRuntime } from "../vault.js";
 import type { PortableDatabase } from "./open.js";
 import { validatePortable } from "./portable.js";
 
@@ -83,7 +83,7 @@ export async function importVault(target: VaultRuntime, source: PortableDatabase
     const [damage] = await held.events.damaged();
     if (damage !== undefined) throw new DamagedHistory(damage);
     for (;;) {
-      const plan = await planned(target, held, incoming, offered, options.retainedRoots);
+      const plan = await planned(target, held, incoming, offered, source.vault.objects, options.retainedRoots);
       const objects = plan.staged.filter((object) => !object.repair).length;
       const repaired = plan.staged.length - objects;
       if (plan.fresh.length === 0 && plan.staged.length === 0 && plan.conflicts.length === 0) return { added: 0, duplicates: plan.duplicates, conflicts: [], objects, repaired };
@@ -119,7 +119,7 @@ interface ImportPlan {
   reused: Cid[];
 }
 
-async function planned(target: VaultRuntime, held: Held, incoming: Event[], offered: Set<Cid>, retainedRoots: RetainedRoots): Promise<ImportPlan> {
+async function planned(target: VaultRuntime, held: Held, incoming: Event[], offered: Set<Cid>, sourceObjects: VaultObjects, retainedRoots: RetainedRoots): Promise<ImportPlan> {
   const before: Event[] = [];
   const have = new Map<EventId, Event>();
   for await (const event of held.events.scan()) {
@@ -151,7 +151,7 @@ async function planned(target: VaultRuntime, held: Held, incoming: Event[], offe
   const heldBefore = rootsOf(await checkedRetention(retainedRoots, held));
   const union = new MemoryVault({ metadata: target.metadata });
   await union.ingest([...before, ...plan.fresh]);
-  const unionRetains = await checkedRetention(retainedRoots, union.vault);
+  const unionRetains = await checkedRetention(retainedRoots, { ...union.vault, objects: prospectiveObjects(held.objects, sourceObjects) });
   const heldAfter = rootsOf(unionRetains);
   const fresh = new Set(plan.fresh.map((event) => event.eventId));
   const required = new Set<Cid>();
@@ -169,6 +169,42 @@ async function planned(target: VaultRuntime, held: Held, incoming: Event[], offe
   }
   if (problems.length > 0) throw new IncompleteImport(problems);
   return plan;
+}
+
+/**
+ * The objects the union's fold reads: what the target would hold once
+ * the import is published, a sound target object as it is and
+ * otherwise the source's verified bytes. A retention that depends on
+ * what an object says — a release that waits for a document to verify
+ * — then folds over the union as it will fold over the target
+ * afterwards; over the events alone it would retain what the target
+ * has released and collected, and require bytes nobody has.
+ */
+function prospectiveObjects(target: VaultObjects, source: VaultObjects): VaultObjects {
+  const either = async <T>(read: (objects: VaultObjects) => Promise<T | null>): Promise<T | null> => {
+    try {
+      const sound = await read(target);
+      if (sound !== null) return sound;
+    } catch (err) {
+      if (!(err instanceof DamagedObject)) throw err;
+      const verified = await read(source);
+      if (verified === null) throw err;
+      return verified;
+    }
+    return read(source);
+  };
+  return {
+    open: (cid) => either((objects) => objects.open(cid)),
+    read: (cid, maxBytes) => either((objects) => objects.read(cid, maxBytes)),
+    stat: (cid) => either((objects) => objects.stat(cid)),
+    has: async (cid) => (await either(async (objects) => ((await objects.has(cid)) ? true : null))) ?? false,
+    async *list() {
+      const cids = new Set<Cid>();
+      for await (const cid of source.list()) cids.add(cid);
+      for await (const cid of target.list()) cids.add(cid);
+      yield* sortCids(cids);
+    },
+  };
 }
 
 async function checkedRetention(retainedRoots: RetainedRoots, vault: Vault): Promise<Retained[]> {
