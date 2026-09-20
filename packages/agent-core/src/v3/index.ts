@@ -107,7 +107,7 @@ export {
 } from "./receive/receiver.js";
 export { receiptOf, recordReceipt } from "./receive/receipt.js";
 export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
-export { afterReceipt, type AfterReceipt, type AfterReceiptOptions } from "./receive/after.js";
+export { afterReceipt, recordOwed, type AfterReceipt, type AfterReceiptOptions, type Owed } from "./receive/after.js";
 export { completeResponse, reactTo, type Called, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
 export { completeNotification, rotate, type RotateOptions, type Rotated, type RotationTarget } from "./rotate.js";
 export { privacyPolicy, privateAddress, type PrivacyPolicy, type PrivateAddress } from "./privacy.js";
@@ -137,3 +137,4 @@ export {
   type ViewOptions,
 } from "./records.js";
 export { manualProcedures, readRecords, type Manual, type ManualOptions } from "./views.js";
+export { Agent, type AgentOptions, type Connection, type Inbound, type Submitted } from "./agent.js";

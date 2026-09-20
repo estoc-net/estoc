@@ -91,9 +91,14 @@ export type ReceiptOutcome = { outcome: "received"; eventId: EventReference<"mes
 
 export type Receipt = (authenticated: Authenticated) => Promise<ReceiptOutcome>;
 
-/** What became of a delivery. `key` is what it is kept under; null only for a direct post that is not strict JSON. */
+/**
+ * What became of a delivery. `key` is what it is kept under; null only
+ * for a direct post that is not strict JSON. `live` tells the call that
+ * recorded the observation from one only told how the delivery ended
+ * before: the first alone is a live input.
+ */
 export type Received =
-  | { outcome: "received"; key: string; eventId: EventReference<"message.in"> }
+  | { outcome: "received"; key: string; eventId: EventReference<"message.in">; live: boolean }
   | { outcome: "terminal"; key: string | null; reason: string }
   | { outcome: "deferred"; key: string; reason: string };
 
@@ -306,7 +311,7 @@ export class Receiver {
   private enter(key: string, delivery: Delivery): Promise<Received> {
     this.refuseClosed();
     const ended = this.ended.get(key);
-    if (ended !== undefined) return Promise.resolve(ended);
+    if (ended !== undefined) return Promise.resolve(ended.outcome === "received" ? { ...ended, live: false } : ended);
     const wait = this.waits.get(key);
     if (wait !== undefined && !wait.retry) {
       this.hold(key, delivery);
@@ -441,7 +446,7 @@ export class Receiver {
   private async record(key: string, delivery: Delivery, eventId: EventReference<"message.in">): Promise<Received> {
     this.waits.delete(key);
     this.release(key);
-    const ended: Ended = { outcome: "received", key, eventId };
+    const ended: Ended = { outcome: "received", key, eventId, live: true };
     if (!this.closed) this.remember(key, ended);
     await this.diag(delivery, { outcome: "received", eventId });
     return ended;

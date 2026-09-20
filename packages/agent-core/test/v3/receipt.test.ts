@@ -86,7 +86,7 @@ describe("the receipt", () => {
     const received = await receiver.receive(delivery);
     const [event, ...more] = await eventsOf(alice, "message.in");
     const [resolved] = await eventsOf(alice, "peer.resolved");
-    expect([more, received]).toEqual([[], { outcome: "received", key: deliveryKey(delivery), eventId: event!.eventId }]);
+    expect([more, received]).toEqual([[], { outcome: "received", key: deliveryKey(delivery), eventId: event!.eventId, live: true }]);
     const read = readPlaintext(seen[0]!.plaintext);
     expect(event!.data).toEqual({
       messageId: inboundMessageId(bob.did, alice.did, wire),

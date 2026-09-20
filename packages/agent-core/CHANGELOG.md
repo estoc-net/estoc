@@ -64,6 +64,23 @@
   the fold leaves for manual action with the wait on it (`pending`),
   and mints the manual action of `retry`; nothing scans the vault to
   send on its own.
+- **`Agent` is a vault running.** `Agent.open` takes a runtime the host
+  opened and still owns, records what the vault owed over whatever a
+  crash left unfollowed (`recordOwed`: a one-use invitation's
+  consumption, a peer's acknowledgement; `recovered` tells what) and
+  mints no action: an outbound found waiting, a reply or a notification
+  an earlier input still earns is listed (`pending`, `outbounds`) for
+  `manual` to retry, complete or cancel. `connect` reconciles and picks
+  up every arrangement the vault must keep receiving on, one line per
+  arrangement for the agent's life, and opens live delivery; a mediator
+  out of reach throws nothing and is told in `connections`. `send`
+  commits the intent and makes its one call through the agent's
+  dispatcher. A delivery, from a pickup, the socket, `receive` or a
+  retry after `localStateChanged`, is followed only when this call
+  recorded it (`Received.live`): what the vault owes, then the automatic
+  effects, then the private-address policy (`privateAddresses`, on by
+  default), each step standing alone, all before the mediator is told.
+  One agent per runtime; closing it leaves the runtime open.
 - **The rotation proof is the vault's to judge.** The didcomm binding is
   now Estoc's build of didcomm-rust, `@estoc/didcomm` (peer, types) and
   `@estoc/didcomm-node`, whose `unpack` can leave a `from_prior` header
