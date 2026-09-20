@@ -247,6 +247,19 @@ export interface EffectContent extends Content {
   ack?: readonly string[];
 }
 
+/**
+ * The intent of a manual rotation's notification: locally initiated,
+ * under the fresh message ID the caller allocated, over no input and
+ * no source, naming the decision it announces. The caller has looked
+ * the decision's notification up first.
+ */
+export function manualNotificationDraft(fold: VaultFold, messageId: MessageId, channel: Channel, content: EffectContent, rotationEventId: EventReference<"did.rotationSelected">): { draft: VaultDraft<"message.out">; objects: CommitObject[] } {
+  const sender = senderOf(fold, channel);
+  const { fields, objects } = intentOf(messageId, content, content.ack ?? [], { ...LOCAL, rotationEventId });
+  const data: MessageOut = { ...fields, senderDidId: sender.didId, recipientDid: channel.peerDid };
+  return { draft: vaultDraft("message.out", data), objects };
+}
+
 /** The tuple and its message ID, with the intent already recorded under it, or else the draft and the objects a new one commits. */
 export type AutomaticDraft = Omit<AutomaticIntent, "existing"> & ({ existing: Outbound; draft: null; objects: null } | { existing: null; draft: VaultDraft<"message.out">; objects: CommitObject[] });
 
