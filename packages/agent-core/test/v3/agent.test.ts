@@ -171,9 +171,20 @@ describe("opening an agent", () => {
     const inbounds: Inbound[] = [];
     const agent = await agentOf(alice, "start", { liveDelivery: true, onInbound: (inbound) => inbounds.push(inbound) });
     expect(agent.connections()).toMatchObject([{ drained: { acked: 0, ended: "empty" }, live: true }]);
+    let tell = (): void => undefined;
+    const told = new Promise<void>((resolve) => (tell = resolve));
+    mediator.intercept = async (msg) => {
+      if (msg.type === MESSAGES_RECEIVED) await told;
+      return undefined;
+    };
     queue.push(missed!);
     await until("the message queued before live delivery came on is followed", () => inbounds.length === 1, 10_000);
+    expect(agent.connections()).toMatchObject([{ drained: { acked: 0 } }]);
+
+    tell();
+    await until("the pickup that followed it has ended", () => agent.connections()[0]!.drained?.acked === 1, 10_000);
     expect(agent.connections()).toMatchObject([{ drained: { acked: 1, ended: "empty" } }]);
+    expect(inbounds).toHaveLength(1);
   });
 
   it("closes the agent a start could not connect at all, leaving the runtime to another", async () => {
