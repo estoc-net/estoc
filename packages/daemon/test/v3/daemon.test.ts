@@ -280,46 +280,103 @@ describe("a daemon's files, one operation at a time", () => {
 });
 
 describe("two daemons over a mediator", () => {
+  const stillWaiting = (work: Promise<unknown>) => Promise.race([work.then(() => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 300))]);
+
+  /** The mediator keeps the first message `held` picks until the release, having received it. */
+  function holding(mediator: FakeMediator, held: (message: Parameters<NonNullable<FakeMediator["intercept"]>>[0]) => boolean): { reached(): boolean; release(): void } {
+    let release = (): void => undefined;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let reached = false;
+    mediator.intercept = async (message) => {
+      if (reached || !held(message)) return undefined;
+      reached = true;
+      await released;
+      return undefined;
+    };
+    return { reached: () => reached, release };
+  }
+
   it(
-    "asks the mediator nothing once it is closed: a reconciliation cut short takes away no address the next daemon over the vault registers",
+    "waits, closing, for the answer a mediator owes it and asks nothing on that answer: the next daemon over the vault keeps what it registers",
     async () => {
       const mediator = await newMediator();
       const { root, daemon, heard } = await person(mediator, "Alice");
       await until("the first connection is through", () => heard.lines()?.connections[0]?.live === true);
 
-      let release = (): void => undefined;
-      const held = new Promise<void>((resolve) => (release = resolve));
-      let asked = false;
-      mediator.intercept = async (message) => {
-        if (message.type !== RECIPIENT_QUERY || asked) return undefined;
-        asked = true;
-        await held;
-        return undefined;
-      };
+      const query = holding(mediator, (message) => message.type === RECIPIENT_QUERY);
       try {
         const reconnecting = daemon.reconnect();
-        await until("the query is with the mediator", () => asked);
-        await daemon.close();
+        await until("the query is with the mediator", query.reached);
+        const closing = daemon.close();
+        expect(await stillWaiting(closing)).toBe(true);
+        await expect(daemon.reconnect()).rejects.toThrow(/no open vault/);
+        const seen = mediator.seenTypes.length;
+        const said = heard.events.length;
+        query.release();
+        await closing;
         await reconnecting;
-        const saidByClose = heard.events.length;
+        expect(mediator.seenTypes.slice(seen)).toEqual([]);
+        expect(heard.events).toHaveLength(said);
 
         const next = daemonOver(root, mediator);
         await next.daemon.boot();
         await next.daemon.unlock(PASSPHRASE);
         await next.daemon.createInvitation("one");
+        expect(mediator.recipients.size).toBe(1);
+        expect(mediator.seenTypes.slice(seen).filter((type) => type === RECIPIENT_UPDATE)).toHaveLength(1);
+      } finally {
+        query.release();
+        mediator.intercept = null;
+      }
+    },
+    LONG
+  );
+
+  it(
+    "hands the vault on, to the next daemon or to the agent after a merge, only once a removal already with the mediator has landed: what is registered next stays",
+    async () => {
+      for (const handOn of ["close", "merge"] as const) {
+        const mediator = await newMediator();
+        const original = await person(mediator, "Alice");
+        const before = await original.daemon.exportBackup();
+        await original.daemon.createInvitation("one");
+        const newer = await original.daemon.exportBackup();
         const registered = [...mediator.recipients.keys()];
         expect(registered).toHaveLength(1);
+        await original.daemon.close();
 
-        const seen = mediator.seenTypes.length;
-        release();
-        // The mediator answers the query it held; what the closed daemon would have sent on that answer has long had its chance by then.
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        expect(mediator.seenTypes.slice(seen).filter((type) => type === RECIPIENT_UPDATE)).toEqual([]);
-        expect([...mediator.recipients.keys()]).toEqual(registered);
-        expect(heard.events).toHaveLength(saidByClose);
-      } finally {
-        release();
-        mediator.intercept = null;
+        // Restored from before the invitation, the vault has its agent take the invitation's address away.
+        const removal = holding(mediator, (message) => message.type === RECIPIENT_UPDATE && (message.body as { updates: { action: string }[] }).updates.some((update) => update.action === "remove"));
+        try {
+          const root = await folder();
+          const restored = daemonOver(root, mediator);
+          await restored.daemon.boot();
+          await restored.daemon.restoreIdentity(before.bytes, PASSPHRASE);
+          await until("the removal is with the mediator", removal.reached);
+
+          let merged: DaemonCore;
+          if (handOn === "close") {
+            const closing = restored.daemon.close();
+            expect(await stillWaiting(closing)).toBe(true);
+            removal.release();
+            await closing;
+            merged = daemonOver(root, mediator).daemon;
+            await merged.boot();
+            await merged.unlock(PASSPHRASE);
+            await merged.mergeBackup(newer.bytes);
+          } else {
+            merged = restored.daemon;
+            const merging = merged.mergeBackup(newer.bytes);
+            expect(await stillWaiting(merging)).toBe(true);
+            removal.release();
+            await merging;
+          }
+          await merged.reconnect();
+          expect([...mediator.recipients.keys()]).toEqual(registered);
+        } finally {
+          removal.release();
+          mediator.intercept = null;
+        }
       }
     },
     LONG

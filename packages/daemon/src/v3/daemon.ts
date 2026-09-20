@@ -21,7 +21,6 @@ import {
   AgentTrace,
   BUILT_IN_HANDLERS,
   MAX_CONTENT_BYTES,
-  bounded,
   createDid,
   createMediation,
   createVault,
@@ -56,9 +55,9 @@ export interface DaemonCore extends Daemon {
    * The agent closed and the files let go of, for the host that is
    * shutting down; the seed stays cached where the host keeps it. A wait
    * for files held elsewhere ends, the operation under way is waited
-   * for, what the agent has under way on the network is given up, and
-   * nothing is opened, sent or said afterwards; every call answers with
-   * the one closing.
+   * for, a request the agent has with a mediator is waited for as long
+   * as the agent gives it and none follows it, and nothing is opened,
+   * sent or said afterwards; every call answers with the one closing.
    */
   close(): Promise<void>;
 }
@@ -86,15 +85,19 @@ const SCAN = { effectTypes: effectTypesOf(BUILT_IN_HANDLERS) };
  * One agent as the daemon holds it. Closing an agent does not end a
  * flow of its own already under way, and such a flow goes on from what
  * it read before: a reconciliation would take away the addresses
- * whoever has the vault next has registered since. So the agent
- * reaches the network through `ended` — no request starts once it has
- * fired, and one in flight is given up — and whatever runs over the
- * agent is kept in `work`, to be waited for before the vault is closed
- * or handed to another agent.
+ * whoever has the vault next has registered since. So once `ended`
+ * the agent starts no request, and whatever runs over it is kept in
+ * `work`, to be waited for before the vault is closed or handed to
+ * another agent. A request already with a mediator is left to be
+ * answered: giving it up here would not undo it there, and whoever
+ * came next would register addresses under a removal still to land.
+ * One that outlasts the agent's own deadline is past waiting for, and
+ * what it did at the mediator stays unknown until the next
+ * reconciliation.
  */
 interface Attached {
   agent: Promise<Agent>;
-  ended: AbortController;
+  ended: boolean;
   work: Set<Promise<void>>;
 }
 
@@ -296,20 +299,22 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   const linesOf = (agent: Agent): Lines => ({ connections: agent.connections(), waiting: agent.waitingDeliveries(), discarded: agent.discardedDeliveries() });
 
   function attach(runtime: SqliteVault, keys: Keys, trace: AgentTrace): Attached {
-    const ended = new AbortController();
+    const attached = { ended: false, work: new Set<Promise<void>>() };
     const reach = host.agentOptions?.fetch ?? globalThis.fetch;
     const whileAttached =
       <A extends unknown[]>(say: (...args: A) => void) =>
       (...args: A) => {
-        if (!ended.signal.aborted) say(...args);
+        if (!attached.ended) say(...args);
       };
     const opening = async (): Promise<Agent> => {
       const agent = await Agent.open(
         { runtime, keys },
         {
           ...host.agentOptions,
-          // Raced as well as signalled: a fetch the host supplied may not listen to the signal.
-          fetch: (input, init) => bounded(ended.signal, () => reach(input, { ...init, signal: init?.signal == null ? ended.signal : AbortSignal.any([init.signal, ended.signal]) })),
+          fetch: async (input, init) => {
+            if (attached.ended) throw new Error(DETACHED);
+            return reach(input, init);
+          },
           didcomm: await host.didcomm(),
           trace,
           log: whileAttached(log),
@@ -321,15 +326,15 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       );
       return agent;
     };
-    const attached: Attached = { agent: opening(), ended, work: new Set() };
-    attached.agent.catch(() => undefined);
-    return attached;
+    const agent = opening();
+    agent.catch(() => undefined);
+    return Object.assign(attached, { agent });
   }
 
   /** `work` over the agent, refused once the agent is detached and waited for by whoever detaches it. */
   function during<T>(attached: Attached, work: (agent: Agent) => Promise<T>): Promise<T> {
     const done = attached.agent.then((agent) => {
-      if (attached.ended.signal.aborted) throw new Error(DETACHED);
+      if (attached.ended) throw new Error(DETACHED);
       return work(agent);
     });
     const settled = done.then(
@@ -341,14 +346,13 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     return done;
   }
 
-  /** The agent cut off from the network and closed, and everything under way over it settled. */
   async function detach(attached: Attached): Promise<void> {
-    attached.ended.abort(new Error(DETACHED));
+    attached.ended = true;
+    await Promise.all(attached.work);
     await attached.agent.then(
       (agent) => agent.close(),
       () => undefined
     );
-    await Promise.all(attached.work);
   }
 
   /** The agent's lines connected, in the background: a mediator out of reach keeps no screen waiting. */
@@ -358,7 +362,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       await agent.connect();
       if (open === running && running.attached === attached) emit("lines", linesOf(agent));
     }).catch((err) => {
-      if (!attached.ended.signal.aborted) log(`the agent did not come up: ${failure(err)}`);
+      if (!attached.ended) log(`the agent did not come up: ${failure(err)}`);
     });
   }
 

@@ -25,13 +25,16 @@
   for files held elsewhere, waits for the operation under way, lets go
   of everything, and answers the same to every caller; nothing is
   opened or said after it.
-- **An agent let go of asks the network nothing more.** Each agent
-  reaches the network through a fetch of its own that the daemon ends
-  when it closes, locks, forgets the vault or replaces the agent after
-  a merge: a request in flight is given up, none starts afterwards,
-  and what was under way over the agent is waited for before the vault
-  closes. A reconciliation cut short this way can no longer take away
-  the addresses the next daemon over the vault has registered.
+- **An agent let go of starts no request, and the one it has is waited
+  for.** When the daemon closes, locks, forgets the vault or replaces
+  the agent after a merge, the agent's fetch refuses whatever it is
+  asked next, new calls over the agent are refused, and what is under
+  way is waited for before the vault closes or the next agent
+  connects: a request already with a mediator is answered first, for
+  as long as the agent's own deadline gives it, so a removal on its
+  way does not land on what is registered next. Past that deadline
+  what the request did at the mediator is unknown until the next
+  reconciliation. `close()` can take that long.
 - **The text encoding carries any record as it was.** A record whose
   one key starts with `$` — `{"$bytes": "…"}` in a message body — came
   back as bytes or a Map, or failed to decode. Such a record now goes
