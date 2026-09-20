@@ -13,10 +13,17 @@
 
 import { InvalidJson, parseStrict, type JsonObject } from "@estoc/event-store/v3";
 import {
+  InvalidDidDocument,
   InvalidPlaintext,
+  PURE_ACK_EFFECT,
+  automaticIntent,
+  canonicalDidOf,
   channelKey,
+  channelOf,
   compareChannels,
   readStoredDocument,
+  responseChannel,
+  sameChannel,
   unfinishedWork,
   type Channel,
   type ChannelView,
@@ -38,19 +45,23 @@ import {
   type MessageId,
   type MessageIn,
   type MessageOut,
+  type MissingResponse,
   type Outbound,
   type Outcome,
   type ReadObject,
   type SendGate,
+  type Source,
   type Status,
   type StoredAttachment,
   type VaultFold,
 } from "@estoc/vault/v3";
 
 import { PROFILE } from "../protocol/user-profile.js";
-import { claimedName, reportedProblem } from "./handlers/index.js";
+import type { EffectOptions } from "./effects.js";
+import { claimedName, handlerFor, handlersOf, reportedProblem, type Handler } from "./handlers/index.js";
 
-/** The manual procedures a record may name. */
+export type ViewOptions = Pick<EffectOptions, "handlers">;
+
 export type ManualEntry = "eraseMessage" | "deleteContact" | "blockChannels" | "cancel" | "retry" | "completeResponse" | "completeNotification" | "rotate";
 
 export interface MessageHeaders {
@@ -76,7 +87,8 @@ export interface Diagnostic {
 export interface MessageRecord {
   messageId: MessageId;
   direction: "in" | "out";
-  channel: Channel;
+  /** null for an output no one pair is fixed for */
+  channel: Channel | null;
   /** the undeleted contacts that select exactly this channel */
   contactIds: ContactId[];
   /** when this vault first recorded the message */
@@ -103,6 +115,33 @@ export interface MessageRecord {
   diagnostics: Diagnostic[];
 }
 
+/**
+ * An authenticated observation no input takes in: the evidence of its
+ * sender is not here, or is contradicted. It stays visible with what it
+ * waits for, and nothing it carries is shown as the peer's.
+ */
+export interface UnplacedInput {
+  sourceEventId: EventId;
+  messageId: MessageId;
+  /** the pair its endpoints form; null while the local endpoint is unknown, and under contradicted evidence */
+  channel: Channel | null;
+  at: string;
+  standing: "incomplete" | "conflict";
+  because: string;
+}
+
+/** An output no one pair is fixed for, with the pairs its recorded intents would each fix. */
+export interface UnplacedOutput {
+  candidates: Channel[];
+  message: MessageRecord;
+}
+
+export interface Unplaced {
+  /** the observations whose pair is not known */
+  inputs: UnplacedInput[];
+  outputs: UnplacedOutput[];
+}
+
 export interface ChannelRecord {
   channel: Channel;
   head: Channel | null;
@@ -112,9 +151,12 @@ export interface ChannelRecord {
   send: SendGate;
   /** the name the peer last claimed in exactly this channel, and the input that claimed it */
   peerName: { name: string; messageId: MessageId } | null;
-  /** the last profile of ours a transport accepted in exactly this channel */
+  /** the last profile of ours a transport accepted in exactly this channel, whether or not its content is still here */
   profileSubmitted: MessageId | null;
+  /** with the outputs whose intents disagree while every one of them names this pair */
   messages: MessageRecord[];
+  /** the observations of this pair no input takes in */
+  unplaced: UnplacedInput[];
 }
 
 export interface ContactChannelRecord extends ChannelRecord {
@@ -196,8 +238,10 @@ export interface PendingWork {
 
 /** Reads of one fold's records share what they derive from it. */
 export interface Recorder {
-  /** every pair an input was observed in or an output is fixed to, in canonical order: a channel no contact selects is still shown */
+  /** every pair an observation was made in or an output names, in canonical order: a channel no contact selects is still shown */
   channels(): Channel[];
+  /** what no channel shows */
+  unplaced(): Promise<Unplaced>;
   /** the undeleted contacts, in ID order */
   contactIds(): ContactId[];
   channel(channel: Channel): Promise<ChannelRecord>;
@@ -206,11 +250,28 @@ export interface Recorder {
   pending(): PendingWork;
 }
 
-export function recorder(fold: VaultFold, readObject: ReadObject): Recorder {
+/** `options.handlers` are the ones the runtime's completions run under: the replies their operations still owe are listed with the vault's own. */
+export function recorder(fold: VaultFold, readObject: ReadObject, options: ViewOptions = {}): Recorder {
   const work = unfinishedWork(fold);
+  const responses = owedResponses(fold, work.responses, handlersOf(options.handlers));
   const completes = new Map<MessageId, string[]>();
-  for (const { execution, effectType } of work.responses) completes.set(execution.messageId, [...(completes.get(execution.messageId) ?? []), effectType]);
-  const context: Context = { fold, readObject, completes, documents: new Map(), reports: null };
+  for (const { execution, effectType } of responses) completes.set(execution.messageId, [...(completes.get(execution.messageId) ?? []), effectType]);
+
+  const placed = new Map<string, Outbound[]>();
+  const pairs = new Map<string, Channel>();
+  const adrift: { outbound: Outbound; candidates: Channel[] }[] = [];
+  for (const execution of fold.inbound.executions.values()) pairs.set(channelKey(execution.channel), execution.channel);
+  for (const source of fold.inbound.unplaced) if (source.channel !== null) pairs.set(channelKey(source.channel), source.channel);
+  for (const outbound of fold.outbound.outbounds.values()) {
+    const { channel: pair, candidates } = placeOf(fold, outbound);
+    if (pair === null) adrift.push({ outbound, candidates });
+    else {
+      pairs.set(channelKey(pair), pair);
+      if (outbound.channel === null) placed.set(channelKey(pair), [...(placed.get(channelKey(pair)) ?? []), outbound]);
+    }
+  }
+
+  const context: Context = { fold, readObject, completes, placed, documents: new Map(), reports: null };
   const channels = new Map<string, Promise<ChannelRecord>>();
   const channel = (pair: Channel): Promise<ChannelRecord> => {
     const key = channelKey(pair);
@@ -219,12 +280,11 @@ export function recorder(fold: VaultFold, readObject: ReadObject): Recorder {
     return record;
   };
   return {
-    channels: () => {
-      const pairs = new Map<string, Channel>();
-      for (const execution of fold.inbound.executions.values()) pairs.set(channelKey(execution.channel), execution.channel);
-      for (const outbound of fold.outbound.outbounds.values()) if (outbound.channel !== null) pairs.set(channelKey(outbound.channel), outbound.channel);
-      return [...pairs.values()].sort(compareChannels);
-    },
+    channels: () => [...pairs.values()].sort(compareChannels),
+    unplaced: async () => ({
+      inputs: unplacedInputs(fold.inbound.unplaced.filter((source) => source.channel === null)),
+      outputs: await Promise.all(adrift.map(async ({ outbound, candidates }) => ({ candidates, message: await outboundRecord(context, outbound, null, [], []) }))),
+    }),
     contactIds: () => [...fold.contacts.contacts.values()].filter((contact) => !contact.deleted).map((contact) => contact.contactId).sort(),
     channel,
     contact: async (...contactIds) => {
@@ -234,14 +294,73 @@ export function recorder(fold: VaultFold, readObject: ReadObject): Recorder {
       return contactRecord(view, records);
     },
     invitations: () => invitationRecords(fold),
-    pending: () => pendingWork(fold, work),
+    pending: () => pendingWork(fold, work, responses),
   };
+}
+
+/**
+ * The replies an established input may still be given. The receipt is
+ * the vault's own candidate. A protocol's reply is a candidate under
+ * each operation the input's handler declares and no intent records,
+ * chosen as a completion chooses it, so that a registered handler
+ * replacing a built-in one replaces its candidates too; an erased
+ * input earns none, its body being what a handler reads. Whether a
+ * candidate is given is the completion's call.
+ */
+function owedResponses(fold: VaultFold, own: readonly MissingResponse[], handlers: readonly Handler[]): MissingResponse[] {
+  const owed = own.filter((response) => response.effectType === PURE_ACK_EFFECT);
+  for (const execution of fold.inbound.executions.values()) {
+    if (execution.status.status !== "complete" || execution.erased) continue;
+    const source = execution.members.find((member) => member.witness.status === "complete")!.source;
+    const operations = (handlerFor(handlers, source.event.data.msgType)?.effectTypes ?? []).filter((effectType) => effectType !== PURE_ACK_EFFECT && automaticIntent(fold, execution, effectType).existing === null);
+    if (operations.length === 0) continue;
+    const selected = responseChannel(fold, execution);
+    if (selected.status === "none") continue;
+    for (const effectType of new Set(operations)) owed.push({ execution, effectType, channel: selected.channel, source });
+  }
+  const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  return owed.sort((a, b) => order(a.execution.messageId, b.execution.messageId) || order(a.effectType, b.effectType));
+}
+
+/**
+ * Where an output is shown: the pair its intent fixes, or, while its
+ * intents disagree, the one pair every one of them names. No intent is
+ * chosen over another: the pairs they would fix are only compared.
+ */
+function placeOf(fold: VaultFold, outbound: Outbound): { channel: Channel | null; candidates: Channel[] } {
+  if (outbound.channel !== null) return { channel: outbound.channel, candidates: [outbound.channel] };
+  const candidates = new Map<string, Channel>();
+  let every = true;
+  for (const { data } of outbound.intents) {
+    const sender = fold.routes.dids.get(data.senderDidId);
+    const local = sender === undefined || sender.conflict ? null : (sender.created?.did ?? null);
+    const peer = canonicalOrNull(data.recipientDid);
+    if (local === null || peer === null || local === peer) every = false;
+    else candidates.set(channelKey(channelOf(local, peer)), channelOf(local, peer));
+  }
+  const pairs = [...candidates.values()].sort(compareChannels);
+  return { channel: every && pairs.length === 1 ? pairs[0]! : null, candidates: pairs };
+}
+
+function canonicalOrNull(did: Did): Did | null {
+  try {
+    return canonicalDidOf(did);
+  } catch (err) {
+    if (err instanceof InvalidDidDocument) return null;
+    throw err;
+  }
+}
+
+function unplacedInputs(sources: readonly Source[]): UnplacedInput[] {
+  return sources.flatMap(({ event, channel, standing }) => (standing.status === "complete" ? [] : [{ sourceEventId: event.eventId, messageId: event.data.messageId, channel, at: event.at, standing: standing.status, because: standing.because }]));
 }
 
 interface Context {
   fold: VaultFold;
   readObject: ReadObject;
   completes: ReadonlyMap<MessageId, string[]>;
+  /** the outputs with no fixed pair that are shown in a channel, by its key */
+  placed: ReadonlyMap<string, readonly Outbound[]>;
   documents: Map<Cid, Promise<BodyRecord>>;
   reports: Promise<ReadonlyMap<MessageId, Diagnostic[]>> | null;
 }
@@ -325,13 +444,14 @@ async function channelRecord(context: Context, view: ChannelView): Promise<Chann
     if (name !== null) peerName = { name, messageId: execution.messageId };
   }
   let profileSubmitted: MessageId | null = null;
-  for (const outbound of view.outbound) {
+  for (const outbound of [...view.outbound, ...(context.placed.get(channelKey(view.channel)) ?? [])]) {
     messages.push(await outboundRecord(context, outbound, view.channel, contactIds, reports.get(outbound.messageId) ?? []));
-    if (outbound.intent.status === "consistent" && outbound.intent.data.msgType === PROFILE && outbound.submitted && !outbound.erased) profileSubmitted = outbound.messageId;
+    if (outbound.intent.status === "consistent" && outbound.intent.data.msgType === PROFILE && outbound.submitted) profileSubmitted = outbound.messageId;
   }
+  const unplaced = unplacedInputs(fold.inbound.unplaced.filter((source) => source.channel !== null && sameChannel(source.channel, view.channel)));
   messages.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   const { channel, head, superseded, blocked, conflicted, send } = view;
-  return { channel, head, superseded, blocked, conflicted, send, peerName, profileSubmitted, messages };
+  return { channel, head, superseded, blocked, conflicted, send, peerName, profileSubmitted, messages, unplaced };
 }
 
 async function inboundRecord(context: Context, execution: Execution, contactIds: ContactId[]): Promise<MessageRecord> {
@@ -365,7 +485,7 @@ async function inboundRecord(context: Context, execution: Execution, contactIds:
   };
 }
 
-async function outboundRecord(context: Context, outbound: Outbound, channel: Channel, contactIds: ContactId[], reports: Diagnostic[]): Promise<MessageRecord> {
+async function outboundRecord(context: Context, outbound: Outbound, channel: Channel | null, contactIds: ContactId[], reports: Diagnostic[]): Promise<MessageRecord> {
   const { fold } = context;
   const intent = outbound.intent.status === "consistent" ? outbound.intent.data : null;
   const diagnostics: Diagnostic[] = [];
@@ -407,15 +527,15 @@ async function outboundRecord(context: Context, outbound: Outbound, channel: Cha
 function contactRecord(view: ContactView, channels: ContactChannelRecord[]): ContactRecord {
   const shownContacts = view.contacts.filter((contact) => !contact.deleted);
   const petnames = new Set(shownContacts.flatMap((contact) => (contact.petname === null ? [] : [contact.petname])));
-  const flags: Record<string, boolean> = {};
+  const flags = new Map<string, boolean>();
   const disputed = new Set<string>();
   for (const contact of shownContacts) {
     for (const [flag, value] of contact.flags) {
-      if (flag in flags && flags[flag] !== value) disputed.add(flag);
-      flags[flag] = value;
+      if (flags.has(flag) && flags.get(flag) !== value) disputed.add(flag);
+      flags.set(flag, value);
     }
   }
-  for (const flag of disputed) delete flags[flag];
+  for (const flag of disputed) flags.delete(flag);
 
   const diagnostics: string[] = [];
   for (const contact of view.contacts) {
@@ -434,7 +554,7 @@ function contactRecord(view: ContactView, channels: ContactChannelRecord[]): Con
   return {
     contacts: view.contacts.map(({ contactId, origin, deleted, petname }) => ({ contactId, origin, deleted, petname })),
     petname: petnames.size === 1 ? [...petnames][0]! : null,
-    flags,
+    flags: Object.fromEntries(flags),
     channels,
     writeTo: [...view.writeTo],
     defaultWriteTo: view.defaultWriteTo,
@@ -455,13 +575,13 @@ function invitationRecords(fold: VaultFold): InvitationRecord[] {
   }));
 }
 
-function pendingWork(fold: VaultFold, work: ReturnType<typeof unfinishedWork>): PendingWork {
+function pendingWork(fold: VaultFold, work: ReturnType<typeof unfinishedWork>, responses: readonly MissingResponse[]): PendingWork {
   return {
     pendingOutbounds: work.outbounds.map((outbound) => {
       const because = outbound.work.kind === "none" ? outbound.work.because : integrityHeld(fold, outbound) ? INTEGRITY : null;
       return { messageId: outbound.messageId, channel: outbound.channel, outcome: outbound.outcome.status as "queued" | "prepared", because, entries: because === null ? ["retry", "cancel"] : ["cancel"] };
     }),
-    missingResponses: work.responses.map(({ execution, effectType, channel }) => ({
+    missingResponses: responses.map(({ execution, effectType, channel }) => ({
       executionId: execution.id,
       messageId: execution.messageId,
       effectType,

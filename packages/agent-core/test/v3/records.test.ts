@@ -7,6 +7,11 @@ import {
   PING_TYPE,
   PROBLEM_REPORT_TYPE,
   PURE_ACK_EFFECT,
+  VaultEventSet,
+  checkVault,
+  compareChannels,
+  foldVault,
+  objectReader,
   scanVault,
   vaultDraft,
   type Channel,
@@ -26,13 +31,16 @@ import {
   afterReceipt,
   createDid,
   disclose,
+  effectTypesOf,
   manualNotificationDraft,
   manualProcedures,
   readRecords,
   receiptOf,
+  recorder,
   reportedProblem,
   send,
   type ChannelRecord,
+  type Handler,
   type MessageRecord,
   type Source,
 } from "../../src/v3/index.js";
@@ -59,19 +67,18 @@ async function closeAll(...holders: Holder[]): Promise<void> {
   for (const holder of holders) await holder.runtime.close();
 }
 
-/** Alice as a host runs her: a receiver, a dispatcher over a wire the test answers, and the manual procedures over both. */
-async function hosting(alice: DirectParty, answer: (post: Post) => Response = accepted) {
+async function hosting(alice: DirectParty, answer: (post: Post) => Response = accepted, handlers: readonly Handler[] = []) {
   const ring = await Keyring.load(alice.keys, await scanVault(alice.runtime.vault, alice.keys));
   const receiver = new Receiver(alice.runtime, alice.keys, ring, { didcomm, receipt: receiptOf(alice.runtime, alice.keys) });
   const wire = posting((post) => answer(post));
-  const dispatcher = new Dispatcher(alice.runtime, alice.keys, { didcomm, fetch: wire.fetch });
-  const manual = manualProcedures(alice.runtime, alice.keys, dispatcher, { now: () => CREATED * 1000 });
+  const dispatcher = new Dispatcher(alice.runtime, alice.keys, { didcomm, fetch: wire.fetch, effectTypes: effectTypesOf(handlers) });
+  const manual = manualProcedures(alice.runtime, alice.keys, dispatcher, { handlers, now: () => CREATED * 1000 });
   const receive = async (peer: DirectParty, extra: Partial<IMessage>, to: string = alice.longFormDid): Promise<EventReference<"message.in">> => {
     const outcome = await receiver.receive({ packed: await sealed(await peerSealer(peer), to, extra), source: DIRECT });
     if (outcome.outcome !== "received") throw new Error(`not received: ${JSON.stringify(outcome)}`);
     return outcome.eventId;
   };
-  const channel = async (pair: Channel): Promise<ChannelRecord> => (await readRecords(alice.runtime, alice.keys)).channel(pair);
+  const channel = async (pair: Channel): Promise<ChannelRecord> => (await readRecords(alice.runtime, alice.keys, { handlers })).channel(pair);
   return { wire, dispatcher, manual, receive, channel };
 }
 
@@ -177,6 +184,113 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
+  it("a profile a transport accepted stays the channel's submitted one once its content is erased, while another message of the same content keeps its body", async () => {
+    const { alice, bob } = await parties();
+    const { dispatcher, manual, channel } = await hosting(alice);
+    const pair = { localDid: alice.did, peerDid: bob.did };
+    const content = { type: PROFILE, body: { profile: { displayName: "Alice" } } };
+    const first = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, content);
+    const second = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, content);
+    for (const sent of [first, second]) expect(await dispatcher.run(sent.action)).toMatchObject({ outcome: "submitted" });
+    expect((await channel(pair)).profileSubmitted).toBe(second.messageId);
+
+    await manual.eraseMessage(second.messageId);
+    const erased = await channel(pair);
+    const shown = (messageId: MessageId) => erased.messages.find((message) => message.messageId === messageId)!;
+    expect(erased.profileSubmitted).toBe(second.messageId);
+    expect(shown(second.messageId)).toMatchObject({ body: { state: "erased" }, outcome: { status: "submitted" } });
+    expect(shown(first.messageId)).toMatchObject({ body: { state: "available", body: content.body } });
+    await closeAll(alice, bob);
+  });
+
+  it("an observation whose sender evidence is not here is shown unplaced in its pair with what it waits for, and as the one input once the evidence arrives", async () => {
+    const { alice, bob } = await parties();
+    const { receive } = await hosting(alice);
+    const pair = { localDid: alice.did, peerDid: bob.did };
+    const eventId = await receive(bob, { id: crypto.randomUUID(), type: PROFILE, body: { profile: { displayName: "Bob" } }, please_ack: [""] });
+
+    const read = objectReader(alice.runtime.vault.objects);
+    const whole = await scanVault(alice.runtime.vault, alice.keys);
+    const source = whole.channels.sources.get(eventId)!;
+    const partial = VaultEventSet.of([...whole.set.all()].filter((event) => event.eventId !== source.event.data.peerResolutionEventId));
+    const before = recorder(foldVault(partial, await checkVault(partial, alice.keys, read)), read);
+    expect(before.channels()).toEqual([pair]);
+    const record = await before.channel(pair);
+    expect([record.messages, record.peerName]).toEqual([[], null]);
+    expect(record.unplaced).toEqual([{ sourceEventId: eventId, messageId: source.event.data.messageId, channel: pair, at: source.event.at, standing: "incomplete", because: expect.any(String) }]);
+    expect([await before.unplaced(), before.pending().missingResponses]).toEqual([{ inputs: [], outputs: [] }, []]);
+
+    const after = await (await readRecords(alice.runtime, alice.keys)).channel(pair);
+    expect(after.unplaced).toEqual([]);
+    expect(after.messages).toMatchObject([{ messageId: source.event.data.messageId, input: { status: "complete" }, manualAction: "complete" }]);
+    expect(after.peerName).toMatchObject({ name: "Bob" });
+    await closeAll(alice, bob);
+  });
+
+  it("an output whose intents disagree stays in the pair they all name, with no content and no retry; when they name different pairs it is listed beside the channels with each", async () => {
+    const { alice, bob } = await parties();
+    const charlie = await directParty(3, "https://charlie.example/didcomm", CHARLIE);
+    const pair = { localDid: alice.did, peerDid: bob.did };
+    const toCharlie = { localDid: alice.did, peerDid: charlie.did };
+    const write = (peer: DirectParty, content: string) => send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: peer.longFormDid } }, { type: BASIC_MESSAGE, body: { content } });
+    const [one, two, three, elsewhere] = [await write(bob, "one"), await write(bob, "two"), await write(bob, "three"), await write(charlie, "elsewhere")];
+    const intentOf = async (messageId: MessageId) => (await scanVault(alice.runtime.vault, alice.keys)).outbound.outbounds.get(messageId)!.intents[0]!.data;
+    await alice.runtime.vault.commit([], [vaultDraft("message.out", { ...(await intentOf(two.messageId)), messageId: one.messageId }), vaultDraft("message.out", { ...(await intentOf(elsewhere.messageId)), messageId: three.messageId })]);
+
+    const records = await readRecords(alice.runtime, alice.keys);
+    expect(records.channels()).toEqual([pair, toCharlie].sort(compareChannels));
+    const conflict = { status: "conflict", because: "the intents recorded under one message ID disagree" };
+    const shown = (await records.channel(pair)).messages.find((message) => message.messageId === one.messageId)!;
+    expect(shown).toMatchObject({ channel: pair, msg: null, body: { state: "missing" }, outcome: conflict, manualAction: "none", diagnostics: [{ kind: "intent", because: conflict.because }] });
+    for (const channel of [pair, toCharlie]) expect((await records.channel(channel)).messages.map((message) => message.messageId)).not.toContain(three.messageId);
+
+    const unplaced = await records.unplaced();
+    expect(unplaced.inputs).toEqual([]);
+    expect(unplaced.outputs).toMatchObject([{ candidates: records.channels(), message: { messageId: three.messageId, channel: null, contactIds: [], msg: null, outcome: conflict, manualAction: "none" } }]);
+    expect(records.pending().pendingOutbounds.map((open) => open.messageId).sort()).toEqual([two.messageId, elsewhere.messageId].sort());
+    expect(JSON.parse(JSON.stringify(unplaced))).toEqual(unplaced);
+    await closeAll(alice, bob, charlie);
+  });
+
+  it("a reply a registered handler's operation still owes an input is listed like the vault's own, and gone once its completion gives it", async () => {
+    const REQUEST = "https://example.org/echo/1.0/request";
+    const ECHO = "https://example.org/echo/1.0/response";
+    const echo: Handler = {
+      types: [REQUEST],
+      effectTypes: [ECHO],
+      respond: async ({ source, readBody }) => [{ effectType: ECHO, content: { type: ECHO, body: (await readBody()) ?? {}, thid: source.event.data.wireMessageId, pleaseAck: null, ack: [] } }],
+    };
+    const { alice, bob } = await parties();
+    const { wire, manual, receive, channel } = await hosting(alice, accepted, [echo]);
+    const pair = { localDid: alice.did, peerDid: bob.did };
+    await receive(bob, { id: crypto.randomUUID(), type: REQUEST, body: { echo: "this" } });
+
+    expect(only(await (await readRecords(alice.runtime, alice.keys)).channel(pair), "in")).toMatchObject({ manualAction: "none", completes: [] });
+    const records = await readRecords(alice.runtime, alice.keys, { handlers: [echo] });
+    const input = only(await records.channel(pair), "in");
+    expect(input).toMatchObject({ manualAction: "complete", completes: [ECHO] });
+    const owed = records.pending().missingResponses;
+    expect(owed).toMatchObject([{ messageId: input.messageId, effectType: ECHO, channel: pair, entries: ["completeResponse"] }]);
+
+    expect(await manual.completeResponse(owed[0]!.executionId, ECHO)).toMatchObject({ outcome: "created", dispatched: { outcome: "submitted" } });
+    expect(wire.posts).toHaveLength(1);
+    const after = await channel(pair);
+    expect(only(after, "in")).toMatchObject({ manualAction: "none", completes: [] });
+    expect(only(after, "out")).toMatchObject({ effectType: ECHO, body: { state: "available", body: { echo: "this" } }, outcome: { status: "submitted" } });
+    await closeAll(alice, bob);
+  });
+
+  it("an erased input is owed no reply of its handler's", async () => {
+    const { alice, bob } = await parties();
+    const { manual, receive } = await hosting(alice);
+    await receive(bob, { id: crypto.randomUUID(), type: PING_TYPE, body: { response_requested: true }, created_time: CREATED });
+    const owed = (await readRecords(alice.runtime, alice.keys)).pending().missingResponses;
+    expect(owed).toMatchObject([{ effectType: PING_RESPONSE_EFFECT }]);
+    await manual.eraseMessage(owed[0]!.messageId);
+    expect((await readRecords(alice.runtime, alice.keys)).pending().missingResponses).toEqual([]);
+    await closeAll(alice, bob);
+  });
+
   it("a problem report is a diagnostic of the output its thread names only from that output's peer, and goes with the report's body", async () => {
     const { alice, bob } = await parties();
     const charlie = await directParty(3, "https://charlie.example/didcomm", CHARLIE);
@@ -279,6 +393,22 @@ describe("records", () => {
     contact = await records.contact(CONTACT);
     expect([records.contactIds(), contact.channels, contact.diagnostics]).toEqual([[], [], [`the contact ${CONTACT} is deleted`]]);
     expect((await records.channel(pair)).messages).toHaveLength(1);
+    await closeAll(alice, bob);
+  });
+
+  it("keeps a flag under any name, agreed values of contacts shown together, and drops one they differ on", async () => {
+    const { alice, bob } = await parties();
+    const other = "019b0000-0000-7000-8000-0000000000f1" as ContactId;
+    const names = ["pinned", "constructor", "toString", "__proto__"];
+    const flag = (contactId: ContactId, name: string, value: boolean) => vaultDraft("contact.flag", { contactId, flag: name, value });
+    await alice.runtime.vault.commit([], [vaultDraft("contact.created", { contactId: CONTACT, because: "user" }), ...names.map((name) => flag(CONTACT, name, true))]);
+    await alice.runtime.vault.commit([], [vaultDraft("contact.created", { contactId: other, because: "user" }), flag(other, "constructor", true), flag(other, "toString", false), flag(other, "muted", false)]);
+
+    const records = await readRecords(alice.runtime, alice.keys);
+    const alone = (await records.contact(CONTACT)).flags;
+    expect(Object.entries(alone).sort()).toEqual(names.map((name) => [name, true]).sort());
+    expect(Object.entries(JSON.parse(JSON.stringify(alone)) as object).sort()).toEqual(Object.entries(alone).sort());
+    expect(Object.entries((await records.contact(CONTACT, other)).flags).sort()).toEqual([["__proto__", true], ["constructor", true], ["muted", false], ["pinned", true]]);
     await closeAll(alice, bob);
   });
 

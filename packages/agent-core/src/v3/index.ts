@@ -131,5 +131,9 @@ export {
   type WaitingProof,
   type PendingWork,
   type Recorder,
+  type Unplaced,
+  type UnplacedInput,
+  type UnplacedOutput,
+  type ViewOptions,
 } from "./records.js";
-export { manualProcedures, readRecords, type Manual, type ManualOptions, type ViewOptions } from "./views.js";
+export { manualProcedures, readRecords, type Manual, type ManualOptions } from "./views.js";
