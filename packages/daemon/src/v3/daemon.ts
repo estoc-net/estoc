@@ -21,6 +21,7 @@ import {
   AgentTrace,
   BUILT_IN_HANDLERS,
   MAX_CONTENT_BYTES,
+  bounded,
   createDid,
   createMediation,
   createVault,
@@ -55,8 +56,9 @@ export interface DaemonCore extends Daemon {
    * The agent closed and the files let go of, for the host that is
    * shutting down; the seed stays cached where the host keeps it. A wait
    * for files held elsewhere ends, the operation under way is waited
-   * for, and nothing is opened or said afterwards; every call answers
-   * with the one closing.
+   * for, what the agent has under way on the network is given up, and
+   * nothing is opened, sent or said afterwards; every call answers with
+   * the one closing.
    */
   close(): Promise<void>;
 }
@@ -76,14 +78,31 @@ const MERGE_SOURCE = "merge-source.sqlite";
 const EXPORT_FILE = "export.sqlite";
 const BUSY_RETRY_MS = 2000;
 const CLOSED = "the daemon is closed";
+const DETACHED = "the agent is closed";
 
 const SCAN = { effectTypes: effectTypesOf(BUILT_IN_HANDLERS) };
+
+/**
+ * One agent as the daemon holds it. Closing an agent does not end a
+ * flow of its own already under way, and such a flow goes on from what
+ * it read before: a reconciliation would take away the addresses
+ * whoever has the vault next has registered since. So the agent
+ * reaches the network through `ended` — no request starts once it has
+ * fired, and one in flight is given up — and whatever runs over the
+ * agent is kept in `work`, to be waited for before the vault is closed
+ * or handed to another agent.
+ */
+interface Attached {
+  agent: Promise<Agent>;
+  ended: AbortController;
+  work: Set<Promise<void>>;
+}
 
 interface Open {
   runtime: SqliteVault;
   keys: Keys;
   trace: AgentTrace;
-  agent: Promise<Agent>;
+  attached: Attached;
 }
 
 const failure = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -128,7 +147,6 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   const log = (line: string) => emit("log", line);
 
   let turn: Promise<void> = Promise.resolve();
-  /** `work` once everything asked before it has settled. */
   function inTurn<T>(work: () => Promise<T>): Promise<T> {
     const done = turn.then(work);
     turn = done.then(
@@ -277,32 +295,71 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
 
   const linesOf = (agent: Agent): Lines => ({ connections: agent.connections(), waiting: agent.waitingDeliveries(), discarded: agent.discardedDeliveries() });
 
-  async function attach(runtime: SqliteVault, keys: Keys, trace: AgentTrace): Promise<Agent> {
-    const agent = await Agent.open(
-      { runtime, keys },
-      {
-        ...host.agentOptions,
-        fetch: host.agentOptions?.fetch ?? globalThis.fetch,
-        didcomm: await host.didcomm(),
-        trace,
-        log,
-        onInbound: () => {
-          void tell();
-          emit("lines", linesOf(agent));
-        },
-      }
+  function attach(runtime: SqliteVault, keys: Keys, trace: AgentTrace): Attached {
+    const ended = new AbortController();
+    const reach = host.agentOptions?.fetch ?? globalThis.fetch;
+    const whileAttached =
+      <A extends unknown[]>(say: (...args: A) => void) =>
+      (...args: A) => {
+        if (!ended.signal.aborted) say(...args);
+      };
+    const opening = async (): Promise<Agent> => {
+      const agent = await Agent.open(
+        { runtime, keys },
+        {
+          ...host.agentOptions,
+          // Raced as well as signalled: a fetch the host supplied may not listen to the signal.
+          fetch: (input, init) => bounded(ended.signal, () => reach(input, { ...init, signal: init?.signal == null ? ended.signal : AbortSignal.any([init.signal, ended.signal]) })),
+          didcomm: await host.didcomm(),
+          trace,
+          log: whileAttached(log),
+          onInbound: whileAttached(() => {
+            void tell();
+            emit("lines", linesOf(agent));
+          }),
+        }
+      );
+      return agent;
+    };
+    const attached: Attached = { agent: opening(), ended, work: new Set() };
+    attached.agent.catch(() => undefined);
+    return attached;
+  }
+
+  /** `work` over the agent, refused once the agent is detached and waited for by whoever detaches it. */
+  function during<T>(attached: Attached, work: (agent: Agent) => Promise<T>): Promise<T> {
+    const done = attached.agent.then((agent) => {
+      if (attached.ended.signal.aborted) throw new Error(DETACHED);
+      return work(agent);
+    });
+    const settled = done.then(
+      () => undefined,
+      () => undefined
     );
-    return agent;
+    attached.work.add(settled);
+    void settled.then(() => attached.work.delete(settled));
+    return done;
+  }
+
+  /** The agent cut off from the network and closed, and everything under way over it settled. */
+  async function detach(attached: Attached): Promise<void> {
+    attached.ended.abort(new Error(DETACHED));
+    await attached.agent.then(
+      (agent) => agent.close(),
+      () => undefined
+    );
+    await Promise.all(attached.work);
   }
 
   /** The agent's lines connected, in the background: a mediator out of reach keeps no screen waiting. */
   function connect(running: Open): void {
-    void running.agent
-      .then(async (agent) => {
-        await agent.connect();
-        if (open === running) emit("lines", linesOf(agent));
-      })
-      .catch((err) => log(`the agent did not come up: ${failure(err)}`));
+    const { attached } = running;
+    during(attached, async (agent) => {
+      await agent.connect();
+      if (open === running && running.attached === attached) emit("lines", linesOf(agent));
+    }).catch((err) => {
+      if (!attached.ended.signal.aborted) log(`the agent did not come up: ${failure(err)}`);
+    });
   }
 
   async function start(runtime: SqliteVault, keys: Keys): Promise<void> {
@@ -310,8 +367,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     try {
       if (closing()) throw new Error(CLOSED);
       const trace = await AgentTrace.open(runtime.local);
-      running = { runtime, keys, trace, agent: attach(runtime, keys, trace) };
-      running.agent.catch(() => undefined);
+      running = { runtime, keys, trace, attached: attach(runtime, keys, trace) };
     } catch (err) {
       await runtime.close();
       throw err;
@@ -327,10 +383,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     const running = open;
     open = null;
     if (running === null) return;
-    await running.agent.then(
-      (agent) => agent.close(),
-      () => undefined
-    );
+    await detach(running.attached);
     await running.runtime.close();
   }
 
@@ -358,15 +411,17 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   /** `work` over the running agent, and the vault told again afterwards whether or not it threw: a call that failed may have committed. */
   async function act<T>(work: (agent: Agent, running: Open) => Promise<T>): Promise<T> {
     const running = vault();
-    const agent = await running.agent;
-    try {
-      return await work(agent, running);
-    } finally {
-      if (open === running) {
-        await tell();
-        emit("lines", linesOf(agent));
+    const { attached } = running;
+    return during(attached, async (agent) => {
+      try {
+        return await work(agent, running);
+      } finally {
+        if (open === running) {
+          await tell();
+          if (running.attached === attached) emit("lines", linesOf(agent));
+        }
       }
-    }
+    });
   }
 
   const commit = ({ runtime, keys }: Open, choose: (fold: VaultFold) => VaultDraft[]) => decide(runtime, keys, choose);
@@ -412,7 +467,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       return;
     }
     to("opened", await snapshot(running));
-    void running.agent.then(
+    void running.attached.agent.then(
       (agent) => to("lines", linesOf(agent)),
       () => undefined
     );
@@ -620,9 +675,8 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
           }
         });
         // The agent read its keys and its lines before the merge: another over the merged vault takes its place.
-        (await running.agent).close();
-        running.agent = attach(running.runtime, running.keys, running.trace);
-        running.agent.catch(() => undefined);
+        await detach(running.attached);
+        running.attached = attach(running.runtime, running.keys, running.trace);
         await tell();
         connect(running);
         const { added, duplicates, conflicts, objects, repaired } = imported;
@@ -736,7 +790,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         return { successor: rotated.successor, existed: rotated.existed, ...effectOutcomeOf(rotated.notification) };
       }),
 
-    pending: async () => (await vault().agent).pending(),
+    pending: async () => during(vault().attached, (agent) => agent.pending()),
 
     async refresh() {
       vault();
@@ -745,9 +799,11 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
 
     async reconnect() {
       const running = vault();
-      const agent = await running.agent;
-      await agent.connect();
-      emit("lines", linesOf(agent));
+      const { attached } = running;
+      await during(attached, async (agent) => {
+        await agent.connect();
+        if (open === running && running.attached === attached) emit("lines", linesOf(agent));
+      });
     },
 
     traceLevel: async () => vault().trace.level,

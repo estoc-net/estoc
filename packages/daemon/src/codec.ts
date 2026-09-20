@@ -48,7 +48,6 @@ export function decode(text: string): unknown {
   });
 }
 
-/** The one key of a plain record that has exactly one; undefined for anything else. */
 function soleKeyOf(v: unknown): string | undefined {
   if (typeof v !== "object" || v === null || Array.isArray(v)) {
     return undefined;

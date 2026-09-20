@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { PING_TYPE, type Channel, type DidId } from "@estoc/vault/v3";
 
+import { RECIPIENT_QUERY, RECIPIENT_UPDATE } from "@estoc/agent-core";
 import { newMediator } from "../../../agent-core/test/v3/helpers.js";
 import type { FakeMediator } from "../../../agent-core/test/fake-mediator.js";
 import { connect, createDaemon, decode, encode, type Daemon, type DaemonCore, type DaemonEvents, type Lines, type Port, type Snapshot } from "../../src/v3/index.js";
@@ -150,11 +151,13 @@ describe("the daemon over a folder", () => {
       expect(await closedWith).toBe(1007);
 
       const port = await clientPort(served.url);
-      for (const noCall of [null, [], "boot", { kind: "call", id: 1, method: "boot" }]) port.postMessage(noCall);
+      const noCalls = [null, [], "boot", { kind: "call", id: 1, method: "boot" }, { kind: "call", id: 1, method: { toString: null }, args: [] }, { kind: "call", id: 1, method: ["boot"], args: [] }, { kind: "call", id: "1", method: "boot", args: [] }];
+      for (const noCall of noCalls) port.postMessage(noCall);
       const heard = told();
-      const ui = connect<Daemon>(port, new Proxy({} as DaemonEvents, { get: (_, name: string) => (...args: unknown[]) => heard.emit(name, ...args) }) as never);
+      const ui = connect<Daemon & { constructor(): Promise<unknown> }>(port, new Proxy({} as DaemonEvents, { get: (_, name: string) => (...args: unknown[]) => heard.emit(name, ...args) }) as never);
       await ui.boot();
       expect(heard.phases()).toEqual(["onboarding"]);
+      await expect(ui.constructor()).rejects.toThrow(/no such method: constructor/);
     } finally {
       await served.close();
     }
@@ -277,6 +280,51 @@ describe("a daemon's files, one operation at a time", () => {
 });
 
 describe("two daemons over a mediator", () => {
+  it(
+    "asks the mediator nothing once it is closed: a reconciliation cut short takes away no address the next daemon over the vault registers",
+    async () => {
+      const mediator = await newMediator();
+      const { root, daemon, heard } = await person(mediator, "Alice");
+      await until("the first connection is through", () => heard.lines()?.connections[0]?.live === true);
+
+      let release = (): void => undefined;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let asked = false;
+      mediator.intercept = async (message) => {
+        if (message.type !== RECIPIENT_QUERY || asked) return undefined;
+        asked = true;
+        await held;
+        return undefined;
+      };
+      try {
+        const reconnecting = daemon.reconnect();
+        await until("the query is with the mediator", () => asked);
+        await daemon.close();
+        await reconnecting;
+        const saidByClose = heard.events.length;
+
+        const next = daemonOver(root, mediator);
+        await next.daemon.boot();
+        await next.daemon.unlock(PASSPHRASE);
+        await next.daemon.createInvitation("one");
+        const registered = [...mediator.recipients.keys()];
+        expect(registered).toHaveLength(1);
+
+        const seen = mediator.seenTypes.length;
+        release();
+        // The mediator answers the query it held; what the closed daemon would have sent on that answer has long had its chance by then.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(mediator.seenTypes.slice(seen).filter((type) => type === RECIPIENT_UPDATE)).toEqual([]);
+        expect([...mediator.recipients.keys()]).toEqual(registered);
+        expect(heard.events).toHaveLength(saidByClose);
+      } finally {
+        release();
+        mediator.intercept = null;
+      }
+    },
+    LONG
+  );
+
   it(
     "an invitation accepted becomes a contact on one side and a channel to name on the other; a restored vault receives at once and sends only once the restore is explained",
     async () => {

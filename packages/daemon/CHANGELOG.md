@@ -25,6 +25,13 @@
   for files held elsewhere, waits for the operation under way, lets go
   of everything, and answers the same to every caller; nothing is
   opened or said after it.
+- **An agent let go of asks the network nothing more.** Each agent
+  reaches the network through a fetch of its own that the daemon ends
+  when it closes, locks, forgets the vault or replaces the agent after
+  a merge: a request in flight is given up, none starts afterwards,
+  and what was under way over the agent is waited for before the vault
+  closes. A reconciliation cut short this way can no longer take away
+  the addresses the next daemon over the vault has registered.
 - **The text encoding carries any record as it was.** A record whose
   one key starts with `$` — `{"$bytes": "…"}` in a message body — came
   back as bytes or a Map, or failed to decode. Such a record now goes
@@ -32,7 +39,9 @@
   `decode` throws on a tag that is none of its own. Both ends of a
   socket need this version. A frame that does not decode closes the
   socket it came on (1007) rather than the process, and `serve` leaves
-  unanswered whatever is no call.
+  unanswered whatever is no call — a record with a numeric `id`, a
+  string `method` and an array of `args` — and answers a call only from
+  its target's own methods.
 - **`Snapshot`** is the vault as `@estoc/agent-core/v3` records off one
   fold — arrangements, local DIDs, contacts, each channel record once,
   unplaced observations, invitations, pending work — told whole as
