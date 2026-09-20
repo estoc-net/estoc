@@ -56,8 +56,8 @@ export function moveDraft(from: Channel, to: Channel): void {
   if (draft !== null && !samePair(from, to) && draftIn(to) === null) rehome(draft, to);
 }
 
-// each DID a snapshot has named, under the entity of the vault it was created as
-const created = new Map<Did, DidId>();
+// each DID a snapshot has named, under every entity of the vault it was named for
+const created = new Map<Did, Set<DidId>>();
 
 /**
  * Bring the drafts to a snapshot, before anything shows it.
@@ -73,9 +73,15 @@ const created = new Map<Did, DidId>();
  * second, different creation of an entity; the vault then names no DID
  * for it and closes its sends, but it is the same vault, and what was
  * being written stays to be read. So a DID is remembered under its
- * entity from when the vault still named it. A lock, a reconnection and
- * a withdrawn selection leave the entities, and the drafts; so does a
- * restore of the same identity from a backup that holds the entity.
+ * entity from when the vault still named it. An import can as well bring
+ * another entity that claims the same DID, which the vault faults and
+ * goes on naming. Which of the two a draft was written as is not the
+ * page's to judge, and a later claim takes nothing from an earlier one:
+ * the DID is remembered under each, and its drafts stay while any of
+ * them is in the vault. None of them is in another identity's vault. A
+ * lock, a reconnection and a withdrawn selection leave the entities, and
+ * the drafts; so does a restore of the same identity from a backup that
+ * holds the entity.
  *
  * Then each draft follows its channel to the head it now leads to. One
  * whose channel has no single successor stays where it is, and so does
@@ -86,8 +92,13 @@ const created = new Map<Did, DidId>();
  */
 export function carryDrafts({ dids, channels }: Pick<Snapshot, "dids" | "channels">): void {
   const entities = new Set(dids.map(({ didId }) => didId));
-  for (const [did, didId] of created) if (!entities.has(didId)) created.delete(did);
-  for (const { did, didId } of dids) if (did !== null) created.set(did, didId);
+  for (const [did, named] of created) {
+    for (const didId of named) if (!entities.has(didId)) named.delete(didId);
+    if (named.size === 0) created.delete(did);
+  }
+  for (const { did, didId } of dids) {
+    if (did !== null) created.set(did, (created.get(did) ?? new Set()).add(didId));
+  }
   for (const draft of [...drafts]) if (!created.has(draft.channel.localDid)) drafts.splice(drafts.indexOf(draft), 1);
   const heads = new Map(channels.map(({ channel, head }) => [pairKey(channel), head]));
   for (const draft of writtenDrafts()) {
