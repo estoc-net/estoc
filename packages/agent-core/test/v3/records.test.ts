@@ -280,14 +280,32 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("an erased input is owed no reply of its handler's", async () => {
+  it("an erased input still lists a registered handler's reply, which its headers may decide, until the completion gives it; an erased Ping lists no built-in reply", async () => {
+    const NOTICE = "https://example.org/notice/1.0/notice";
+    const NOTED = "https://example.org/notice/1.0/noted";
+    let asked = 0;
+    const noted: Handler = {
+      types: [NOTICE],
+      effectTypes: [NOTED],
+      respond: async ({ source }) => {
+        asked += 1;
+        return [{ effectType: NOTED, content: { type: NOTED, body: {}, thid: source.event.data.wireMessageId, pleaseAck: null, ack: [] } }];
+      },
+    };
     const { alice, bob } = await parties();
-    const { manual, receive } = await hosting(alice);
+    const { wire, manual, receive } = await hosting(alice, accepted, [noted]);
+    const owed = async () => (await readRecords(alice.runtime, alice.keys, { handlers: [noted] })).pending().missingResponses;
     await receive(bob, { id: crypto.randomUUID(), type: PING_TYPE, body: { response_requested: true }, created_time: CREATED });
-    const owed = (await readRecords(alice.runtime, alice.keys)).pending().missingResponses;
-    expect(owed).toMatchObject([{ effectType: PING_RESPONSE_EFFECT }]);
-    await manual.eraseMessage(owed[0]!.messageId);
-    expect((await readRecords(alice.runtime, alice.keys)).pending().missingResponses).toEqual([]);
+    await receive(bob, { id: crypto.randomUUID(), type: NOTICE, body: { note: "gone soon" } });
+    expect((await owed()).map((response) => response.effectType).sort()).toEqual([NOTED, PING_RESPONSE_EFFECT].sort());
+
+    for (const response of await owed()) await manual.eraseMessage(response.messageId);
+    const left = await owed();
+    expect(left).toMatchObject([{ effectType: NOTED, entries: ["completeResponse"] }]);
+    expect(asked).toBe(0);
+
+    expect(await manual.completeResponse(left[0]!.executionId, NOTED)).toMatchObject({ outcome: "created", dispatched: { outcome: "submitted" } });
+    expect([wire.posts.length, await owed()]).toEqual([1, []]);
     await closeAll(alice, bob);
   });
 

@@ -58,7 +58,7 @@ import {
 
 import { PROFILE } from "../protocol/user-profile.js";
 import type { EffectOptions } from "./effects.js";
-import { claimedName, handlerFor, handlersOf, reportedProblem, type Handler } from "./handlers/index.js";
+import { claimedName, handlerFor, handlersOf, reportedProblem, trustPing, type Handler } from "./handlers/index.js";
 
 export type ViewOptions = Pick<EffectOptions, "handlers">;
 
@@ -238,7 +238,7 @@ export interface PendingWork {
 
 /** Reads of one fold's records share what they derive from it. */
 export interface Recorder {
-  /** every pair an observation was made in or an output names, in canonical order: a channel no contact selects is still shown */
+  /** every pair a channel record shows an observation or an output in, in canonical order, whether or not a contact selects it; the pairs an unplaced output's intents name are its candidates instead */
   channels(): Channel[];
   /** what no channel shows */
   unplaced(): Promise<Unplaced>;
@@ -303,16 +303,20 @@ export function recorder(fold: VaultFold, readObject: ReadObject, options: ViewO
  * the vault's own candidate. A protocol's reply is a candidate under
  * each operation the input's handler declares and no intent records,
  * chosen as a completion chooses it, so that a registered handler
- * replacing a built-in one replaces its candidates too; an erased
- * input earns none, its body being what a handler reads. Whether a
- * candidate is given is the completion's call.
+ * replacing a built-in one replaces its candidates too. An erased
+ * input keeps the candidates of a registered handler, which may answer
+ * from the headers alone and is shown no body by the completion; the
+ * built-in Ping reply is decided by the body, so an erased Ping earns
+ * none. Whether a candidate is given is the completion's call.
  */
 function owedResponses(fold: VaultFold, own: readonly MissingResponse[], handlers: readonly Handler[]): MissingResponse[] {
   const owed = own.filter((response) => response.effectType === PURE_ACK_EFFECT);
   for (const execution of fold.inbound.executions.values()) {
-    if (execution.status.status !== "complete" || execution.erased) continue;
+    if (execution.status.status !== "complete") continue;
     const source = execution.members.find((member) => member.witness.status === "complete")!.source;
-    const operations = (handlerFor(handlers, source.event.data.msgType)?.effectTypes ?? []).filter((effectType) => effectType !== PURE_ACK_EFFECT && automaticIntent(fold, execution, effectType).existing === null);
+    const handler = handlerFor(handlers, source.event.data.msgType);
+    if (handler === null || (handler === trustPing && execution.erased)) continue;
+    const operations = handler.effectTypes.filter((effectType) => effectType !== PURE_ACK_EFFECT && automaticIntent(fold, execution, effectType).existing === null);
     if (operations.length === 0) continue;
     const selected = responseChannel(fold, execution);
     if (selected.status === "none") continue;
