@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
@@ -57,13 +57,15 @@ async function until(what: string, condition: () => boolean, ms = 60_000): Promi
   }
 }
 
-/** A daemon over a folder of its own, its agent's transports the mediator's. */
-function daemonOver(root: string, mediator: FakeMediator): { daemon: DaemonCore; heard: Told } {
+/** A daemon over a folder, its agent's transports the mediator's when there is one. */
+function daemonOver(root: string, mediator?: FakeMediator): { daemon: DaemonCore; heard: Told } {
   const heard = told();
-  const daemon = createDaemon(nodeHost(root, { fetch: mediator.fetch, WebSocket: mediator.WebSocket }), heard.emit);
+  const daemon = createDaemon(nodeHost(root, mediator === undefined ? {} : { fetch: mediator.fetch, WebSocket: mediator.WebSocket }), heard.emit);
   daemons.push(daemon);
   return { daemon, heard };
 }
+
+const vaultFile = (root: string) => path.join(root, ".estoc", "vault.sqlite");
 
 async function person(mediator: FakeMediator, name: string): Promise<{ root: string; daemon: DaemonCore; heard: Told }> {
   const root = await folder();
@@ -135,6 +137,29 @@ describe("the daemon over a folder", () => {
     expect(other.phases().at(-1)).toBe("locked");
   });
 
+  it("closes the socket a frame that does not decode came on, answers nothing that is no call, and goes on serving", async () => {
+    const served = await serveDaemon({ host: nodeHost(await folder()), port: 0, token: "t0k3n" });
+    try {
+      const garbled = new WebSocket(served.url);
+      await new Promise<void>((resolve, reject) => {
+        garbled.once("open", resolve);
+        garbled.once("error", reject);
+      });
+      const closedWith = new Promise<number>((resolve) => garbled.once("close", resolve));
+      garbled.send('{"kind":"call","id":1,"method":"send","args":[{"$bytes":"not base64!"}]}');
+      expect(await closedWith).toBe(1007);
+
+      const port = await clientPort(served.url);
+      for (const noCall of [null, [], "boot", { kind: "call", id: 1, method: "boot" }]) port.postMessage(noCall);
+      const heard = told();
+      const ui = connect<Daemon>(port, new Proxy({} as DaemonEvents, { get: (_, name: string) => (...args: unknown[]) => heard.emit(name, ...args) }) as never);
+      await ui.boot();
+      expect(heard.phases()).toEqual(["onboarding"]);
+    } finally {
+      await served.close();
+    }
+  });
+
   it("reads no folder-format vault, and leaves it as it is", async () => {
     const root = await folder();
     await mkdir(path.join(root, ".estoc"));
@@ -146,6 +171,108 @@ describe("the daemon over a folder", () => {
     expect(heard.events).toEqual([["phase", "unreadable", expect.stringMatching(/folder format/)]]);
     await expect(daemon.createIdentity("Alice", PASSPHRASE)).rejects.toThrow();
     await stat(path.join(root, ".estoc", "config.json"));
+    expect(await readdir(path.join(root, ".estoc"))).toEqual(["config.json"]);
+  });
+});
+
+describe("a daemon's files, one operation at a time", () => {
+  const settledAs = (results: PromiseSettledResult<unknown>[]) => results.map((result) => (result.status === "fulfilled" ? "fulfilled" : String((result.reason as Error).message)));
+
+  it("makes one vault of two asked for at once, whichever way they are made: the one refused takes nothing of the other's", async () => {
+    const source = daemonOver(await folder());
+    await source.daemon.boot();
+    await source.daemon.createIdentity("Alice", PASSPHRASE);
+    const backup = await source.daemon.exportBackup();
+
+    const occupied = /a vault already exists here/;
+    const races: [string, (daemon: DaemonCore) => Promise<unknown>[]][] = [
+      ["Alice", (daemon) => [daemon.createIdentity("Alice", PASSPHRASE), daemon.createIdentity("Bob", PASSPHRASE)]],
+      ["Alice", (daemon) => [daemon.restoreIdentity(backup.bytes, PASSPHRASE), daemon.createIdentity("Bob", PASSPHRASE)]],
+      ["Bob", (daemon) => [daemon.createIdentity("Bob", PASSPHRASE), daemon.restoreIdentity(backup.bytes, PASSPHRASE)]],
+    ];
+    for (const [label, race] of races) {
+      const root = await folder();
+      const { daemon, heard } = daemonOver(root);
+      await daemon.boot();
+      expect(settledAs(await Promise.allSettled(race(daemon)))).toEqual(["fulfilled", expect.stringMatching(occupied)]);
+      expect(heard.events.filter(([name]) => name === "opened").map(([, snapshot]) => (snapshot as Snapshot).label)).toEqual([label]);
+      await stat(vaultFile(root));
+      expect((await daemon.exportBackup()).bytes.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("neither forgets nor makes a vault in a folder another daemon holds, and a daemon closed while it waits for one asks no more", async () => {
+    const root = await folder();
+    const owner = daemonOver(root);
+    await owner.daemon.boot();
+    await owner.daemon.createIdentity("Alice", PASSPHRASE);
+
+    const other = daemonOver(root);
+    const waiting = other.daemon.boot();
+    await until("the second daemon says the folder is held elsewhere", () => other.heard.phases().includes("elsewhere"));
+    const elsewhere = /held elsewhere/;
+    await expect(other.daemon.forgetIdentity()).rejects.toThrow(elsewhere);
+    await expect(other.daemon.createIdentity("Mallory", PASSPHRASE)).rejects.toThrow(elsewhere);
+    await expect(other.daemon.lock()).rejects.toThrow(elsewhere);
+    await stat(vaultFile(root));
+    expect((await owner.daemon.exportBackup()).bytes.length).toBeGreaterThan(0);
+
+    const closed = other.daemon.close();
+    expect(other.daemon.close()).toBe(closed);
+    await closed;
+    await waiting;
+    const saidByClose = other.heard.events.length;
+    await expect(other.daemon.unlock(PASSPHRASE)).rejects.toThrow(/the daemon is closed/);
+
+    // The owner gone, the folder is free at once: nothing of the closed daemon comes back for it.
+    await owner.daemon.close();
+    const next = daemonOver(root);
+    await next.daemon.boot();
+    expect(next.heard.phases()).toEqual(["locked"]);
+    expect(other.heard.events).toHaveLength(saidByClose);
+    expect(other.heard.phases()).toEqual(["elsewhere"]);
+  });
+
+  it("stays locked when locked again, by one UI or by two at once", async () => {
+    const { daemon, heard } = daemonOver(await folder());
+    await daemon.boot();
+    await daemon.createIdentity("Alice", PASSPHRASE);
+    await daemon.lock();
+    await daemon.lock();
+    await Promise.all([daemon.lock(), daemon.lock()]);
+    expect(heard.phases()).toEqual(["onboarding", "locked"]);
+    await daemon.unlock(PASSPHRASE);
+    await Promise.all([daemon.lock(), daemon.lock()]);
+    expect(heard.phases()).toEqual(["onboarding", "locked", "locked"]);
+    await daemon.unlock(PASSPHRASE);
+    expect(heard.snapshot().label).toBe("Alice");
+  });
+
+  it("carries exports and merges asked for at once each to its own end, a merge that fails among them, and leaves no snapshot behind", async () => {
+    const root = await folder();
+    const { daemon } = daemonOver(root);
+    await daemon.boot();
+    await daemon.createIdentity("Alice", PASSPHRASE);
+    const backup = await daemon.exportBackup();
+    const noSnapshot = new TextEncoder().encode("no database at all");
+
+    const results = await Promise.allSettled([daemon.exportBackup(), daemon.mergeBackup(backup.bytes), daemon.exportBackup(), daemon.mergeBackup(noSnapshot), daemon.mergeBackup(backup.bytes), daemon.exportBackup()]);
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled", "fulfilled", "rejected", "fulfilled", "fulfilled"]);
+    for (const index of [1, 4]) expect((results[index] as PromiseFulfilledResult<unknown>).value).toMatchObject({ added: 0, conflicts: 0 });
+    // An export is whole if it validates as a snapshot, which a merge does before it takes anything from one.
+    for (const index of [0, 2, 5]) {
+      const exported = (results[index] as PromiseFulfilledResult<{ bytes: Uint8Array }>).value;
+      expect(await daemon.mergeBackup(exported.bytes)).toMatchObject({ added: 0, conflicts: 0 });
+    }
+
+    // A close lets the operation under way finish and refuses the one still waiting behind it.
+    const underWay = daemon.exportBackup();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const behind = daemon.mergeBackup(backup.bytes);
+    const closed = daemon.close();
+    expect(settledAs(await Promise.allSettled([underWay, behind]))).toEqual(["fulfilled", expect.stringMatching(/the daemon is closed/)]);
+    await closed;
+    expect((await readdir(path.join(root, ".estoc"))).filter((name) => !/^(vault|owner)\.sqlite/.test(name))).toEqual([]);
   });
 });
 

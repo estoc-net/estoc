@@ -100,7 +100,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     const deliveries: Delivery[] = [];
     let unreadable = 0;
     for (const message of fold.messages()) {
-      // a deleted contact's channels are tombstoned (§9): nothing of them is shown
+      // a deleted contact's channels are tombstoned: nothing of them is shown
       const attribution = fold.attribution(message.pair);
       if (attribution.kind === "deleted") {
         continue;
@@ -286,7 +286,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         }
         v = await openVault(backend, key);
         // the snapshot carried no local/, so this open is a fresh device: the
-        // old device's unsent mail is held, not this one's to send (§10); a
+        // old device's unsent mail is held, not this one's to send; a
         // mediation of this device's own is chosen in the UI afterwards
         await holdImported(v.vault.events, v.fold);
       } catch (err) {
@@ -358,7 +358,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       stopAgent();
       const reopened = await openVault(backend, seedKey);
       // what another device wrote and did not send is not sent by this one
-      // unasked (§10); the cache learns the keys the merged log minted
+      // unasked; the cache learns the keys the merged log minted
       await holdImported(reopened.vault.events, reopened.fold);
       await reopened.keys.rebuildCache(reopened.fold);
       await open(reopened, seedKey);

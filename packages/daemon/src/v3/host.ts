@@ -9,9 +9,13 @@ export const VAULT_FILE = "vault.sqlite";
 /**
  * The SQLite files of one daemon, by name: the vault's runtime, and
  * for the length of an export, a restore or a merge, the portable
- * snapshot beside it. An open takes the file and refuses a second one
- * with `DatabaseBusy`, in this process or another, until it closes.
- * A snapshot crosses the host's boundary as the bytes of its file.
+ * snapshot beside it. Whoever has this has all of them, from
+ * `DaemonHost.storage()` to `close()`: no other daemon makes, opens or
+ * removes a file here meanwhile, which is what lets a file be removed
+ * once its connection has closed with nobody taking it in between. An
+ * open takes the file and refuses a second one with `DatabaseBusy`
+ * until it closes. A snapshot crosses the host's boundary as the bytes
+ * of its file.
  */
 export interface DaemonStorage {
   has(name: string): Promise<boolean>;
@@ -23,6 +27,8 @@ export interface DaemonStorage {
   importFile(name: string, bytes: Uint8Array): Promise<void>;
   /** Deletes `name`, which no connection may hold open, with whatever SQLite kept beside it; nothing when there is none. */
   remove(name: string): Promise<void>;
+  /** Lets go of the files as a whole, every connection to them closed first; another daemon may take them from here. */
+  close(): Promise<void>;
 }
 
 /**
@@ -34,9 +40,9 @@ export interface DaemonStorage {
  * and the bundled WASM.
  */
 export interface DaemonHost {
-  /** `DatabaseBusy` while another daemon holds the files as a whole. */
+  /** The files taken as a whole, until the storage is closed; `DatabaseBusy` while another daemon has them. */
   storage(): Promise<DaemonStorage>;
-  /** What stands where the vault would be and is no vault of this version, in words for the person; null when nothing does. */
+  /** What stands where the vault would be and is no vault of this version, in words for the person; null when nothing does. Asked before the files are taken, and nothing is taken or written where it answers. */
   unreadable?(): Promise<string | null>;
   cachedSeedKey(): Promise<SeedKey | null>;
   cacheSeedKey(key: SeedKey): Promise<void>;

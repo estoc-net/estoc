@@ -76,6 +76,15 @@ RPC (`serve`, `connect`) and the text encoding are the same.
 `@estoc/daemon/v3/node` has `nodeHost(root)`, whose vault is
 `<root>/.estoc/vault.sqlite`, and `serveDaemon`.
 
+A host hands its files to one daemon at a time, from `storage()` to the
+storage's `close()`; the Node host keeps an empty `owner.sqlite` open
+beside the vault for that, under SQLite's own lock, so a second daemon
+on the folder says `elsewhere`, refuses what would make, open or remove
+a file, and waits. Within a daemon those calls — `createIdentity`,
+`restoreIdentity`, `unlock`, `lock`, `forgetIdentity`, `exportBackup`,
+`mergeBackup` — run one at a time in the order asked, and `close()`
+ends a wait for files held elsewhere.
+
 The UI is told the vault whole: `opened(snapshot)` once, then
 `changed(snapshot)` after every call it makes and every delivery; what
 changed with neither — a retry the dispatcher made on its own — is read

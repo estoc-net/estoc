@@ -51,7 +51,13 @@ export interface DaemonCore extends Daemon {
   readonly booted: boolean;
   /** Say where things stand again, to `to` alone — for a listener that was not there the first time. */
   replayTo(to: Emit): Promise<void>;
-  /** The agent closed and the vault let go of, for the host that is shutting down; the seed stays cached where the host keeps it. */
+  /**
+   * The agent closed and the files let go of, for the host that is
+   * shutting down; the seed stays cached where the host keeps it. A wait
+   * for files held elsewhere ends, the operation under way is waited
+   * for, and nothing is opened or said afterwards; every call answers
+   * with the one closing.
+   */
   close(): Promise<void>;
 }
 
@@ -69,6 +75,7 @@ const RESTORE_SOURCE = "restore-source.sqlite";
 const MERGE_SOURCE = "merge-source.sqlite";
 const EXPORT_FILE = "export.sqlite";
 const BUSY_RETRY_MS = 2000;
+const CLOSED = "the daemon is closed";
 
 const SCAN = { effectTypes: effectTypesOf(BUILT_IN_HANDLERS) };
 
@@ -108,22 +115,69 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   let current: Phase = "booting";
   let detail: string | null = null;
 
+  let closed: Promise<void> | null = null;
+  const closing = () => closed !== null;
+  const waits = new Set<() => void>();
+
   const phase = (p: Phase, why: string | null = null) => {
+    if (closing()) return;
     current = p;
     detail = why;
     emit("phase", p, why);
   };
   const log = (line: string) => emit("log", line);
 
-  /** `take`, tried again for as long as another daemon holds what it opens. */
-  async function owned<T>(take: () => Promise<T>): Promise<T> {
+  let turn: Promise<void> = Promise.resolve();
+  /** `work` once everything asked before it has settled. */
+  function inTurn<T>(work: () => Promise<T>): Promise<T> {
+    const done = turn.then(work);
+    turn = done.then(
+      () => undefined,
+      () => undefined
+    );
+    return done;
+  }
+
+  /**
+   * Whatever makes, opens, closes or removes one of the daemon's files
+   * runs one at a time, in the order asked: what an operation found
+   * when it checked still holds when it acts, and no file is closed or
+   * removed under another still using it. A daemon waiting for files
+   * held elsewhere refuses it rather than leave it waiting behind that.
+   */
+  async function exclusively<T>(work: () => Promise<T>): Promise<T> {
+    if (closing()) throw new Error(CLOSED);
+    if (current === "elsewhere") throw new Error("the vault is held elsewhere");
+    return inTurn(() => {
+      if (closing()) throw new Error(CLOSED);
+      return work();
+    });
+  }
+
+  function pause(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const over = () => {
+        clearTimeout(timer);
+        waits.delete(over);
+        resolve();
+      };
+      const timer = setTimeout(over, ms);
+      waits.add(over);
+    });
+  }
+
+  /** `take`, tried again for as long as somebody else holds what it opens; a daemon that closes meanwhile stops asking, and gives back with `release` what it was handed too late. */
+  async function owned<T>(take: () => Promise<T>, release: (taken: T) => unknown): Promise<T> {
     for (;;) {
+      if (closing()) throw new Error(CLOSED);
       try {
-        return await take();
+        const taken = await take();
+        if (!closing()) return taken;
+        await release(taken);
       } catch (err) {
         if (!(err instanceof DatabaseBusy)) throw err;
         if (current !== "elsewhere") phase("elsewhere");
-        await new Promise((resolve) => setTimeout(resolve, BUSY_RETRY_MS));
+        await pause(BUSY_RETRY_MS);
       }
     }
   }
@@ -145,7 +199,14 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     return open;
   }
 
-  const takeVault = (mode: "create" | "readwrite"): Promise<SqliteDriver> => owned(() => files().open(VAULT_FILE, mode, "runtime"));
+  const takeVault = (mode: "create" | "readwrite"): Promise<SqliteDriver> =>
+    owned(
+      () => files().open(VAULT_FILE, mode, "runtime"),
+      async (driver) => {
+        driver.close();
+        if (mode === "create") await files().remove(VAULT_FILE);
+      }
+    );
 
   async function snapshot({ runtime, keys }: Open): Promise<Snapshot> {
     const fold = await scanVault(runtime.vault, keys, SCAN);
@@ -244,10 +305,10 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       .catch((err) => log(`the agent did not come up: ${failure(err)}`));
   }
 
-  /** A runtime and its keys are in hand: report, run. */
   async function start(runtime: SqliteVault, keys: Keys): Promise<void> {
     let running: Open;
     try {
+      if (closing()) throw new Error(CLOSED);
       const trace = await AgentTrace.open(runtime.local);
       running = { runtime, keys, trace, agent: attach(runtime, keys, trace) };
       running.agent.catch(() => undefined);
@@ -321,7 +382,12 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     return ensureRoute(runtime, keys, preferred);
   }
 
-  /** A portable snapshot's bytes as a file of the host's for the length of `use`, opened read-only. */
+  /**
+   * A portable snapshot's bytes as a file of the host's for the length
+   * of `use`, opened read-only. Whatever stands under `name` beforehand
+   * is what a run cut short left behind: the files are this daemon's
+   * alone, and the operations that put one there take turns.
+   */
   async function withSnapshot<T>(name: string, bytes: Uint8Array, use: (driver: SqliteDriver) => Promise<T>): Promise<T> {
     const store = files();
     await store.remove(name);
@@ -357,9 +423,19 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       return booted;
     },
     replayTo,
-    async close() {
-      await stop();
-      await letGo();
+    close() {
+      closed ??= inTurn(async () => {
+        try {
+          await stop();
+          await letGo();
+        } finally {
+          const held = storage;
+          storage = null;
+          await held?.close();
+        }
+      });
+      for (const over of [...waits]) over();
+      return closed;
     },
 
     async boot() {
@@ -368,90 +444,109 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         return;
       }
       booted = true;
-      try {
-        storage = await owned(() => host.storage());
-      } catch (err) {
-        phase("unreadable", failure(err));
-        return;
-      }
-      const foreign = (await host.unreadable?.()) ?? null;
-      if (foreign !== null) {
-        phase("unreadable", foreign);
-        return;
-      }
-      if (!(await storage.has(VAULT_FILE))) {
-        phase("onboarding");
-        return;
-      }
-      const seedKey = await host.cachedSeedKey();
-      if (seedKey === null) {
-        await look();
-        return;
-      }
-      try {
-        await run(seedKey);
-      } catch (err) {
-        phase("unreadable", failure(err));
-      }
+      await inTurn(async () => {
+        const foreign = (await host.unreadable?.()) ?? null;
+        if (foreign !== null) {
+          phase("unreadable", foreign);
+          return;
+        }
+        try {
+          storage = await owned(
+            () => host.storage(),
+            (taken) => taken.close()
+          );
+        } catch (err) {
+          phase("unreadable", failure(err));
+          return;
+        }
+        if (!(await storage.has(VAULT_FILE))) {
+          phase("onboarding");
+          return;
+        }
+        const seedKey = await host.cachedSeedKey();
+        if (seedKey === null) {
+          await look();
+          return;
+        }
+        try {
+          await run(seedKey);
+        } catch (err) {
+          phase("unreadable", failure(err));
+        }
+      });
     },
 
-    async createIdentity(name, passphrase) {
-      const store = await refuseOccupied();
-      const { doc, seedKey } = await createSeedKeystore(passphrase);
-      let created: Awaited<ReturnType<typeof createVault>>;
-      try {
-        created = await createVault(await takeVault("create"), { seedKey, wrapped: { version: 3, seedJwe: doc.seedJwe }, label: name, ...SCAN });
-        await created.runtime.local.options.set(RESTORE_EXPLAINED, true);
-      } catch (err) {
-        await store.remove(VAULT_FILE);
-        throw err;
-      }
-      await host.cacheSeedKey(seedKey);
-      await start(created.runtime, created.keys);
-    },
+    createIdentity: (name, passphrase) =>
+      exclusively(async () => {
+        const store = await refuseOccupied();
+        const { doc, seedKey } = await createSeedKeystore(passphrase);
+        const driver = await takeVault("create");
+        let created: Awaited<ReturnType<typeof createVault>>;
+        try {
+          created = await createVault(driver, { seedKey, wrapped: { version: 3, seedJwe: doc.seedJwe }, label: name, ...SCAN });
+          await created.runtime.local.options.set(RESTORE_EXPLAINED, true);
+        } catch (err) {
+          // The file is this call's own to remove only past the open that made it, and only once its connection is closed.
+          driver.close();
+          await store.remove(VAULT_FILE);
+          throw err;
+        }
+        await host.cacheSeedKey(seedKey);
+        await start(created.runtime, created.keys);
+      }),
 
-    async restoreIdentity(bytes, passphrase) {
-      const store = await refuseOccupied();
-      const unlocked: { seedKey: SeedKey | null } = { seedKey: null };
-      let runtime: SqliteVault;
-      let keys: Keys;
-      try {
-        runtime = await withSnapshot(RESTORE_SOURCE, bytes, async (driver) => {
-          const source = openPortable(driver);
-          try {
-            const restored = await restoreVault(source, (mode) => files().open(VAULT_FILE, mode, "runtime"), {
-              heldRoots: vaultHeldRoots(null, SCAN),
-              anchor: async (wrapped) => {
-                try {
-                  unlocked.seedKey = await unlockSeedKeystore({ version: 3, seedJwe: wrapped.seedJwe, keys: [] }, passphrase);
-                } catch {
-                  throw new Error("that passphrase does not open this backup");
+    restoreIdentity: (bytes, passphrase) =>
+      exclusively(async () => {
+        const store = await refuseOccupied();
+        const unlocked: { seedKey: SeedKey | null } = { seedKey: null };
+        let made = false;
+        let runtime: SqliteVault;
+        let keys: Keys;
+        try {
+          runtime = await withSnapshot(RESTORE_SOURCE, bytes, async (driver) => {
+            const source = openPortable(driver);
+            try {
+              const restored = await restoreVault(
+                source,
+                async (mode) => {
+                  const destination = await store.open(VAULT_FILE, mode, "runtime");
+                  made = true;
+                  return destination;
+                },
+                {
+                  heldRoots: vaultHeldRoots(null, SCAN),
+                  anchor: async (wrapped) => {
+                    try {
+                      unlocked.seedKey = await unlockSeedKeystore({ version: 3, seedJwe: wrapped.seedJwe, keys: [] }, passphrase);
+                    } catch {
+                      throw new Error("that passphrase does not open this backup");
+                    }
+                    return Keys.anchorOf(unlocked.seedKey);
+                  },
                 }
-                return Keys.anchorOf(unlocked.seedKey);
-              },
-            });
-            return new SqliteVault(restored.runtime);
-          } finally {
-            source.close();
-          }
-        });
-      } catch (err) {
-        // A destination the restore made and failed on is unready: it opens as nothing, and the next try starts from no file.
-        await store.remove(VAULT_FILE);
-        throw err;
-      }
-      const { seedKey } = unlocked;
-      try {
-        if (seedKey === null) throw new Error("the restore did not ask for the passphrase");
-        keys = await Keys.open(seedKey, runtime.metadata.anchor);
-      } catch (err) {
-        await runtime.close();
-        await store.remove(VAULT_FILE);
-        throw err;
-      }
-      await host.cacheSeedKey(seedKey);
-      await start(runtime, keys);
-    },
+              );
+              return new SqliteVault(restored.runtime);
+            } finally {
+              source.close();
+            }
+          });
+        } catch (err) {
+          // A destination the restore made and failed on is closed and unready: it opens as nothing, and the next try starts from no file.
+          if (made) await store.remove(VAULT_FILE);
+          throw err;
+        }
+        const { seedKey } = unlocked;
+        try {
+          if (seedKey === null) throw new Error("the restore did not ask for the passphrase");
+          keys = await Keys.open(seedKey, runtime.metadata.anchor);
+        } catch (err) {
+          await runtime.close();
+          await store.remove(VAULT_FILE);
+          throw err;
+        }
+        await host.cacheSeedKey(seedKey);
+        await start(runtime, keys);
+      }),
 
     async explainedRestore() {
       const running = vault();
@@ -459,74 +554,80 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       await tell();
     },
 
-    async unlock(passphrase) {
-      if (inspected === null) throw new Error("nothing to unlock");
-      let seedKey: SeedKey;
-      try {
-        seedKey = await unlockSeedKeystore({ version: 3, seedJwe: inspected.wrapped.seedJwe, keys: [] }, passphrase);
-      } catch {
-        throw new Error("wrong passphrase");
-      }
-      await letGo();
-      try {
-        await run(seedKey);
-      } catch (err) {
-        await look();
-        throw err;
-      }
-      await host.cacheSeedKey(seedKey);
-    },
-
-    async lock() {
-      await stop();
-      await host.forgetSeedKey();
-      if (await files().has(VAULT_FILE)) await look();
-      else phase("onboarding");
-    },
-
-    async forgetIdentity() {
-      await stop();
-      await letGo();
-      await host.forgetSeedKey();
-      await files().remove(VAULT_FILE);
-      phase("onboarding");
-    },
-
-    async exportBackup() {
-      const { runtime, keys } = vault();
-      const store = files();
-      await store.remove(EXPORT_FILE);
-      try {
-        await exportVault(runtime, (mode) => store.open(EXPORT_FILE, mode, "portable"), { heldRoots: vaultHeldRoots(keys, SCAN) });
-        const label = (await scanVault(runtime.vault, keys, SCAN)).label ?? "";
-        const stem = label.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") || "vault";
-        return { name: `${stem}-${new Date().toISOString().slice(0, 10)}.estoc.sqlite`, bytes: await store.exportFile(EXPORT_FILE) };
-      } finally {
-        await store.remove(EXPORT_FILE);
-      }
-    },
-
-    async mergeBackup(bytes) {
-      const running = vault();
-      const imported = await withSnapshot(MERGE_SOURCE, bytes, async (driver) => {
-        const source = openPortable(driver);
+    unlock: (passphrase) =>
+      exclusively(async () => {
+        if (inspected === null) throw new Error("nothing to unlock");
+        let seedKey: SeedKey;
         try {
-          return await importVault(running.runtime, source, { retainedRoots: vaultRetention(running.keys, SCAN) });
-        } finally {
-          source.close();
+          seedKey = await unlockSeedKeystore({ version: 3, seedJwe: inspected.wrapped.seedJwe, keys: [] }, passphrase);
+        } catch {
+          throw new Error("wrong passphrase");
         }
-      });
-      // The agent read its keys and its lines before the merge: another over the merged vault takes its place.
-      if (open === running) {
+        await letGo();
+        try {
+          await run(seedKey);
+        } catch (err) {
+          await look();
+          throw err;
+        }
+        await host.cacheSeedKey(seedKey);
+      }),
+
+    lock: () =>
+      exclusively(async () => {
+        await host.forgetSeedKey();
+        // Locked already, the vault stays in the hold it is in: a second look would wait on this daemon's own.
+        if (inspected !== null) return;
+        await stop();
+        if (await files().has(VAULT_FILE)) await look();
+        else phase("onboarding");
+      }),
+
+    forgetIdentity: () =>
+      exclusively(async () => {
+        const store = files();
+        await stop();
+        await letGo();
+        await host.forgetSeedKey();
+        await store.remove(VAULT_FILE);
+        phase("onboarding");
+      }),
+
+    exportBackup: () =>
+      exclusively(async () => {
+        const { runtime, keys } = vault();
+        const store = files();
+        await store.remove(EXPORT_FILE);
+        try {
+          await exportVault(runtime, (mode) => store.open(EXPORT_FILE, mode, "portable"), { heldRoots: vaultHeldRoots(keys, SCAN) });
+          const label = (await scanVault(runtime.vault, keys, SCAN)).label ?? "";
+          const stem = label.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") || "vault";
+          return { name: `${stem}-${new Date().toISOString().slice(0, 10)}.estoc.sqlite`, bytes: await store.exportFile(EXPORT_FILE) };
+        } finally {
+          await store.remove(EXPORT_FILE);
+        }
+      }),
+
+    mergeBackup: (bytes) =>
+      exclusively(async () => {
+        const running = vault();
+        const imported = await withSnapshot(MERGE_SOURCE, bytes, async (driver) => {
+          const source = openPortable(driver);
+          try {
+            return await importVault(running.runtime, source, { retainedRoots: vaultRetention(running.keys, SCAN) });
+          } finally {
+            source.close();
+          }
+        });
+        // The agent read its keys and its lines before the merge: another over the merged vault takes its place.
         (await running.agent).close();
         running.agent = attach(running.runtime, running.keys, running.trace);
         running.agent.catch(() => undefined);
         await tell();
         connect(running);
-      }
-      const { added, duplicates, conflicts, objects, repaired } = imported;
-      return { added, duplicates, conflicts: conflicts.length, objects, repaired };
-    },
+        const { added, duplicates, conflicts, objects, repaired } = imported;
+        return { added, duplicates, conflicts: conflicts.length, objects, repaired };
+      }),
 
     setMediator: (mediatorDid) =>
       act(async (agent, { runtime, keys }) => {

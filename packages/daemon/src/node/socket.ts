@@ -191,7 +191,10 @@ function tokenMatches(req: IncomingMessage, token: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** A ws socket as the message port the RPC speaks over, text-encoded. */
+/** The WebSocket close code for a frame whose payload is not what the endpoint reads (RFC 6455 §7.4.1). */
+const UNREADABLE_FRAME = 1007;
+
+/** A ws socket as the message port the RPC speaks over, text-encoded; a frame that does not decode closes the socket it came on. */
 function socketPort(ws: WebSocket): Port {
   return {
     postMessage(message) {
@@ -205,7 +208,14 @@ function socketPort(ws: WebSocket): Port {
         return;
       }
       ws.on("message", (data) => {
-        listener({ data: decode(data.toString()) } as MessageEvent);
+        let message: unknown;
+        try {
+          message = decode(data.toString());
+        } catch {
+          ws.close(UNREADABLE_FRAME, "not a message of this encoding");
+          return;
+        }
+        listener({ data: message } as MessageEvent);
       });
     },
   } as Port;

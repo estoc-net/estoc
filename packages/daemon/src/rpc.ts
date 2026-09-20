@@ -24,9 +24,10 @@ type Handlers = Record<string, (...args: never[]) => unknown>;
 
 /** Answer calls on `port` from `target`'s methods; returns the way to raise events. */
 export function serve(port: Port, target: object): (name: string, ...args: unknown[]) => void {
-  port.addEventListener("message", (event: MessageEvent<Wire>) => {
+  port.addEventListener("message", (event: MessageEvent<Wire | null>) => {
     const wire = event.data;
-    if (wire.kind !== "call") {
+    // Whoever holds the port writes what it likes on it: anything that is no call is not answered.
+    if (typeof wire !== "object" || wire === null || wire.kind !== "call" || !Array.isArray(wire.args)) {
       return;
     }
     const method = (target as Record<string, unknown>)[wire.method];

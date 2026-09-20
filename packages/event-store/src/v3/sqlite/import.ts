@@ -151,7 +151,7 @@ async function planned(target: VaultRuntime, held: Held, incoming: Event[], offe
   const heldBefore = rootsOf(await checkedRetention(retainedRoots, held));
   const union = new MemoryVault({ metadata: target.metadata });
   await union.ingest([...before, ...plan.fresh]);
-  const unionRetains = await checkedRetention(retainedRoots, { ...union.vault, objects: prospectiveObjects(held.objects, sourceObjects) });
+  const unionRetains = await unionRetention(retainedRoots, union.vault, held, offered, sourceObjects);
   const heldAfter = rootsOf(unionRetains);
   const fresh = new Set(plan.fresh.map((event) => event.eventId));
   const required = new Set<Cid>();
@@ -178,9 +178,11 @@ async function planned(target: VaultRuntime, held: Held, incoming: Event[], offe
  * what an object says — a release that waits for a document to verify
  * — then folds over the union as it will fold over the target
  * afterwards; over the events alone it would retain what the target
- * has released and collected, and require bytes nobody has.
+ * has released and collected, and require bytes nobody has. `streamed`
+ * takes each CID answered with a stream of the target's, the one
+ * answer that is verified only after it is given.
  */
-function prospectiveObjects(target: VaultObjects, source: VaultObjects): VaultObjects {
+function prospectiveObjects(target: VaultObjects, source: VaultObjects, streamed: Set<Cid>): VaultObjects {
   const either = async <T>(read: (objects: VaultObjects) => Promise<T | null>): Promise<T | null> => {
     try {
       const sound = await read(target);
@@ -194,7 +196,12 @@ function prospectiveObjects(target: VaultObjects, source: VaultObjects): VaultOb
     return read(source);
   };
   return {
-    open: (cid) => either((objects) => objects.open(cid)),
+    open: (cid) =>
+      either(async (objects) => {
+        const stream = await objects.open(cid);
+        if (stream !== null && objects === target) streamed.add(cid);
+        return stream;
+      }),
     read: (cid, maxBytes) => either((objects) => objects.read(cid, maxBytes)),
     stat: (cid) => either((objects) => objects.stat(cid)),
     has: async (cid) => (await either(async (objects) => ((await objects.has(cid)) ? true : null))) ?? false,
@@ -205,6 +212,37 @@ function prospectiveObjects(target: VaultObjects, source: VaultObjects): VaultOb
       yield* sortCids(cids);
     },
   };
+}
+
+/**
+ * The caller's fold over the prospective union. A stream of the
+ * target's is verified as it is consumed, so damage nobody knew of
+ * shows after `open` has answered, too late for the source's bytes to
+ * stand in: a fold that met it, whether it threw or took the object
+ * for unreadable, is dropped and run again from the start, where the
+ * damage is known and the source answers instead. Each further run is
+ * owed to an object found damaged since the last that the source has,
+ * and no object is owed two; a fold that fails for any other reason
+ * fails the import as it did.
+ */
+async function unionRetention(retainedRoots: RetainedRoots, union: Vault, held: Held, offered: Set<Cid>, sourceObjects: VaultObjects): Promise<Retained[]> {
+  const answered = new Set<Cid>();
+  for (;;) {
+    const streamed = new Set<Cid>();
+    const folded = await checkedRetention(retainedRoots, { ...union, objects: prospectiveObjects(held.objects, sourceObjects, streamed) }).then(
+      (retained) => ({ retained }),
+      (failure: unknown) => ({ failure })
+    );
+    let again = false;
+    for (const cid of streamed) {
+      if (answered.has(cid) || !offered.has(cid) || (await stateOf(held, cid)) !== "damaged") continue;
+      answered.add(cid);
+      again = true;
+    }
+    if (again) continue;
+    if ("failure" in folded) throw folded.failure;
+    return folded.retained;
+  }
 }
 
 async function checkedRetention(retainedRoots: RetainedRoots, vault: Vault): Promise<Retained[]> {

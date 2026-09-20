@@ -5,12 +5,34 @@
 - **`@estoc/daemon/v3`** and **`@estoc/daemon/v3/node`**: the daemon
   over the version-3 vault, built beside the entries above, which stay
   as they are. The host provides SQLite files by name
-  (`DaemonStorage`): the vault is `vault.sqlite`, owned through the
-  driver's own locking, so a second daemon lands on `elsewhere` and
-  waits, and a snapshot crosses as the bytes of its file. The Node host
-  keeps them in `<root>/.estoc/`, says `unreadable` over a folder-format
-  vault and leaves it alone, loads `@estoc/didcomm-node`, and gives the
-  agent a fetch that refuses addresses that are not public.
+  (`DaemonStorage`), to one daemon at a time from `storage()` to the
+  storage's `close()`: the vault is `vault.sqlite`, a snapshot crosses
+  as the bytes of its file, and a second daemon lands on `elsewhere`,
+  refuses whatever would make, open or remove a file, and waits. The
+  Node host keeps them in `<root>/.estoc/`, holds an empty
+  `owner.sqlite` open there under SQLite's own lock for as long as the
+  folder is its daemon's, says `unreadable` over a folder-format vault
+  and writes nothing beside it, loads `@estoc/didcomm-node`, and gives
+  the agent a fetch that refuses addresses that are not public.
+- **One operation on the files at a time.** `createIdentity`,
+  `restoreIdentity`, `unlock`, `lock`, `forgetIdentity`, `exportBackup`
+  and `mergeBackup` run in the order asked, so of two vaults asked for
+  at once one is made and the other refused with nothing removed, a
+  lock of a locked vault changes nothing, and exports and merges asked
+  for together each finish on a snapshot file of their own turn. A
+  vault file is removed only by the call that made it or by
+  `forgetIdentity` of the daemon that holds it. `close()` ends a wait
+  for files held elsewhere, waits for the operation under way, lets go
+  of everything, and answers the same to every caller; nothing is
+  opened or said after it.
+- **The text encoding carries any record as it was.** A record whose
+  one key starts with `$` — `{"$bytes": "…"}` in a message body — came
+  back as bytes or a Map, or failed to decode. Such a record now goes
+  out with one more `$` on its key and comes back with one fewer;
+  `decode` throws on a tag that is none of its own. Both ends of a
+  socket need this version. A frame that does not decode closes the
+  socket it came on (1007) rather than the process, and `serve` leaves
+  unanswered whatever is no call.
 - **`Snapshot`** is the vault as `@estoc/agent-core/v3` records off one
   fold — arrangements, local DIDs, contacts, each channel record once,
   unplaced observations, invitations, pending work — told whole as

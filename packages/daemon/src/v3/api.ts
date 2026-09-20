@@ -124,13 +124,22 @@ export interface SendResult extends Outcome {
 export interface Daemon {
   /** Take the files and land on the screen they dictate (by events). */
   boot(): Promise<void>;
+  /**
+   * This and the six calls after it, `explainedRestore` apart, work on
+   * the daemon's files: they run one at a time in the order asked, and
+   * are refused while the phase is `elsewhere`, where the files are
+   * another daemon's. One vault is made where none stands; the call
+   * that finds one there is refused and removes nothing.
+   */
   createIdentity(name: string, passphrase: string): Promise<void>;
   /** A portable snapshot's file restored as this daemon's vault, under the passphrase that opens the snapshot's own wrapped seed. */
   restoreIdentity(snapshot: Uint8Array, passphrase: string): Promise<void>;
   /** The person was shown what a restore cannot bring back: sends and manual dispatch are open from here on. */
   explainedRestore(): Promise<void>;
   unlock(passphrase: string): Promise<void>;
+  /** The agent stopped and the seed forgotten, the vault kept hold of; nothing changes for a vault locked already. */
   lock(): Promise<void>;
+  /** The vault this daemon holds, removed for good. */
   forgetIdentity(): Promise<void>;
   exportBackup(): Promise<{ name: string; bytes: Uint8Array }>;
   mergeBackup(snapshot: Uint8Array): Promise<Merged>;
