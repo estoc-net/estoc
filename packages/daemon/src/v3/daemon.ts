@@ -1,0 +1,660 @@
+import { v7 as uuidv7 } from "uuid";
+import { DatabaseBusy, SqliteVault, exportVault, importVault, openPortable, restoreVault, type SqliteDriver } from "@estoc/event-store/v3";
+import { createSeedKeystore, unlockSeedKeystore, type SeedKey } from "@estoc/keystore";
+import {
+  Keys,
+  PING_TYPE,
+  canonicalDidOf,
+  objectReader,
+  scanVault,
+  vaultDraft,
+  vaultHeldRoots,
+  vaultRetention,
+  type Channel,
+  type ContactId,
+  type Did,
+  type VaultDraft,
+  type VaultFold,
+} from "@estoc/vault/v3";
+import {
+  Agent,
+  AgentTrace,
+  BUILT_IN_HANDLERS,
+  MAX_CONTENT_BYTES,
+  createDid,
+  createMediation,
+  createVault,
+  decide,
+  effectTypesOf,
+  ensureRoute,
+  inspectRuntime,
+  isTraceLevel,
+  openVault,
+  recorder,
+  sameDid,
+  selectMediation,
+  type Called,
+  type ChannelRecord,
+  type EffectOutcome,
+  type InspectedRuntime,
+} from "@estoc/agent-core/v3";
+
+import type { ContactSummary, Daemon, Lines, Outcome, Phase, Snapshot } from "./api.js";
+import { VAULT_FILE, type DaemonHost, type DaemonStorage } from "./host.js";
+
+/** How the daemon raises an event: a name and its arguments, to whoever listens. */
+export type Emit = (name: string, ...args: unknown[]) => void;
+
+/** The daemon as its host holds it: the UI's interface, and a replay for one listener. */
+export interface DaemonCore extends Daemon {
+  /** whether `boot()` has run: a later `boot()` is a replay */
+  readonly booted: boolean;
+  /** Say where things stand again, to `to` alone — for a listener that was not there the first time. */
+  replayTo(to: Emit): Promise<void>;
+  /** The agent closed and the vault let go of, for the host that is shutting down; the seed stays cached where the host keeps it. */
+  close(): Promise<void>;
+}
+
+/**
+ * This runtime's own record that whoever runs it knows what a restore
+ * cannot bring back: set when the vault is created here, and when the
+ * person is told after a restore. It is absent from a runtime a
+ * restore has just made — local state is never part of a snapshot —
+ * so a restore interrupted anywhere leaves sending closed rather than
+ * open.
+ */
+export const RESTORE_EXPLAINED = "daemon.restoreExplained";
+
+const RESTORE_SOURCE = "restore-source.sqlite";
+const MERGE_SOURCE = "merge-source.sqlite";
+const EXPORT_FILE = "export.sqlite";
+const BUSY_RETRY_MS = 2000;
+
+const SCAN = { effectTypes: effectTypesOf(BUILT_IN_HANDLERS) };
+
+interface Open {
+  runtime: SqliteVault;
+  keys: Keys;
+  trace: AgentTrace;
+  agent: Promise<Agent>;
+}
+
+const failure = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+const outcomeOf = (called: Called): Outcome => ({ outcome: called.outcome, because: "because" in called ? called.because : "reason" in called ? called.reason : null });
+
+function effectOutcomeOf(effect: EffectOutcome): Outcome {
+  if (effect.outcome === "none" || effect.outcome === "refused") return { outcome: effect.outcome, because: effect.because };
+  return effect.dispatched === null ? { outcome: effect.outcome, because: null } : outcomeOf(effect.dispatched);
+}
+
+/**
+ * The daemon itself, wherever it runs: the vault among the host's
+ * files, owned for as long as the daemon looks at it or runs it, the
+ * seed unlocked from the vault's own wrapper and cached where the host
+ * keeps such things, and the agent over it. A UI renders what the
+ * events say and asks for things through the `Daemon` methods.
+ *
+ * `boot` is the entry and may be called again — by a second UI joining
+ * a daemon already up, or one reconnecting — in which case it replays
+ * where things stand rather than opening anything twice.
+ */
+export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
+  let storage: DaemonStorage | null = null;
+  /** the locked phase's hold on the vault: the file owned, nothing written, the wrapped seed for `unlock` */
+  let inspected: InspectedRuntime | null = null;
+  let open: Open | null = null;
+  let booted = false;
+  let current: Phase = "booting";
+  let detail: string | null = null;
+
+  const phase = (p: Phase, why: string | null = null) => {
+    current = p;
+    detail = why;
+    emit("phase", p, why);
+  };
+  const log = (line: string) => emit("log", line);
+
+  /** `take`, tried again for as long as another daemon holds what it opens. */
+  async function owned<T>(take: () => Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await take();
+      } catch (err) {
+        if (!(err instanceof DatabaseBusy)) throw err;
+        if (current !== "elsewhere") phase("elsewhere");
+        await new Promise((resolve) => setTimeout(resolve, BUSY_RETRY_MS));
+      }
+    }
+  }
+
+  function files(): DaemonStorage {
+    if (storage === null) throw new Error("storage is not available");
+    return storage;
+  }
+
+  /** A vault is made only where the daemon found none: not beside one it holds, and not over what it could not read. */
+  async function refuseOccupied(): Promise<DaemonStorage> {
+    const store = files();
+    if (current !== "onboarding" || (await store.has(VAULT_FILE))) throw new Error("a vault already exists here");
+    return store;
+  }
+
+  function vault(): Open {
+    if (open === null) throw new Error("no open vault");
+    return open;
+  }
+
+  const takeVault = (mode: "create" | "readwrite"): Promise<SqliteDriver> => owned(() => files().open(VAULT_FILE, mode, "runtime"));
+
+  async function snapshot({ runtime, keys }: Open): Promise<Snapshot> {
+    const fold = await scanVault(runtime.vault, keys, SCAN);
+    const records = recorder(fold, objectReader(runtime.vault.objects, MAX_CONTENT_BYTES));
+    const channels = new Map<string, ChannelRecord>();
+    const keyOf = (channel: Channel) => JSON.stringify([channel.localDid, channel.peerDid]);
+    const contacts: ContactSummary[] = [];
+    for (const contactId of records.contactIds()) {
+      const { channels: shown, ...contact } = await records.contact(contactId);
+      for (const { selected: _selected, ...record } of shown) channels.set(keyOf(record.channel), record);
+      contacts.push({ ...contact, channels: shown.map(({ channel, selected }) => ({ channel, selected })) });
+    }
+    for (const channel of records.channels()) if (!channels.has(keyOf(channel))) channels.set(keyOf(channel), await records.channel(channel));
+    return {
+      label: fold.label ?? "",
+      restoreUnexplained: !(await explained(runtime)),
+      mediations: [...fold.mediations.mediations.values()].map((mediation) => ({
+        mediationId: mediation.mediationId,
+        mediatorDid: mediation.mediatorDid,
+        selected: fold.mediations.selected === mediation.mediationId,
+        usable: fold.mediations.usable(mediation.mediationId),
+        retired: mediation.retired,
+        faults: [...mediation.faults],
+      })),
+      dids: [...fold.routes.dids.values()].map((entity) => ({
+        didId: entity.didId,
+        did: entity.created?.did ?? null,
+        live: entity.live,
+        retired: entity.retired,
+        disclosed: entity.disclosures.length > 0,
+        faults: [...entity.faults],
+      })),
+      contacts,
+      channels: [...channels.values()],
+      unplaced: await records.unplaced(),
+      invitations: records.invitations(),
+      pending: records.pending(),
+    };
+  }
+
+  const explained = async (runtime: SqliteVault): Promise<boolean> => (await runtime.local.options.get(RESTORE_EXPLAINED)) === true;
+
+  /** A send of the user's and every manual dispatch wait for the restore to be explained; nothing the vault does on its own does. */
+  async function refuseUnexplained({ runtime }: Open): Promise<void> {
+    if (!(await explained(runtime))) throw new Error("this vault was restored from a snapshot: sending opens once what a restore cannot bring back has been explained");
+  }
+
+  let telling: Promise<void> | null = null;
+  let stale = false;
+  /** The snapshot to every listener; a change that lands while one is being read is told by one more read after it. */
+  function tell(): Promise<void> {
+    if (telling !== null) {
+      stale = true;
+      return telling;
+    }
+    telling = (async () => {
+      do {
+        stale = false;
+        if (open !== null) emit("changed", await snapshot(open));
+      } while (stale);
+    })()
+      .catch((err) => log(`the snapshot could not be read: ${failure(err)}`))
+      .finally(() => {
+        telling = null;
+      });
+    return telling;
+  }
+
+  const linesOf = (agent: Agent): Lines => ({ connections: agent.connections(), waiting: agent.waitingDeliveries(), discarded: agent.discardedDeliveries() });
+
+  async function attach(runtime: SqliteVault, keys: Keys, trace: AgentTrace): Promise<Agent> {
+    const agent = await Agent.open(
+      { runtime, keys },
+      {
+        ...host.agentOptions,
+        fetch: host.agentOptions?.fetch ?? globalThis.fetch,
+        didcomm: await host.didcomm(),
+        trace,
+        log,
+        onInbound: () => {
+          void tell();
+          emit("lines", linesOf(agent));
+        },
+      }
+    );
+    return agent;
+  }
+
+  /** The agent's lines connected, in the background: a mediator out of reach keeps no screen waiting. */
+  function connect(running: Open): void {
+    void running.agent
+      .then(async (agent) => {
+        await agent.connect();
+        if (open === running) emit("lines", linesOf(agent));
+      })
+      .catch((err) => log(`the agent did not come up: ${failure(err)}`));
+  }
+
+  /** A runtime and its keys are in hand: report, run. */
+  async function start(runtime: SqliteVault, keys: Keys): Promise<void> {
+    let running: Open;
+    try {
+      const trace = await AgentTrace.open(runtime.local);
+      running = { runtime, keys, trace, agent: attach(runtime, keys, trace) };
+      running.agent.catch(() => undefined);
+    } catch (err) {
+      await runtime.close();
+      throw err;
+    }
+    open = running;
+    current = "open";
+    detail = null;
+    emit("opened", await snapshot(running));
+    connect(running);
+  }
+
+  async function stop(): Promise<void> {
+    const running = open;
+    open = null;
+    if (running === null) return;
+    await running.agent.then(
+      (agent) => agent.close(),
+      () => undefined
+    );
+    await running.runtime.close();
+  }
+
+  async function run(seedKey: SeedKey): Promise<void> {
+    const opened = await openVault(await takeVault("readwrite"), seedKey, SCAN);
+    await start(opened.runtime, opened.keys);
+  }
+
+  /** The vault owned and looked at without its seed, for `unlock`; one that does not open is said to be unreadable, its bytes left alone. */
+  async function look(): Promise<void> {
+    try {
+      inspected = await inspectRuntime(await takeVault("readwrite"), SCAN);
+      phase("locked");
+    } catch (err) {
+      phase("unreadable", failure(err));
+    }
+  }
+
+  async function letGo(): Promise<void> {
+    const held = inspected;
+    inspected = null;
+    await held?.runtime.close();
+  }
+
+  /** `work` over the running agent, and the vault told again afterwards whether or not it threw: a call that failed may have committed. */
+  async function act<T>(work: (agent: Agent, running: Open) => Promise<T>): Promise<T> {
+    const running = vault();
+    const agent = await running.agent;
+    try {
+      return await work(agent, running);
+    } finally {
+      if (open === running) {
+        await tell();
+        emit("lines", linesOf(agent));
+      }
+    }
+  }
+
+  const commit = ({ runtime, keys }: Open, choose: (fold: VaultFold) => VaultDraft[]) => decide(runtime, keys, choose);
+
+  function contactOf(fold: VaultFold, contactId: ContactId): void {
+    const contact = fold.contacts.contacts.get(contactId);
+    if (contact === undefined || contact.origin === null || contact.deleted) throw new Error(`no contact ${contactId}`);
+  }
+
+  async function preferredRoute({ runtime, keys }: Open) {
+    const preferred = (await scanVault(runtime.vault, keys, SCAN)).mediations.preferred;
+    if (preferred === null) throw new Error("no mediator is set");
+    return ensureRoute(runtime, keys, preferred);
+  }
+
+  /** A portable snapshot's bytes as a file of the host's for the length of `use`, opened read-only. */
+  async function withSnapshot<T>(name: string, bytes: Uint8Array, use: (driver: SqliteDriver) => Promise<T>): Promise<T> {
+    const store = files();
+    await store.remove(name);
+    await store.importFile(name, bytes);
+    try {
+      return await use(await store.open(name, "readonly", "portable"));
+    } finally {
+      await store.remove(name);
+    }
+  }
+
+  host.onOnline?.(() => {
+    const running = open;
+    if (running === null) return;
+    connect(running);
+  });
+
+  async function replayTo(to: Emit): Promise<void> {
+    const running = open;
+    if (running === null) {
+      to("phase", current, detail);
+      return;
+    }
+    to("opened", await snapshot(running));
+    void running.agent.then(
+      (agent) => to("lines", linesOf(agent)),
+      () => undefined
+    );
+  }
+
+  return {
+    get booted() {
+      return booted;
+    },
+    replayTo,
+    async close() {
+      await stop();
+      await letGo();
+    },
+
+    async boot() {
+      if (booted) {
+        await replayTo(emit);
+        return;
+      }
+      booted = true;
+      try {
+        storage = await owned(() => host.storage());
+      } catch (err) {
+        phase("unreadable", failure(err));
+        return;
+      }
+      const foreign = (await host.unreadable?.()) ?? null;
+      if (foreign !== null) {
+        phase("unreadable", foreign);
+        return;
+      }
+      if (!(await storage.has(VAULT_FILE))) {
+        phase("onboarding");
+        return;
+      }
+      const seedKey = await host.cachedSeedKey();
+      if (seedKey === null) {
+        await look();
+        return;
+      }
+      try {
+        await run(seedKey);
+      } catch (err) {
+        phase("unreadable", failure(err));
+      }
+    },
+
+    async createIdentity(name, passphrase) {
+      const store = await refuseOccupied();
+      const { doc, seedKey } = await createSeedKeystore(passphrase);
+      let created: Awaited<ReturnType<typeof createVault>>;
+      try {
+        created = await createVault(await takeVault("create"), { seedKey, wrapped: { version: 3, seedJwe: doc.seedJwe }, label: name, ...SCAN });
+        await created.runtime.local.options.set(RESTORE_EXPLAINED, true);
+      } catch (err) {
+        await store.remove(VAULT_FILE);
+        throw err;
+      }
+      await host.cacheSeedKey(seedKey);
+      await start(created.runtime, created.keys);
+    },
+
+    async restoreIdentity(bytes, passphrase) {
+      const store = await refuseOccupied();
+      const unlocked: { seedKey: SeedKey | null } = { seedKey: null };
+      let runtime: SqliteVault;
+      let keys: Keys;
+      try {
+        runtime = await withSnapshot(RESTORE_SOURCE, bytes, async (driver) => {
+          const source = openPortable(driver);
+          try {
+            const restored = await restoreVault(source, (mode) => files().open(VAULT_FILE, mode, "runtime"), {
+              heldRoots: vaultHeldRoots(null, SCAN),
+              anchor: async (wrapped) => {
+                try {
+                  unlocked.seedKey = await unlockSeedKeystore({ version: 3, seedJwe: wrapped.seedJwe, keys: [] }, passphrase);
+                } catch {
+                  throw new Error("that passphrase does not open this backup");
+                }
+                return Keys.anchorOf(unlocked.seedKey);
+              },
+            });
+            return new SqliteVault(restored.runtime);
+          } finally {
+            source.close();
+          }
+        });
+      } catch (err) {
+        // A destination the restore made and failed on is unready: it opens as nothing, and the next try starts from no file.
+        await store.remove(VAULT_FILE);
+        throw err;
+      }
+      const { seedKey } = unlocked;
+      try {
+        if (seedKey === null) throw new Error("the restore did not ask for the passphrase");
+        keys = await Keys.open(seedKey, runtime.metadata.anchor);
+      } catch (err) {
+        await runtime.close();
+        await store.remove(VAULT_FILE);
+        throw err;
+      }
+      await host.cacheSeedKey(seedKey);
+      await start(runtime, keys);
+    },
+
+    async explainedRestore() {
+      const running = vault();
+      await running.runtime.local.options.set(RESTORE_EXPLAINED, true);
+      await tell();
+    },
+
+    async unlock(passphrase) {
+      if (inspected === null) throw new Error("nothing to unlock");
+      let seedKey: SeedKey;
+      try {
+        seedKey = await unlockSeedKeystore({ version: 3, seedJwe: inspected.wrapped.seedJwe, keys: [] }, passphrase);
+      } catch {
+        throw new Error("wrong passphrase");
+      }
+      await letGo();
+      try {
+        await run(seedKey);
+      } catch (err) {
+        await look();
+        throw err;
+      }
+      await host.cacheSeedKey(seedKey);
+    },
+
+    async lock() {
+      await stop();
+      await host.forgetSeedKey();
+      if (await files().has(VAULT_FILE)) await look();
+      else phase("onboarding");
+    },
+
+    async forgetIdentity() {
+      await stop();
+      await letGo();
+      await host.forgetSeedKey();
+      await files().remove(VAULT_FILE);
+      phase("onboarding");
+    },
+
+    async exportBackup() {
+      const { runtime, keys } = vault();
+      const store = files();
+      await store.remove(EXPORT_FILE);
+      try {
+        await exportVault(runtime, (mode) => store.open(EXPORT_FILE, mode, "portable"), { heldRoots: vaultHeldRoots(keys, SCAN) });
+        const label = (await scanVault(runtime.vault, keys, SCAN)).label ?? "";
+        const stem = label.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") || "vault";
+        return { name: `${stem}-${new Date().toISOString().slice(0, 10)}.estoc.sqlite`, bytes: await store.exportFile(EXPORT_FILE) };
+      } finally {
+        await store.remove(EXPORT_FILE);
+      }
+    },
+
+    async mergeBackup(bytes) {
+      const running = vault();
+      const imported = await withSnapshot(MERGE_SOURCE, bytes, async (driver) => {
+        const source = openPortable(driver);
+        try {
+          return await importVault(running.runtime, source, { retainedRoots: vaultRetention(running.keys, SCAN) });
+        } finally {
+          source.close();
+        }
+      });
+      // The agent read its keys and its lines before the merge: another over the merged vault takes its place.
+      if (open === running) {
+        (await running.agent).close();
+        running.agent = attach(running.runtime, running.keys, running.trace);
+        running.agent.catch(() => undefined);
+        await tell();
+        connect(running);
+      }
+      const { added, duplicates, conflicts, objects, repaired } = imported;
+      return { added, duplicates, conflicts: conflicts.length, objects, repaired };
+    },
+
+    setMediator: (mediatorDid) =>
+      act(async (agent, { runtime, keys }) => {
+        const fold = await scanVault(runtime.vault, keys, SCAN);
+        const existing = [...fold.mediations.mediations.values()].find((mediation) => mediation.mediatorDid !== null && mediation.retired === null && mediation.faults.length === 0 && sameDid(mediation.mediatorDid, mediatorDid));
+        const mediationId = existing?.mediationId ?? (await createMediation(runtime, keys, mediatorDid as Did)).data.mediationId;
+        await agent.establish(mediationId);
+        await selectMediation(runtime, keys, mediationId);
+        await ensureRoute(runtime, keys, mediationId);
+        return mediationId;
+      }),
+
+    createInvitation: (uses, goal) =>
+      act(async (agent, running) => {
+        const { created } = await createDid(running.runtime, running.keys, await preferredRoute(running));
+        const { invitation } = await agent.disclose(created.data.didId, { as: "oob", uses, goal: goal ?? null });
+        if (invitation === null) throw new Error("the disclosure made no invitation");
+        return { didId: created.data.didId, invitation };
+      }),
+
+    acceptInvitation: (invitation, petname) =>
+      act(async (agent, running) => {
+        await refuseUnexplained(running);
+        const peerDid = canonicalDidOf(invitation.from as Did);
+        const { minted } = await createDid(running.runtime, running.keys, await preferredRoute(running));
+        const channel: Channel = { localDid: minted.did, peerDid };
+        const contactId = uuidv7() as ContactId;
+        await commit(running, () => [vaultDraft("contact.created", { contactId, because: "user" }), vaultDraft("contact.petname", { contactId, name: petname }), vaultDraft("contact.channelsSet", { contactId, channels: [channel] })]);
+        const sent = await agent.send({ channel, recipientDid: invitation.from }, { type: PING_TYPE, body: { response_requested: true }, pthid: invitation.id, pleaseAck: [""] });
+        return { contactId, messageId: sent.messageId, channel: sent.channel, ...outcomeOf(sent.dispatched) };
+      }),
+
+    createContact: (petname, channels) =>
+      act(async (_agent, running) => {
+        const contactId = uuidv7() as ContactId;
+        await commit(running, () => [vaultDraft("contact.created", { contactId, because: "user" }), vaultDraft("contact.petname", { contactId, name: petname }), vaultDraft("contact.channelsSet", { contactId, channels })]);
+        return contactId;
+      }),
+
+    renameContact: (contactId, petname) =>
+      act(async (_agent, running) => {
+        await commit(running, (fold) => {
+          contactOf(fold, contactId);
+          return [vaultDraft("contact.petname", { contactId, name: petname })];
+        });
+      }),
+
+    setContactChannels: (contactId, channels) =>
+      act(async (_agent, running) => {
+        await commit(running, (fold) => {
+          contactOf(fold, contactId);
+          return [vaultDraft("contact.channelsSet", { contactId, channels })];
+        });
+      }),
+
+    deleteContact: (contactId, options) =>
+      act(async (agent) => {
+        await agent.manual.deleteContact(contactId, options);
+      }),
+
+    blockChannels: (channels, includeSuccessors) =>
+      act(async (agent) => {
+        await agent.manual.blockChannels(channels, includeSuccessors);
+      }),
+
+    eraseMessage: (messageId) =>
+      act(async (agent) => {
+        await agent.manual.eraseMessage(messageId);
+      }),
+
+    send: (target, content) =>
+      act(async (agent, running) => {
+        await refuseUnexplained(running);
+        const sent = await agent.send(target, content);
+        return { messageId: sent.messageId, channel: sent.channel, ...outcomeOf(sent.dispatched) };
+      }),
+
+    retry: (messageId) =>
+      act(async (agent, running) => {
+        await refuseUnexplained(running);
+        return outcomeOf(await agent.manual.retry(messageId));
+      }),
+
+    cancel: (messageId) =>
+      act(async (agent) => {
+        const cancelled = await agent.manual.cancel(messageId);
+        return { outcome: cancelled.outcome, because: cancelled.outcome === "none" ? cancelled.because : null };
+      }),
+
+    completeResponse: (executionId, effectType) =>
+      act(async (agent, running) => {
+        await refuseUnexplained(running);
+        return effectOutcomeOf(await agent.manual.completeResponse(executionId, effectType));
+      }),
+
+    completeNotification: (rotationEventId) =>
+      act(async (agent, running) => {
+        await refuseUnexplained(running);
+        return effectOutcomeOf(await agent.manual.completeNotification(rotationEventId));
+      }),
+
+    rotate: (localDidId, peerDid) =>
+      act(async (agent, running) => {
+        await refuseUnexplained(running);
+        const rotated = await agent.manual.rotate({ localDidId, peerDid });
+        return { successor: rotated.successor, existed: rotated.existed, ...effectOutcomeOf(rotated.notification) };
+      }),
+
+    pending: async () => (await vault().agent).pending(),
+
+    async refresh() {
+      vault();
+      await tell();
+    },
+
+    async reconnect() {
+      const running = vault();
+      const agent = await running.agent;
+      await agent.connect();
+      emit("lines", linesOf(agent));
+    },
+
+    traceLevel: async () => vault().trace.level,
+
+    async setTraceLevel(level) {
+      if (!isTraceLevel(level)) throw new Error(`no such trace level: ${String(level)}`);
+      await vault().trace.setLevel(level);
+      return level;
+    },
+  };
+}

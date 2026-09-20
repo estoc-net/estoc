@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- **`@estoc/daemon/v3`** and **`@estoc/daemon/v3/node`**: the daemon
+  over the version-3 vault, built beside the entries above, which stay
+  as they are. The host provides SQLite files by name
+  (`DaemonStorage`): the vault is `vault.sqlite`, owned through the
+  driver's own locking, so a second daemon lands on `elsewhere` and
+  waits, and a snapshot crosses as the bytes of its file. The Node host
+  keeps them in `<root>/.estoc/`, says `unreadable` over a folder-format
+  vault and leaves it alone, loads `@estoc/didcomm-node`, and gives the
+  agent a fetch that refuses addresses that are not public.
+- **`Snapshot`** is the vault as `@estoc/agent-core/v3` records off one
+  fold — arrangements, local DIDs, contacts, each channel record once,
+  unplaced observations, invitations, pending work — told whole as
+  `opened` and again as `changed` after every call and every delivery;
+  `lines` carries what only the running agent knows (connections,
+  waiting and discarded deliveries).
+- **Calls**: `setMediator`, `createInvitation`, `acceptInvitation`,
+  contacts (`createContact`, `renameContact`, `setContactChannels`,
+  `deleteContact`), `blockChannels`, `eraseMessage`, `send`, and the
+  manual steps the records name: `retry`, `cancel`, `completeResponse`,
+  `completeNotification`, `rotate`; `pending`, `refresh`, `reconnect`.
+- **Restore**: `restoreIdentity` takes a portable snapshot's bytes and
+  the passphrase of its own wrapped seed. Until `explainedRestore`, the
+  snapshot says `restoreUnexplained` and `send`, `acceptInvitation`,
+  `retry`, `completeResponse`, `completeNotification` and `rotate` are
+  refused; pickup, reconciliation, receipts and their automatic effects
+  go on. The mark is this runtime's own local option, so another
+  process over the same file owes the explanation still.
+- `serveDaemon`'s socket server moved to `node/socket.ts` (`serveOver`),
+  shared by both versions; a served daemon that has `close()` is closed
+  with its server.
+
 - **`block(cid)`** reads a block of the vault's `blobs/` by CID — what
   the app's object-share renderer hands `verifyShare` as `held`. It read
   `blob(cid)` before, which is a *file* read: since a recorded share's

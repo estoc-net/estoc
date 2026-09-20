@@ -65,3 +65,27 @@ every address it has — and the literal in the URL — against `ipaddr.js`
 ranges, and connects only to public unicast. Redirects are not followed.
 The mediator's own endpoints are the user's choice and go through the
 ordinary fetch.
+
+## Version 3
+
+`@estoc/daemon/v3` is the daemon over the version-3 vault — one SQLite
+file, the agent of `@estoc/agent-core/v3` over it — built beside the
+entries above until the app and the CLI move to it. `createDaemon(host,
+emit)` takes a `DaemonHost` whose storage is SQLite files by name; the
+RPC (`serve`, `connect`) and the text encoding are the same.
+`@estoc/daemon/v3/node` has `nodeHost(root)`, whose vault is
+`<root>/.estoc/vault.sqlite`, and `serveDaemon`.
+
+The UI is told the vault whole: `opened(snapshot)` once, then
+`changed(snapshot)` after every call it makes and every delivery; what
+changed with neither — a retry the dispatcher made on its own — is read
+with `refresh()`. Nothing is sent on open: what an earlier run left
+unfinished is in `snapshot.pending`, each entry naming the call that
+takes it up.
+
+A vault restored from a snapshot opens with `restoreUnexplained`. It
+receives, reconciles and answers from the first moment, and refuses the
+user's sends and every manual dispatch until the UI has shown what a
+restore cannot bring back — local DIDs made after the snapshot, peers
+known only by a short form, continuity the snapshot predates, forks a
+competing rotation leaves — and called `explainedRestore()`.

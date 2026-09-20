@@ -172,6 +172,9 @@ importers:
       '@estoc/agent-core':
         specifier: workspace:^
         version: link:../agent-core
+      '@estoc/didcomm-node':
+        specifier: ^0.4.1-estoc.3
+        version: 0.4.1-estoc.3
       '@estoc/event-store':
         specifier: workspace:^
         version: link:../event-store
@@ -193,6 +196,9 @@ importers:
       undici:
         specifier: ^7.29.0
         version: 7.29.0
+      uuid:
+        specifier: ^11.1.1
+        version: 11.1.1
       ws:
         specifier: ^8.18.0
         version: 8.21.0
