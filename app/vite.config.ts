@@ -16,7 +16,7 @@ export default defineConfig({
         name: "Estoc",
         short_name: "Estoc",
         description:
-          "An offline-first DIDComm messenger: one identity from one seed, your vault in this browser, a zip you can walk away with.",
+          "An offline-first DIDComm messenger: one identity from one seed, your vault in this browser, a file you can walk away with.",
         theme_color: "#1d2528",
         background_color: "#eef0f1",
         display: "standalone",
@@ -41,7 +41,10 @@ export default defineConfig({
   // which only webpack understands. src/didcomm/wasm.ts instantiates the wasm
   // itself and imports the glue module directly; keeping the package out of
   // prebundling makes sure that glue module is the single instance the shim
-  // wires up.
-  optimizeDeps: { exclude: ["@estoc/didcomm"] },
+  // wires up. The SQLite package finds its own wasm beside its module,
+  // which prebundling would move away from it.
+  optimizeDeps: { exclude: ["@estoc/didcomm", "@sqlite.org/sqlite-wasm"] },
+  // the worker imports the daemon as modules, some of them on demand
+  worker: { format: "es" },
   build: { target: "es2022" },
 });

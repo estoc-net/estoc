@@ -1,9 +1,9 @@
-import { connect, decode, encode, type Daemon, type DaemonEvents, type Port } from "@estoc/daemon";
+import { connect, decode, encode, type Daemon, type DaemonEvents, type Port } from "@estoc/daemon/v3";
 
 /**
  * The daemon as this page reaches it. By default a dedicated worker,
  * alive as long as the tab, holding the vault in this origin's storage.
- * Or a process on this machine over a WebSocket, its vault a folder on
+ * Or a process on this machine over a WebSocket, its vault a file on
  * disk: either this very page was served by `estoc-daemon` (it marks its
  * index.html with a `<meta name="estoc-daemon">`, the socket is this
  * origin's, and the link it printed carries the token as `?token=`), or
@@ -81,7 +81,12 @@ function servedByDaemon(): string | null {
   return socket.href;
 }
 
-export function startDaemon(events: DaemonEvents): Started {
+/** What only a page over a socket has to say: the daemon it spoke with stopped answering, or answers again. */
+export interface LinkEvents {
+  away(detail: string | null): void;
+}
+
+export function startDaemon(events: DaemonEvents & LinkEvents): Started {
   const handlers = events as unknown as Record<string, (...args: never[]) => unknown>;
   const remote = servedByDaemon() ?? takeDaemonUrl();
   if (remote === null) {
@@ -104,13 +109,15 @@ interface SocketPort extends Port {
  * UI is told the daemon is unreachable, and the next open replays where
  * things stand (the daemon's `boot()` does that for a returning client).
  */
-function socketPort(url: string, events: DaemonEvents): SocketPort {
+function socketPort(url: string, events: DaemonEvents & LinkEvents): SocketPort {
   const listeners: { message: ((event: MessageEvent) => void)[]; close: (() => void)[] } = { message: [], close: [] };
   let ws: WebSocket | null = null;
   /** an open that follows a close — the first open included, when a connect failed before it — replays */
   let replayOnOpen = false;
   /** whether the daemon ever spoke: until it does, a closed socket means nobody is there for this page */
   let heard = false;
+  /** whether the last thing this page knew of the daemon is that it was gone */
+  let away = false;
   /** what was said while the socket was still connecting */
   let queued: string[] = [];
   const port: SocketPort = {
@@ -150,6 +157,10 @@ function socketPort(url: string, events: DaemonEvents): SocketPort {
       replayOnOpen = true;
     });
     socket.addEventListener("message", (event: MessageEvent<string>) => {
+      if (away) {
+        away = false;
+        events.away(null);
+      }
       heard = true;
       const data = decode(event.data);
       for (const l of listeners.message) {
@@ -163,9 +174,10 @@ function socketPort(url: string, events: DaemonEvents): SocketPort {
       for (const l of listeners.close) {
         l();
       }
-      events.status({ state: "error", detail: `daemon at ${new URL(url).host} is not answering` }, null);
+      away = true;
+      events.away(`daemon at ${new URL(url).host} is not answering`);
       if (!heard) {
-        events.phase("unreachable");
+        events.phase("unreachable", null);
       }
       setTimeout(open, 2000);
     });

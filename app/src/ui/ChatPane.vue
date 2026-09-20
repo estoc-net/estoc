@@ -1,52 +1,54 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
-import { readAny, type FolderObject, type TreeFiles } from "@estoc/folder-object";
-
-import { acceptInvitation, addContactFrom, dismissPendingInvitation, sendMessage, shareObject, state } from "../core/store.js";
-import type { Identity } from "../core/types.js";
-import { rendererFor, showsInThread } from "../renderers/index.js";
-import { shortDid } from "./util.js";
+import { pairKey } from "../core/conversations.js";
+import { draftIn, moveDraft, writeDraft, writtenDrafts } from "../core/drafts.js";
+import { acceptInvitation, dismissPendingInvitation, sendMessage, state } from "../core/store.js";
+import type { Conversation } from "../core/types.js";
+import { rendererFor, showsInThread, typeOf } from "../renderers/index.js";
+import ConversationDetails from "./ConversationDetails.vue";
+import RestoreNotice from "./RestoreNotice.vue";
+import { shortDid, timeOf } from "./util.js";
 
 const props = defineProps<{
-  identity: Identity;
-  selectedContactCid: string | null;
+  conversations: Conversation[];
+  selected: string | null;
+  /** whether any arrangement with a mediator is selected: without one nothing leaves and nothing arrives */
+  mediated: boolean;
+  /** sends wait for the restore to be explained */
+  sendsClosed: boolean;
 }>();
 
 const emit = defineEmits<{
-  selectContact: [cid: string];
+  select: [key: string];
 }>();
 
-const contact = computed(
-  () => props.identity.contacts.find((c) => c.cid === props.selectedContactCid) ?? null
-);
+const conversation = computed(() => props.conversations.find((c) => c.key === props.selected) ?? null);
 
-// A thread is everything homed to the contact — across every DID either
-// side has used with the other — that its renderer wants shown. Every
-// record is in the log; which of them take a line is the renderers' call.
-const thread = computed(() =>
-  props.selectedContactCid === null
-    ? []
-    : props.identity.messages.filter(
-        (e) => e.contactCid === props.selectedContactCid && showsInThread(e)
-      )
-);
+/** Our name for them; failing that what they call themself, quoted as the claim it is; failing that their DID. */
+function labelOf(c: Conversation): string {
+  if (c.petname !== null) return c.petname;
+  if (c.claimedName !== null) return `“${c.claimedName}”`;
+  return shortDid(c.channels[0]?.channel.peerDid ?? "");
+}
 
-// A displayName arriving over user-profile/1.0 is only ever a claim; the
-// head says so instead of presenting it as fact.
+// A thread is every message of every channel the conversation shows that
+// its renderer wants shown. Everything is in the vault; which of it takes
+// a line is the renderers' call, and what needs the person always does.
+const thread = computed(() => conversation.value?.messages.filter(showsInThread) ?? []);
+
 const claimNote = computed(() => {
-  const c = contact.value;
-  if (c === null || c.claimedName === undefined) {
-    return null;
+  const c = conversation.value;
+  if (c === null || c.claimedName === null || c.petname === null) {
+    return c !== null && c.petname === null ? "not a contact yet" : null;
   }
-  return c.claimedName === c.label
-    ? "a self-styled name"
-    : `calls themself “${c.claimedName}”`;
+  return c.claimedName === c.petname ? "a self-styled name" : `calls themself “${c.claimedName}”`;
 });
 
+const showDetails = ref(false);
 const showAddForm = ref(false);
 const newLabel = ref("");
-const newDid = ref("");
+const newLink = ref("");
 const addError = ref("");
 const adding = ref(false);
 
@@ -56,130 +58,139 @@ const pending = computed(() => state.pendingInvitation);
 const pendingLabel = ref("");
 const pendingError = ref("");
 
-async function add() {
-  const input = newDid.value.trim();
-  const label = newLabel.value.trim() || (input.startsWith("did:") ? shortDid(input) : "invited");
-  if (input === "") {
-    addError.value = "Paste their DID, or an invitation link.";
-    return;
+async function accept(input: Parameters<typeof acceptInvitation>[0], label: string, fail: (message: string) => void): Promise<boolean> {
+  if (label === "") {
+    fail("Give them a name first.");
+    return false;
   }
   adding.value = true;
   try {
-    const added = await addContactFrom(input, label);
-    if (added !== null) {
-      emit("selectContact", added.cid);
-    }
-    newLabel.value = "";
-    newDid.value = "";
-    addError.value = "";
-    showAddForm.value = false;
+    emit("select", await acceptInvitation(input, label));
+    fail("");
+    return true;
   } catch (err) {
-    addError.value = err instanceof Error ? err.message : String(err);
+    fail(err instanceof Error ? err.message : String(err));
+    return false;
   } finally {
     adding.value = false;
+  }
+}
+
+async function add() {
+  if (newLink.value.trim() === "") {
+    addError.value = "Paste the invitation link they made for you.";
+    return;
+  }
+  if (await accept(newLink.value, newLabel.value.trim(), (message) => (addError.value = message))) {
+    newLabel.value = "";
+    newLink.value = "";
+    showAddForm.value = false;
   }
 }
 
 async function acceptPending() {
-  if (pending.value === null) {
-    return;
-  }
-  const label = pendingLabel.value.trim();
-  if (label === "") {
-    pendingError.value = "Give them a name first.";
-    return;
-  }
-  adding.value = true;
-  try {
-    const added = await acceptInvitation(pending.value, label);
-    if (added !== null) {
-      emit("selectContact", added.cid);
-    }
+  if (pending.value !== null && (await accept(pending.value, pendingLabel.value.trim(), (message) => (pendingError.value = message)))) {
     pendingLabel.value = "";
-    pendingError.value = "";
-  } catch (err) {
-    pendingError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    adding.value = false;
   }
 }
 
-const draft = ref("");
 const sending = ref(false);
 const sendError = ref("");
+/** the channel picked to write in, by pair; none while the conversation's own choice is taken */
+const picked = ref<string | null>(null);
+
+watch(
+  () => props.selected,
+  () => {
+    picked.value = null;
+    showDetails.value = false;
+  }
+);
+
+// The channel this conversation writes in now. A send names it, never
+// the contact: what was written for one pair goes out in that pair, or
+// is refused if the pair has been replaced since the snapshot on screen.
+const target = computed(() => {
+  const c = conversation.value;
+  if (c === null) return null;
+  return c.writeTo.find((candidate) => pairKey(candidate) === picked.value) ?? c.defaultWriteTo;
+});
+
+const draft = computed({
+  get: () => (target.value === null ? "" : (draftIn(target.value)?.text ?? "")),
+  set: (text) => {
+    if (target.value !== null) writeDraft(target.value, text);
+  },
+});
+
+// Picking another channel of the same conversation takes what is being written along.
+function pick(event: Event) {
+  const before = target.value;
+  const value = (event.target as HTMLSelectElement).value;
+  picked.value = value === "" ? null : value;
+  if (before !== null && target.value !== null) moveDraft(before, target.value);
+}
+
+const pairsOf = (c: Conversation) => [...c.writeTo, ...c.channels.map(({ channel }) => channel)].map(pairKey);
+
+/**
+ * What is written and not in the composer: in another channel of this
+ * conversation, or in a channel no conversation shows any more. A newer
+ * selection can take a channel with no message in it out of every
+ * conversation; its draft is listed wherever the person is, or nothing
+ * would be left to read it by. A draft in another conversation's channel
+ * waits there.
+ */
+const draftsElsewhere = computed(() => {
+  const c = conversation.value;
+  const here = new Set(c === null ? [] : pairsOf(c));
+  const shown = new Set(props.conversations.flatMap(pairsOf));
+  const writable = new Set(c?.writeTo.map(pairKey) ?? []);
+  const current = target.value === null ? null : pairKey(target.value);
+  return writtenDrafts().flatMap((draft) => {
+    const pair = pairKey(draft.channel);
+    if (pair === current || (shown.has(pair) && !here.has(pair))) return [];
+    return [{ pair, draft, writable: writable.has(pair) }];
+  });
+});
+
+async function copy(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    sendError.value = "It could not be copied from here: select the text instead.";
+  }
+}
+
+// A contact that prefers a DID none of its open channels is under gets
+// no default, even with one channel open: writing as another DID is the
+// person's call, made here.
+const mustPick = computed(() => {
+  const c = conversation.value;
+  if (c === null || c.writeTo.length === 0 || c.defaultWriteTo !== null || target.value !== null) return null;
+  return c.writeTo.length === 1 ? "the only open channel is not under the DID you prefer for this contact: choose it to write in it" : "several channels take a send: choose the one this goes out in";
+});
+
+const closedBecause = computed(() => {
+  const c = conversation.value;
+  if (c === null || c.writeTo.length > 0) return null;
+  const closed = c.channels.flatMap(({ send }) => (send.status === "closed" ? [send.because] : []));
+  return closed[0] ?? "no channel of this conversation is open";
+});
 
 async function send() {
   const text = draft.value.trim();
-  if (text === "" || contact.value === null || sending.value) {
+  const channel = target.value;
+  if (text === "" || channel === null || sending.value) {
     return;
   }
+  // held by identity: the conversation on screen, and the pair the draft is under, may both move before this returns
+  const written = draftIn(channel);
   sending.value = true;
   sendError.value = "";
   try {
-    await sendMessage(contact.value.did, text);
-    draft.value = "";
-    void toFoot();
-  } catch (err) {
-    sendError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    sending.value = false;
-  }
-}
-
-// An object goes over whole (object-share/1.0), picked as a folder. The
-// folder's own name is dropped; hidden entries (a `.`-prefixed name at
-// any depth) leave the tree, as folder-object's readTree has it. A signed
-// object — `object/…` plus its author's `card.jws` — goes at once, under
-// that card. A bare object (index.json at the root) waits for a choice:
-// as it is — handed over, nobody standing behind it — or under a card the
-// anchor signs, an object we stand behind.
-const objectInput = ref<HTMLInputElement | null>(null);
-const pendingObject = ref<{ name: string; object: FolderObject } | null>(null);
-
-function mappingOf(files: FileList): Promise<TreeFiles> {
-  return Promise.all(
-    [...files].map(async (file) => {
-      const parts = (file.webkitRelativePath || file.name).split("/");
-      if (parts.length > 1) parts.shift();
-      const hidden = parts.some((p) => p.startsWith("."));
-      return [parts.join("/"), hidden ? null : new Uint8Array(await file.arrayBuffer())] as const;
-    })
-  ).then((entries) => Object.fromEntries(entries.filter(([, bytes]) => bytes !== null) as [string, Uint8Array][]));
-}
-
-async function pickObject(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const files = input.files;
-  const name = files?.[0]?.webkitRelativePath.split("/")[0] ?? "";
-  if (files === null || files.length === 0 || contact.value === null || sending.value) {
-    input.value = "";
-    return;
-  }
-  sendError.value = "";
-  pendingObject.value = null;
-  try {
-    const { object, card } = readAny(await mappingOf(files));
-    if (card !== undefined) {
-      await sendObject(object, { card });
-    } else {
-      pendingObject.value = { name, object };
-    }
-  } catch (err) {
-    sendError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    input.value = "";
-  }
-}
-
-async function sendObject(object: FolderObject, options: { sign?: boolean; card?: string }) {
-  if (contact.value === null || sending.value) {
-    return;
-  }
-  sending.value = true;
-  sendError.value = "";
-  try {
-    await shareObject(contact.value.did, object, options);
-    pendingObject.value = null;
+    await sendMessage({ channel }, text);
+    if (written !== null && written.text.trim() === text) written.text = "";
     void toFoot();
   } catch (err) {
     sendError.value = err instanceof Error ? err.message : String(err);
@@ -216,13 +227,16 @@ async function toFoot() {
   }
 }
 
-watch(() => props.selectedContactCid, toFoot, { immediate: true });
+watch(() => props.selected, toFoot, { immediate: true });
 
-watch(() => thread.value.length, () => {
-  if (resting) {
-    void toFoot();
+watch(
+  () => thread.value.length,
+  () => {
+    if (resting) {
+      void toFoot();
+    }
   }
-});
+);
 
 // A window that shrinks — or a phone keyboard opening — must not lift the
 // newest message off the foot and leave it floating in the middle.
@@ -244,30 +258,30 @@ onMounted(() => {
 <template>
   <main class="chat">
     <div class="chat-head">
-      <h2>{{ contact?.label ?? "Conversations" }}</h2>
+      <h2>{{ conversation ? labelOf(conversation) : "Conversations" }}</h2>
       <span v-if="claimNote" class="claim-note">{{ claimNote }}</span>
-      <span v-if="contact" class="head-dids">
-        <span class="eyebrow" :title="contact.did">{{ shortDid(contact.did) }}</span>
-        <span
-          v-if="contact.myDid"
-          class="eyebrow"
-          :title="`the DID you write to ${contact.label} from — theirs alone: ${contact.myDid}`"
-        >you as {{ shortDid(contact.myDid) }}</span>
+      <span v-if="conversation" class="head-dids">
+        <button class="link-quiet" data-details-toggle @click="showDetails = !showDetails">
+          {{ showDetails ? "close" : `${conversation.channels.length} channel${conversation.channels.length === 1 ? "" : "s"}` }}
+        </button>
       </span>
     </div>
 
     <div class="contact-strip">
       <button
-        v-for="c in identity.contacts"
-        :key="c.cid"
+        v-for="c in conversations"
+        :key="c.key"
         class="contact-chip"
-        :class="{ active: c.cid === selectedContactCid }"
-        @click="emit('selectContact', c.cid)"
+        :class="{ active: c.key === selected, nameless: c.contactId === null }"
+        :data-conversation="c.key"
+        @click="emit('select', c.key)"
       >
-        {{ c.label }}
+        {{ labelOf(c) }}
       </button>
       <button class="contact-chip" @click="showAddForm = !showAddForm">+ contact</button>
     </div>
+
+    <RestoreNotice v-if="sendsClosed" />
 
     <div v-if="pending" class="hollow invited chat-block">
       <div class="hollow-card" style="width: 100%">
@@ -282,85 +296,92 @@ onMounted(() => {
           <input v-model="pendingLabel" class="field" placeholder="what you call them, e.g. Alice" />
           <p v-if="pendingError" class="compose-error" style="padding: 0">{{ pendingError }}</p>
           <div class="rail-actions" style="gap: 8px">
-            <button class="btn" type="submit" :disabled="adding">Accept invitation</button>
+            <button class="btn" type="submit" :disabled="adding || !mediated || sendsClosed">Accept invitation</button>
             <button class="btn-quiet" type="button" @click="dismissPendingInvitation">Not now</button>
           </div>
+          <p v-if="!mediated" class="fine">Choose a mediator in the rail first: accepting writes to them, and they answer to where you can be reached.</p>
         </form>
       </div>
     </div>
 
-    <div v-if="showAddForm || (identity.contacts.length === 0 && !pending)" class="hollow chat-block">
+    <div v-if="showAddForm || (conversations.length === 0 && !pending)" class="hollow chat-block">
       <div class="hollow-card" style="width: 100%">
-        <p v-if="identity.contacts.length === 0">
-          To talk to someone, add them as a contact: paste an invitation link
-          they made for you (the rail makes yours), or the DID from their
-          rail, sent any way they like. Anyone who has your public DID can
-          write to you too — a stranger's first message opens a conversation
-          here on its own.
+        <p v-if="conversations.length === 0">
+          To talk to someone, paste an invitation link they made for you, or
+          make one for them in the rail. Whoever opens a link of yours and
+          writes first opens a conversation here on their own.
         </p>
         <form @submit.prevent="add">
           <input v-model="newLabel" class="field" placeholder="name, e.g. Bob" />
-          <input v-model="newDid" class="field" placeholder="paste their invitation link or DID" />
+          <input v-model="newLink" class="field" placeholder="paste their invitation link" />
           <p v-if="addError" class="compose-error" style="padding: 0">{{ addError }}</p>
-          <button class="btn" type="submit" :disabled="adding">
+          <button class="btn" type="submit" :disabled="adding || !mediated || sendsClosed">
             {{ adding ? "Adding…" : "Add contact" }}
           </button>
         </form>
       </div>
     </div>
 
+    <ConversationDetails v-if="conversation && showDetails" :key="conversation.key" :conversation="conversation" @named="(key) => emit('select', key)" />
+
     <div ref="threadEl" class="thread" @scroll.passive="noteScroll">
-      <p v-if="contact && identity.mediatorDid === null" class="hop-note">
-        No mediator yet — choose one in the rail before writing to
-        {{ contact.label }}; without one, nothing leaves and nothing arrives.
+      <p v-if="conversation && !mediated" class="hop-note">
+        No mediator yet — choose one in the rail; without one, nothing leaves and nothing arrives.
       </p>
-      <p v-else-if="contact && thread.length === 0" class="hop-note">
-        No messages yet. Your first message mints a DID of yours for
-        {{ contact.label }} alone — nobody else ever sees it — and whatever
-        you write crosses the mediator sealed to them.
+      <p v-else-if="conversation && thread.length === 0 && conversation.unplaced.length === 0" class="hop-note">
+        No messages yet. What you write crosses the mediator sealed to them,
+        from a DID of yours nobody else ever sees.
       </p>
-      <component
-        :is="rendererFor(e.type).component"
-        v-for="e in thread"
-        :key="e.mid"
-        :entry="e"
-        :contact="contact"
-      />
+      <component :is="rendererFor(typeOf(m)).component" v-for="m in thread" :key="m.messageId" :message="m" />
+      <p
+        v-for="input in conversation?.unplaced ?? []"
+        :key="input.sourceEventId"
+        class="hop-note"
+        :class="{ error: input.standing === 'conflict' }"
+        :title="input.channel === null ? undefined : `${input.channel.peerDid} → ${input.channel.localDid}`"
+        data-unplaced
+      >
+        {{ timeOf(Date.parse(input.at)) }} · received<template v-if="input.channel"> as {{ shortDid(input.channel.localDid) }}</template>, not taken in ({{ input.standing }}):
+        {{ input.because }}. Nothing it carries is shown as theirs.
+      </p>
     </div>
 
-    <p v-if="sendError" class="compose-error">{{ sendError }}</p>
-    <div v-if="pendingObject" class="composer share-choice">
-      <span class="share-name"><code>{{ pendingObject.name }}</code> — {{ pendingObject.object.meta.format }}, not signed</span>
-      <button class="btn btn-quiet" type="button" :disabled="sending" data-share-choice="plain" @click="sendObject(pendingObject.object, {})">
-        Send as is
-      </button>
-      <button class="btn btn-quiet" type="button" :disabled="sending" data-share-choice="sign" @click="sendObject(pendingObject.object, { sign: true })">
-        Sign &amp; send
-      </button>
-      <button class="btn btn-quiet" type="button" :disabled="sending" data-share-choice="cancel" @click="pendingObject = null">
-        Cancel
-      </button>
+    <div v-if="draftsElsewhere.length > 0" class="drafts-kept">
+      <div v-for="{ pair, draft: kept, writable } in draftsElsewhere" :key="pair" class="draft-elsewhere" :title="`${kept.channel.localDid} → ${kept.channel.peerDid}`" data-draft-elsewhere>
+        <p>
+          <template v-if="writable">Something you were writing waits in another channel, as {{ shortDid(kept.channel.localDid) }} → {{ shortDid(kept.channel.peerDid) }}.</template>
+          <template v-else>You were writing this as {{ shortDid(kept.channel.localDid) }} → {{ shortDid(kept.channel.peerDid) }}, which takes no send now.</template>
+          <button v-if="writable" type="button" class="link-quiet" @click="picked = pair">write there</button>
+          <template v-else>
+            <button v-if="target !== null && draft === ''" type="button" class="link-quiet" data-draft-here @click="moveDraft(kept.channel, target)">write it here instead</button>
+            <button type="button" class="link-quiet" data-draft-copy @click="copy(kept.text)">copy</button>
+          </template>
+          <button type="button" class="link-quiet" data-draft-discard @click="kept.text = ''">discard</button>
+        </p>
+        <blockquote v-if="!writable" data-draft-text>{{ kept.text }}</blockquote>
+      </div>
     </div>
-    <form v-if="contact" class="composer" @submit.prevent="send">
-      <input
-        v-model="draft"
-        class="field"
-        :placeholder="`Write to ${contact.label}`"
-        :disabled="sending"
-      />
-      <button class="btn" type="submit" :disabled="sending || draft.trim() === ''">
+    <p v-if="sendError" class="compose-error">{{ sendError }}</p>
+    <p v-if="mustPick" class="compose-error" data-must-pick>{{ mustPick }}</p>
+    <p v-if="conversation && closedBecause" class="compose-error" data-closed>Nothing can be written here: {{ closedBecause }}</p>
+    <form v-else-if="conversation" class="composer" @submit.prevent="send">
+      <select
+        v-if="conversation.writeTo.length > 1 || conversation.defaultWriteTo === null"
+        :value="picked ?? ''"
+        class="field channel-pick"
+        title="the channel this goes out in"
+        data-channel-pick
+        @change="pick"
+      >
+        <option value="" :disabled="conversation.defaultWriteTo === null">{{ conversation.defaultWriteTo === null ? "choose a channel" : "the usual channel" }}</option>
+        <option v-for="channel in conversation.writeTo" :key="pairKey(channel)" :value="pairKey(channel)" :title="`${channel.localDid} → ${channel.peerDid}`">
+          as {{ shortDid(channel.localDid) }} → {{ shortDid(channel.peerDid) }}
+        </option>
+      </select>
+      <input v-model="draft" class="field" :placeholder="target === null ? 'choose a channel to write in' : `Write to ${labelOf(conversation)}`" :disabled="sending || sendsClosed || target === null" />
+      <button class="btn" type="submit" :disabled="sending || sendsClosed || target === null || draft.trim() === ''">
         {{ sending ? "Sealing…" : "Send" }}
       </button>
-      <button
-        class="btn btn-quiet"
-        type="button"
-        title="share an object: pick its folder"
-        :disabled="sending"
-        @click="objectInput?.click()"
-      >
-        Object…
-      </button>
-      <input ref="objectInput" type="file" webkitdirectory data-share="object" hidden @change="pickObject" />
     </form>
   </main>
 </template>
