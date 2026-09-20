@@ -269,8 +269,13 @@ try {
   await bob2.close();
 
   // Lock: the seed cache is dropped; the passphrase — and only the right one — reopens.
+  // What was being written is of the vault that is still here, and is there again.
+  await bob.fill(".composer input.field", "unsent over a lock");
   await bob.click('button:has-text("Lock")');
   await bob.waitForSelector("text=Locked", { timeout: 15000 });
+  if ((await bob.locator("body").innerText()).includes("unsent over a lock")) {
+    fail("a locked vault should show nothing that was being written in it");
+  }
   await bob.fill('input[placeholder="passphrase"]', "not-it");
   await bob.click('button:has-text("Unlock")');
   await bob.waitForSelector("text=wrong passphrase", { timeout: 15000 });
@@ -279,7 +284,11 @@ try {
   await bob.click('.contact-chip:has-text("Alice")');
   await expectBubble(bob, "hello bob");
   await waitLive(bob);
-  ok("lock → wrong passphrase refused → right passphrase reopens with history");
+  if ((await bob.inputValue(".composer input.field")) !== "unsent over a lock") {
+    fail("a draft should still be there when the same vault is unlocked");
+  }
+  await bob.fill(".composer input.field", "");
+  ok("lock → wrong passphrase refused → right passphrase reopens with history and the draft");
 
   // Backup: Alice exports her vault; a fresh browser restores it and is Alice.
   const [download] = await Promise.all([alice.waitForEvent("download"), alice.click("[data-export]")]);
@@ -368,6 +377,22 @@ try {
 
   await alice2.screenshot({ path: "scripts/e2e-alice.png", fullPage: true });
   await bob.screenshot({ path: "scripts/e2e-bob.png", fullPage: true });
+
+  // Forget: whoever makes an identity on the same page next, without a
+  // reload between, finds nothing the forgotten one was writing.
+  await bob.click('.contact-chip:has-text("Alice")');
+  await bob.fill(".composer input.field", "unsent when bob was forgotten");
+  bob.once("dialog", (dialog) => dialog.accept());
+  await bob.click('button:has-text("Forget identity")');
+  await bob.fill('input[placeholder="your name, e.g. Alice"]', "Dora");
+  await bob.fill('input[placeholder^="passphrase (seals"]', "dora-dries-dates");
+  await bob.fill('input[placeholder="passphrase again"]', "dora-dries-dates");
+  await bob.click('button:has-text("Create identity")');
+  await bob.waitForSelector("text=not reachable yet", { timeout: 30000 });
+  if ((await bob.locator("[data-draft-elsewhere]").count()) !== 0 || (await bob.locator("body").innerText()).includes("unsent when bob was forgotten")) {
+    fail("a new identity should find nothing of what the forgotten one was writing");
+  }
+  ok("Bob forgotten, Dora made on the same page: his draft went with his vault");
 
   if (process.exitCode !== 1) {
     console.log("\nall green");

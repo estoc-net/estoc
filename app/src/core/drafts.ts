@@ -28,7 +28,6 @@ export function draftIn(channel: Channel): Draft | null {
   return draft === null || draft.text === "" ? null : draft;
 }
 
-/** Every draft with something in it, whether or not its channel is still shown anywhere. */
 export function writtenDrafts(): Draft[] {
   return drafts.filter((draft) => draft.text !== "");
 }
@@ -44,6 +43,15 @@ function rehome(draft: Draft, channel: Channel): void {
   const emptied = held(channel);
   if (emptied !== null) drafts.splice(drafts.indexOf(emptied), 1);
   draft.channel = channel;
+}
+
+/**
+ * Drafts are of one vault. They outlive a lock, which leaves the vault
+ * where it is, and nothing else: whoever has this page after the vault
+ * is gone is not to read what was being written in it.
+ */
+export function dropDrafts(): void {
+  drafts.splice(0);
 }
 
 /** Hand what is written in one channel to another the person picked instead, unless something is written there. */

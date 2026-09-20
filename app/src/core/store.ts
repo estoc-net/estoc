@@ -9,6 +9,7 @@ import { forgetSeedKey } from "../daemon/keycache.js";
 import { FOLDER_VAULT } from "../daemon/places.js";
 import { saveFile } from "./backup.js";
 import { conversationsOf } from "./conversations.js";
+import { dropDrafts } from "./drafts.js";
 import { isInstalled, setupPwa } from "./pwa.js";
 import { isStoragePersisted, persistStorage } from "./storage.js";
 import type { Channel, ContactId, Conversation, Did, DidId, Lines, Merged, MessageId, Phase, Snapshot } from "./types.js";
@@ -83,6 +84,8 @@ function take(snapshot: Snapshot): void {
 function connectDaemon(): Daemon {
   const started = startDaemon({
     phase(phase, detail) {
+      // onboarding is this browser with no vault in it: forgotten here, or from wherever else it could be
+      if (phase === "onboarding") dropDrafts();
       if (phase !== "open") {
         state.snapshot = null;
         state.conversations = [];

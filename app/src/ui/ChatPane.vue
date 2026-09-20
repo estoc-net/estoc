@@ -346,16 +346,21 @@ onMounted(() => {
       </p>
     </div>
 
-    <p v-for="{ pair, draft: kept, writable } in draftsElsewhere" :key="pair" class="draft-elsewhere" :title="`${kept.channel.localDid} → ${kept.channel.peerDid}`" data-draft-elsewhere>
-      <template v-if="writable">Something you were writing waits in another channel, as {{ shortDid(kept.channel.localDid) }} → {{ shortDid(kept.channel.peerDid) }}.</template>
-      <template v-else>You were writing “{{ kept.text }}” as {{ shortDid(kept.channel.localDid) }} → {{ shortDid(kept.channel.peerDid) }}, which takes no send now.</template>
-      <button v-if="writable" type="button" class="link-quiet" @click="picked = pair">write there</button>
-      <template v-else>
-        <button v-if="target !== null && draft === ''" type="button" class="link-quiet" data-draft-here @click="moveDraft(kept.channel, target)">write it here instead</button>
-        <button type="button" class="link-quiet" data-draft-copy @click="copy(kept.text)">copy</button>
-      </template>
-      <button type="button" class="link-quiet" data-draft-discard @click="kept.text = ''">discard</button>
-    </p>
+    <div v-if="draftsElsewhere.length > 0" class="drafts-kept">
+      <div v-for="{ pair, draft: kept, writable } in draftsElsewhere" :key="pair" class="draft-elsewhere" :title="`${kept.channel.localDid} → ${kept.channel.peerDid}`" data-draft-elsewhere>
+        <p>
+          <template v-if="writable">Something you were writing waits in another channel, as {{ shortDid(kept.channel.localDid) }} → {{ shortDid(kept.channel.peerDid) }}.</template>
+          <template v-else>You were writing this as {{ shortDid(kept.channel.localDid) }} → {{ shortDid(kept.channel.peerDid) }}, which takes no send now.</template>
+          <button v-if="writable" type="button" class="link-quiet" @click="picked = pair">write there</button>
+          <template v-else>
+            <button v-if="target !== null && draft === ''" type="button" class="link-quiet" data-draft-here @click="moveDraft(kept.channel, target)">write it here instead</button>
+            <button type="button" class="link-quiet" data-draft-copy @click="copy(kept.text)">copy</button>
+          </template>
+          <button type="button" class="link-quiet" data-draft-discard @click="kept.text = ''">discard</button>
+        </p>
+        <blockquote v-if="!writable" data-draft-text>{{ kept.text }}</blockquote>
+      </div>
+    </div>
     <p v-if="sendError" class="compose-error">{{ sendError }}</p>
     <p v-if="mustPick" class="compose-error" data-must-pick>{{ mustPick }}</p>
     <p v-if="conversation && closedBecause" class="compose-error" data-closed>Nothing can be written here: {{ closedBecause }}</p>
