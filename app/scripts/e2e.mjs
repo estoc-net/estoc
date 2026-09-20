@@ -3,7 +3,8 @@
  * isolated browser contexts mint Alice, Bob and Carol, meet over invitation
  * links and message each other (live delivery, no reload); then the app's
  * own promises get exercised: a conversation is named, a DID is rotated by
- * hand and the thread goes on over it, history survives a reload, a second
+ * hand and the thread goes on over it, a draft stays with the peer who
+ * rotates under it, history survives a reload, a second
  * tab yields to the first, lock asks for the passphrase, a backup file
  * restores the identity in a fresh browser, where sending waits for the
  * restore to be explained, importing a backup into a live vault merges
@@ -129,10 +130,11 @@ try {
 
   // Bob hands Alice a link; she pastes it under a name of her own for him.
   const bobLink = await invite(bob);
-  if ((await bob.locator(".invitation .qr svg").count()) !== 1) {
-    fail("the invitation should show as a QR code too");
+  // A mediator with long endpoints makes a link no QR code holds; the link is what must be there.
+  if ((await bob.locator(".invitation .qr svg, [data-no-qr]").count()) !== 1) {
+    fail("the invitation should show as a QR code too, or say why it cannot");
   }
-  ok("Bob issued a single-use invitation link (with a QR)");
+  ok("Bob issued a single-use invitation link (with a QR where it fits one)");
   await alice.click('button:has-text("+ contact")');
   await alice.fill('input[placeholder="name, e.g. Bob"]', "Bob");
   await alice.fill('input[placeholder="paste their invitation link"]', bobLink);
@@ -199,6 +201,25 @@ try {
   await send(carol, "Bob (invited)", "thanks bob");
   await expectBubble(bob, "thanks bob");
   ok("Bob and Carol talk both ways before he has named her");
+
+  // Carol moves to a new DID while Bob, who has named only Alice, is
+  // writing to her: the pair his open conversation is known by moves, and
+  // the conversation and what he was writing stay hers.
+  await channelsShown(bob, 2);
+  await bob.fill('input[placeholder="Write to “Carol”"]', "for carol alone");
+  await carol.click("[data-details-toggle]");
+  await carol.locator("[data-rotate]").last().click();
+  await channelsShown(bob, 3);
+  if ((await bob.locator(".chat-head h2").innerText()) !== "“Carol”" || (await bob.inputValue(".composer input.field")) !== "for carol alone") {
+    fail("a peer's rotation should leave the open conversation and its draft where they were");
+  }
+  await bob.click('button:has-text("Send")');
+  await expectBubble(carol, "for carol alone", 45000);
+  await bob.click('.contact-chip:has-text("Alice")');
+  if ((await bob.inputValue(".composer input.field")) !== "" || (await alice.locator('.bubble:has-text("for carol alone")').count()) !== 0) {
+    fail("what was written to Carol should reach nobody else");
+  }
+  ok("Carol rotated while Bob was writing to her: the draft stayed hers and reached her alone");
   await carolCtx.close();
 
   // Reload: history and identity come back from the vault, no passphrase.

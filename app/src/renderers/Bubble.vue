@@ -66,6 +66,7 @@ const input = computed(() => {
 const open = computed(() => state.snapshot?.pending.pendingOutbounds.find((outbound) => outbound.messageId === props.message.messageId) ?? null);
 const owed = computed(() => (state.snapshot?.pending.missingResponses ?? []).filter((response) => response.messageId === props.message.messageId && response.entries.includes("completeResponse")));
 
+const sendsClosed = computed(() => state.snapshot?.restoreUnexplained ?? false);
 const busy = ref(false);
 const failure = ref<string | null>(null);
 
@@ -99,7 +100,7 @@ function erase() {
       <span v-if="delivery" class="delivery" :class="delivery.status" :title="delivery.because ?? open?.because ?? undefined" data-delivery>{{ delivery.word }}</span>
       <span v-if="input" class="delivery" :class="input.status" :title="input.because">{{ input.status === "pending" ? "not taken in yet" : "conflict" }}</span>
       <span v-if="verification" class="delivery" :class="verification.status" :title="verification.because" data-verification>{{ verification.word }}</span>
-      <button v-if="message.manualAction === 'retry'" type="button" class="link-quiet" :disabled="busy" data-retry @click="act(() => retry(message.messageId))">
+      <button v-if="message.manualAction === 'retry'" type="button" class="link-quiet" :disabled="busy || sendsClosed" data-retry @click="act(() => retry(message.messageId))">
         {{ busy ? "…" : "send again" }}
       </button>
       <button v-if="open?.entries.includes('cancel')" type="button" class="link-quiet" :disabled="busy" @click="act(() => cancel(message.messageId))">cancel</button>
@@ -108,7 +109,7 @@ function erase() {
         :key="response.effectType"
         type="button"
         class="link-quiet"
-        :disabled="busy"
+        :disabled="busy || sendsClosed"
         :title="`give the reply this message still earns: ${response.effectType}`"
         @click="act(() => completeResponse(response.executionId, response.effectType))"
       >

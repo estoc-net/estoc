@@ -79,15 +79,20 @@ const shownUrl = computed(() => (shownRecord.value === null || shownRecord.value
 // the link on screen was taken while it was showing
 const shownTaken = computed(() => shownRecord.value?.state.status === "consumed");
 
+// A link can outgrow what a QR code holds: its length follows the DID,
+// and so the mediator's endpoints in it. The link is whole either way.
 const qrSvg = computed(() => {
   if (shownUrl.value === null) {
-    return "";
+    return null;
   }
-  // a did:peer:4 invitation is ~1.6 KB: byte mode, low correction, auto size
-  const qr = qrcode(0, "L");
-  qr.addData(shownUrl.value, "Byte");
-  qr.make();
-  return qr.createSvgTag({ cellSize: 2, margin: 2, scalable: true });
+  try {
+    const qr = qrcode(0, "L");
+    qr.addData(shownUrl.value, "Byte");
+    qr.make();
+    return qr.createSvgTag({ cellSize: 2, margin: 2, scalable: true });
+  } catch {
+    return null;
+  }
 });
 
 async function copyInvitation(url: string) {
@@ -200,7 +205,8 @@ function forget() {
         <button class="did-chip" :title="shownUrl" data-invitation-url @click="copyInvitation(shownUrl)">
           {{ invitationCopied ? "copied" : "copy the link" }}
         </button>
-        <div class="qr" v-html="qrSvg"></div>
+        <div v-if="qrSvg" class="qr" v-html="qrSvg"></div>
+        <p v-else class="status-line" data-no-qr>This link is too long for a QR code; copy it instead.</p>
         <p class="status-line" style="margin-top: 4px">
           for one person: whoever opens it and writes first is the one it is
           for. Nothing public changes hands — you each get a DID minted for

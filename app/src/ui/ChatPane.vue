@@ -7,7 +7,7 @@ import type { Conversation } from "../core/types.js";
 import { rendererFor, showsInThread, typeOf } from "../renderers/index.js";
 import ConversationDetails from "./ConversationDetails.vue";
 import RestoreNotice from "./RestoreNotice.vue";
-import { shortDid } from "./util.js";
+import { shortDid, timeOf } from "./util.js";
 
 const props = defineProps<{
   conversations: Conversation[];
@@ -93,7 +93,7 @@ async function acceptPending() {
   }
 }
 
-const draft = ref("");
+const draft = defineModel<string>("draft", { required: true });
 const sending = ref(false);
 const sendError = ref("");
 /** the channel picked to write in, by pair; none while the conversation's own choice is taken */
@@ -116,6 +116,15 @@ const target = computed(() => {
   return c.contactId === null ? { channel: c.defaultWriteTo } : { contactId: c.contactId };
 });
 
+// A contact that prefers a DID none of its open channels is under gets
+// no default, even with one channel open: writing as another DID is the
+// person's call, made here.
+const mustPick = computed(() => {
+  const c = conversation.value;
+  if (c === null || c.writeTo.length === 0 || c.defaultWriteTo !== null || target.value !== null) return null;
+  return c.writeTo.length === 1 ? "the only open channel is not under the DID you prefer for this contact: choose it to write in it" : "several channels take a send: choose the one this goes out in";
+});
+
 const closedBecause = computed(() => {
   const c = conversation.value;
   if (c === null || c.writeTo.length > 0) return null;
@@ -132,7 +141,8 @@ async function send() {
   sendError.value = "";
   try {
     await sendMessage(target.value, text);
-    draft.value = "";
+    // the selection may have moved while this was sealed: only the draft that was sent is cleared
+    if (draft.value.trim() === text) draft.value = "";
     void toFoot();
   } catch (err) {
     sendError.value = err instanceof Error ? err.message : String(err);
@@ -269,19 +279,39 @@ onMounted(() => {
       <p v-if="conversation && !mediated" class="hop-note">
         No mediator yet — choose one in the rail; without one, nothing leaves and nothing arrives.
       </p>
-      <p v-else-if="conversation && thread.length === 0" class="hop-note">
+      <p v-else-if="conversation && thread.length === 0 && conversation.unplaced.length === 0" class="hop-note">
         No messages yet. What you write crosses the mediator sealed to them,
         from a DID of yours nobody else ever sees.
       </p>
       <component :is="rendererFor(typeOf(m)).component" v-for="m in thread" :key="m.messageId" :message="m" />
+      <p
+        v-for="input in conversation?.unplaced ?? []"
+        :key="input.sourceEventId"
+        class="hop-note"
+        :class="{ error: input.standing === 'conflict' }"
+        :title="input.channel === null ? undefined : `${input.channel.peerDid} → ${input.channel.localDid}`"
+        data-unplaced
+      >
+        {{ timeOf(Date.parse(input.at)) }} · received<template v-if="input.channel"> as {{ shortDid(input.channel.localDid) }}</template>, not taken in ({{ input.standing }}):
+        {{ input.because }}. Nothing it carries is shown as theirs.
+      </p>
     </div>
 
     <p v-if="sendError" class="compose-error">{{ sendError }}</p>
+    <p v-if="mustPick" class="compose-error" data-must-pick>{{ mustPick }}</p>
     <p v-if="conversation && closedBecause" class="compose-error" data-closed>Nothing can be written here: {{ closedBecause }}</p>
     <form v-else-if="conversation" class="composer" @submit.prevent="send">
-      <select v-if="conversation.writeTo.length > 1" v-model="picked" class="field channel-pick" title="the channel this goes out in">
-        <option v-if="conversation.defaultWriteTo !== null" :value="null">the usual channel</option>
-        <option v-for="channel in conversation.writeTo" :key="pairKey(channel)" :value="pairKey(channel)">as {{ shortDid(channel.localDid) }}</option>
+      <select
+        v-if="conversation.writeTo.length > 1 || conversation.defaultWriteTo === null"
+        v-model="picked"
+        class="field channel-pick"
+        title="the channel this goes out in"
+        data-channel-pick
+      >
+        <option :value="null" :disabled="conversation.defaultWriteTo === null">{{ conversation.defaultWriteTo === null ? "choose a channel" : "the usual channel" }}</option>
+        <option v-for="channel in conversation.writeTo" :key="pairKey(channel)" :value="pairKey(channel)" :title="`${channel.localDid} → ${channel.peerDid}`">
+          as {{ shortDid(channel.localDid) }} → {{ shortDid(channel.peerDid) }}
+        </option>
       </select>
       <input v-model="draft" class="field" :placeholder="`Write to ${labelOf(conversation)}`" :disabled="sending || sendsClosed" />
       <button class="btn" type="submit" :disabled="sending || sendsClosed || target === null || draft.trim() === ''">

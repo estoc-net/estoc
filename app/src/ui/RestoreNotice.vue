@@ -5,8 +5,9 @@ import { explainedRestore } from "../core/store.js";
 
 /**
  * Shown over a vault restored from a backup until the person says they
- * have read it. Receiving goes on underneath; the vault sends nothing of
- * theirs, and no manual step runs, before that.
+ * have read it. Receiving goes on underneath; before that the vault
+ * sends nothing of theirs, by itself or by a manual step. Steps that
+ * send nothing, such as cancelling, stay open.
  */
 const busy = ref(false);
 const failure = ref<string | null>(null);

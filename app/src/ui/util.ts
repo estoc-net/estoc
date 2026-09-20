@@ -10,7 +10,6 @@ export function timeOf(ms: number): string {
   });
 }
 
-/** A File's bytes. */
 export async function bytesOf(file: File): Promise<Uint8Array> {
   return new Uint8Array(await file.arrayBuffer());
 }

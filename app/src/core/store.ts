@@ -177,7 +177,6 @@ export async function createIdentity(name: string, passphrase: string): Promise<
   state.persisted = state.daemonAt === null ? await persistStorage() : false;
 }
 
-/** Restore a backup file into an empty install, unlocking it with its passphrase. */
 export async function restoreIdentity(file: Uint8Array, passphrase: string): Promise<void> {
   await running().restoreIdentity(file, passphrase);
   state.persisted = state.daemonAt === null ? await persistStorage() : false;
@@ -198,7 +197,6 @@ export async function lock(): Promise<void> {
   await running().lock();
 }
 
-/** Delete the vault and the cached seed. There is nothing to recover afterwards. */
 export async function forgetIdentity(): Promise<void> {
   await running().forgetIdentity();
   state.log = [];
@@ -301,7 +299,6 @@ export async function acceptInvitation(input: string | Invitation, petname: stri
   return accepted.contactId;
 }
 
-/** Decline the invitation this page was opened with; nothing is written. */
 export function dismissPendingInvitation(): void {
   state.pendingInvitation = null;
 }

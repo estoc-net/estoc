@@ -70,6 +70,7 @@ function remove() {
   }
 }
 
+const sendsClosed = computed(() => state.snapshot?.restoreUnexplained ?? false);
 const selectedChannels = computed(() => props.conversation.channels.filter(({ selected }) => selected));
 </script>
 
@@ -92,10 +93,10 @@ const selectedChannels = computed(() => props.conversation.channels.filter(({ se
         <template v-if="channel.peerName"> · they call themself “{{ channel.peerName.name }}”</template>
       </p>
       <div v-if="channel.send.status === 'open'" class="rail-actions">
-        <button v-if="localDidIdOf(channel)" class="btn-quiet" type="button" :disabled="busy" data-rotate @click="act(() => rotate(localDidIdOf(channel)!, channel.channel.peerDid))">
+        <button v-if="localDidIdOf(channel)" class="btn-quiet" type="button" :disabled="busy || sendsClosed" data-rotate @click="act(() => rotate(localDidIdOf(channel)!, channel.channel.peerDid))">
           Rotate my DID
         </button>
-        <button v-if="channel.profileSubmitted === null" class="btn-quiet" type="button" :disabled="busy" @click="act(() => introduce(channel.channel))">Introduce yourself</button>
+        <button v-if="channel.profileSubmitted === null" class="btn-quiet" type="button" :disabled="busy || sendsClosed" @click="act(() => introduce(channel.channel))">Introduce yourself</button>
         <button class="btn-quiet danger" type="button" :disabled="busy" @click="act(() => blockChannels([channel.channel]))">Block</button>
       </div>
     </div>

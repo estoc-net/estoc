@@ -595,6 +595,10 @@ textarea {
   margin: 0 0 18px;
 }
 
+.hop-note.error {
+  color: var(--alarm);
+}
+
 /* the trace level, in the rail */
 .trace-level {
   display: flex;

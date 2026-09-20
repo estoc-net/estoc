@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 
+import { pairKey, successorOf } from "./core/conversations.js";
 import { discardFolderVault, state } from "./core/store.js";
 import ChatPane from "./ui/ChatPane.vue";
 import Onboarding from "./ui/Onboarding.vue";
@@ -14,18 +15,50 @@ function startOver() {
 }
 
 // A conversation is selected by its key: a contact's ID, or for one not
-// named yet the pair it leads to. The DIDs under it can move; the key of
-// a contact does not.
+// named yet the pair it leads to. That pair moves when either side
+// rotates, so the conversation last open is remembered by the channels
+// it showed, and followed to whichever conversation shows them next.
 const selected = ref<string | null>(null);
+let lastOpen: { key: string; pairs: Set<string> } | null = null;
+
+// What is being written stays with the conversation it was written in:
+// a selection that changes never hands a draft to somebody else.
+const drafts = reactive(new Map<string, string>());
+const draft = computed({
+  get: () => (selected.value === null ? "" : (drafts.get(selected.value) ?? "")),
+  set: (text) => {
+    if (selected.value !== null) drafts.set(selected.value, text);
+  },
+});
+
+function select(key: string | null) {
+  selected.value = key;
+  const conversation = state.conversations.find((c) => c.key === key);
+  lastOpen = conversation === undefined ? null : { key: conversation.key, pairs: new Set(conversation.channels.map(({ channel }) => pairKey(channel))) };
+}
 
 // The first conversation, opened by an invitation either way, becomes the
-// open one if none is.
+// open one while nothing has been. One that was open and is gone is
+// followed with its draft; while nothing says which conversation it
+// became, none is open until the person opens one. A key selected ahead
+// of the snapshot that brings its conversation is waited for.
 watch(
   () => state.conversations,
   (conversations) => {
-    if (selected.value === null || !conversations.some((c) => c.key === selected.value)) {
-      selected.value = conversations[0]?.key ?? null;
+    if (conversations.some((c) => c.key === selected.value)) return select(selected.value);
+    if (lastOpen === null) {
+      if (selected.value === null) select(conversations[0]?.key ?? null);
+      return;
     }
+    selected.value = null;
+    const successor = successorOf(lastOpen.pairs, conversations);
+    if (successor === null) return;
+    const written = drafts.get(lastOpen.key);
+    if (written) {
+      drafts.delete(lastOpen.key);
+      drafts.set(successor.key, written);
+    }
+    select(successor.key);
   },
   { immediate: true }
 );
@@ -91,10 +124,11 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
     <ChatPane
       v-if="state.snapshot"
       :conversations="state.conversations"
+      v-model:draft="draft"
       :selected="selected"
       :mediated="mediated"
       :sends-closed="state.snapshot.restoreUnexplained"
-      @select="(key) => (selected = key)"
+      @select="select"
     />
   </div>
 
