@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { canonicalize, parseStrict, type CommitObject } from "@estoc/event-store/v3";
 import { PURE_ACK_EFFECT, ROTATION_NOTIFICATION_EFFECT, type DidId, type EventReference, type MessageId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../../src/protocol/basicmessage.js";
 import { FORWARD } from "../../../src/protocol/spec.js";
 import type { FakeMediator } from "../../fake-mediator.js";
-import { newMediator, refuseCommits } from "../helpers.js";
-import { LONG, channelOf, foldOf, restart, run, stopAll, until, type Running } from "./running.js";
+import { afterNextCommit, newMediator, refuseCommits } from "../helpers.js";
+import { LONG, channelOf, dieAt, foldOf, restart, run, stopAll, until, type Running } from "./running.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
@@ -31,7 +32,7 @@ async function pair(): Promise<{ mediator: FakeMediator; alice: Running; bob: Ru
 describe("a process that dies", () => {
   it("after an input was recorded and before its mediator heard so: the delivery comes again as no live input, the reply it committed is listed and sent only by a retry", { timeout: LONG }, async () => {
     const { mediator, alice, bob } = await pair();
-    alice.die.at = "unsent";
+    dieAt(alice, "unsent");
     await bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, { ...hello("hello"), pleaseAck: [""] }, { messageId: HELLO });
     await until("alice died calling her acknowledgement", () => alice.dead);
     expect(queuedFor(mediator, alice)).toBe(1);
@@ -53,10 +54,33 @@ describe("a process that dies", () => {
     expect((await foldOf(bob)).outbound.outbounds.get(HELLO)).toMatchObject({ acknowledged: true });
   });
 
-  it("after a package was prepared and before the mediator took it: nothing is sent on open, and a retry sends that package", { timeout: LONG }, async () => {
+  it("after a package was recorded and before any call was made for it: the action that was to send it is gone with the process, nothing is sent on open, and a retry sends that very package", { timeout: LONG }, async () => {
+    const mediator = await newMediator();
+    const alice = await run(mediator, 1, ALICE, { liveDelivery: false });
+    const bob = await run(mediator, 2, BOB, { liveDelivery: false });
+    const recorded: CommitObject[] = [];
+    afterNextCommit(bob.runtime, "message.prepared", (objects) => recorded.push(...objects));
+    dieAt(bob, "prepared");
+    const calls = bob.calls;
+    const sent = await bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, hello("hello"), { messageId: HELLO });
+    expect(sent.dispatched).toMatchObject({ outcome: "threw" });
+    expect([bob.dead, sent.action.spent, bob.calls - calls, recorded.length]).toEqual([true, false, 0, 1]);
+
+    await restart(bob);
+    expect([forwardsSeen(mediator), queuedFor(mediator, alice)]).toEqual([0, 0]);
+    const open = await bob.agent.outbounds();
+    expect(open.map(({ outbound, waiting }) => [outbound.messageId, outbound.outcome.status, outbound.package!.event.data.envelopeCid, waiting])).toEqual([[HELLO, "prepared", recorded[0]!.cid, null]]);
+
+    expect(await bob.agent.manual.retry(HELLO)).toMatchObject({ outcome: "submitted", packageId: open[0]!.outbound.package!.event.data.packageId });
+    const [queued] = mediator.queues.get(alice.party.created.data.me.did)!;
+    expect(Buffer.from(canonicalize(parseStrict(queued!.packed))).equals(recorded[0]!.source as Uint8Array)).toBe(true);
+    expect(await bob.agent.outbounds()).toEqual([]);
+  });
+
+  it("inside the call that was to carry a package, which the mediator never took: nothing is sent on open, and a retry sends that package", { timeout: LONG }, async () => {
     const { mediator, alice, bob } = await pair();
-    bob.die.at = "unsent";
-    await expect(bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, hello("hello"), { messageId: HELLO })).resolves.toMatchObject({ dispatched: { outcome: expect.not.stringMatching("submitted") } });
+    dieAt(bob, "unsent");
+    await expect(bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, hello("hello"), { messageId: HELLO })).resolves.toMatchObject({ dispatched: { outcome: "uncertain" }, action: { spent: true } });
     expect(bob.dead).toBe(true);
 
     const sentBefore = forwardsSeen(mediator);
@@ -73,7 +97,7 @@ describe("a process that dies", () => {
 
   it("after the mediator took a package and before that was recorded: the outbound stays open, and the retry the user makes is observed by the peer as the same input again", { timeout: LONG }, async () => {
     const { alice, bob } = await pair();
-    bob.die.at = "unrecorded";
+    dieAt(bob, "unrecorded");
     await bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, hello("hello"), { messageId: HELLO });
     expect(bob.dead).toBe(true);
     await until("alice has the message", () => alice.inbounds.length === 1);

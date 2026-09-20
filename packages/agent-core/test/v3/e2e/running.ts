@@ -8,14 +8,16 @@ import { scanVault, type Channel, type Did, type DidId, type Keys, type VaultFol
 import { FORWARD } from "../../../src/protocol/spec.js";
 import { Agent, AgentTrace, openVault, type AgentOptions, type Inbound, type OpenedVault } from "../../../src/v3/index.js";
 import type { FakeMediator } from "../../fake-mediator.js";
-import { didcomm, mediatedParty, until as untilWithin, type MediatedParty } from "../helpers.js";
+import { afterNextCommit, didcomm, mediatedParty, until as untilWithin, type MediatedParty } from "../helpers.js";
 
 /**
- * How the process of a running party dies at its next forward: `unsent`
- * before the mediator takes the message, `unrecorded` once the mediator
- * has queued it and before the caller hears so.
+ * Where the process of a running party dies: `prepared` once its next
+ * package is recorded, before any transport call is made for it;
+ * `unsent` inside its next forward, which the mediator never takes;
+ * `unrecorded` once the mediator has queued that forward and before
+ * the caller hears so.
  */
-export type Death = "unsent" | "unrecorded";
+export type Death = "prepared" | "unsent" | "unrecorded";
 
 /** A party whose vault is a file, run by an agent over a transport the test can refuse or cut. */
 export interface Running {
@@ -27,16 +29,24 @@ export interface Running {
   /** every delivery the agents of this party were told of, across restarts */
   inbounds: Inbound[];
   log: string[];
+  /** every call the processes of this party made to the transport, reaching the mediator or not */
+  calls: number;
   /** the next call to the mediator is answered 503 instead of reaching it */
   refuseNext: { armed: boolean };
-  /** armed, the process dies at its next forward: its agent and runtime closed, that call and every later one failing */
-  die: { at: Death | null };
+  /** the process died: nothing of it calls the transport again, though its runtime may still be closing */
   dead: boolean;
+}
+
+/** One process of a party: what its transport answers to, and its end once that began. */
+interface Life {
+  death: Death | null;
+  ended: Promise<void> | null;
 }
 
 interface Started extends Running {
   file: string;
   options: Partial<AgentOptions>;
+  life: Life;
 }
 
 /** What is waited for here is a whole receipt with everything that follows it: several commits and transport calls, each step folding the vault anew, on a machine that may be busy with other suites. */
@@ -52,33 +62,62 @@ export const channelOf = (local: Did, peer: Did): Channel => ({ localDid: local,
 const started: Started[] = [];
 const directories: string[] = [];
 
-function transportOf(mediator: FakeMediator, running: () => Started): typeof globalThis.fetch {
+/** The process closed, once: the work its runtime had admitted finishes first, and only then is the file free. */
+function end(self: Started): Promise<void> {
+  const { agent, runtime } = self;
+  self.life.ended ??= (async () => {
+    agent.close();
+    await runtime.close();
+  })();
+  return self.life.ended;
+}
+
+const gone = (): Error => new Error("the process is gone");
+
+function die(self: Started, life: Life): Error {
+  if (self.life === life) {
+    self.dead = true;
+    end(self).catch(() => undefined);
+  }
+  return gone();
+}
+
+/** Arms the death of the party's running process. */
+export function dieAt(running: Running, death: Death): void {
+  const self = running as Started;
+  const { life } = self;
+  if (death === "prepared") {
+    afterNextCommit(self.runtime, "message.prepared", () => {
+      throw die(self, life);
+    });
+    return;
+  }
+  life.death = death;
+}
+
+/** The transport of one process: a death armed for it is met by its own forward alone, whatever else the mediator handles meanwhile. */
+function transportOf(mediator: FakeMediator, self: () => Started, life: Life): typeof globalThis.fetch {
   return async (input, init) => {
-    const self = running();
-    if (self.dead) throw new Error("the process is gone");
-    if (self.refuseNext.armed) {
-      self.refuseNext.armed = false;
+    const party = self();
+    party.calls++;
+    const mine = life.death !== null && (await mediator.typeOf(String(init?.body))) === FORWARD;
+    if (life.ended !== null) throw gone();
+    if (party.refuseNext.armed) {
+      party.refuseNext.armed = false;
       return new Response(null, { status: 503 });
     }
-    const death = self.die.at;
-    if (death === null) return mediator.fetch(input, init);
-    const seen = mediator.seenTypes.length;
-    const intercept = mediator.intercept;
-    if (death === "unsent") mediator.intercept = (msg, from) => (msg.type === FORWARD ? null : intercept?.(msg, from));
-    const response = await mediator.fetch(input, init).finally(() => (mediator.intercept = intercept));
-    if (!mediator.seenTypes.slice(seen).includes(FORWARD)) return response;
-    self.die.at = null;
-    self.dead = true;
-    self.agent.close();
-    await self.runtime.close();
-    throw new Error("the process is gone");
+    const death = life.death;
+    if (!mine || death === null) return mediator.fetch(input, init);
+    life.death = null;
+    if (death === "unrecorded") await mediator.fetch(input, init);
+    throw die(party, life);
   };
 }
 
-async function agentOver(mediator: FakeMediator, self: () => Started, vault: Pick<OpenedVault, "runtime" | "keys">, trace: AgentTrace, options: Partial<AgentOptions>): Promise<Agent> {
+async function agentOver(mediator: FakeMediator, self: () => Started, life: Life, vault: Pick<OpenedVault, "runtime" | "keys">, trace: AgentTrace, options: Partial<AgentOptions>): Promise<Agent> {
   return Agent.start(vault, {
     didcomm,
-    fetch: transportOf(mediator, self),
+    fetch: transportOf(mediator, self, life),
     WebSocket: mediator.WebSocket,
     trace,
     onInbound: (inbound) => self().inbounds.push(inbound),
@@ -93,32 +132,27 @@ export async function run(mediator: FakeMediator, fill: number, didId: DidId, op
   directories.push(directory);
   const file = path.join(directory, "vault.sqlite");
   const party = await mediatedParty(mediator, fill, didId, openNodeSqlite(file, { mode: "create" }));
-  const self: Started = { party, runtime: party.runtime, keys: party.keys, agent: undefined as unknown as Agent, inbounds: [], log: [], refuseNext: { armed: false }, die: { at: null }, dead: false, file, options };
+  const life: Life = { death: null, ended: null };
+  const self: Started = { party, runtime: party.runtime, keys: party.keys, agent: undefined as unknown as Agent, inbounds: [], log: [], calls: 0, refuseNext: { armed: false }, dead: false, file, options, life };
   started.push(self);
-  self.agent = await agentOver(mediator, () => self, party, party.trace, options);
+  self.agent = await agentOver(mediator, () => self, life, party, party.trace, options);
   return self;
 }
 
-/** The party's process ended, if it still runs, and another started over the same file: nothing but the file is carried over. */
+/** The party's process ended, if it still runs, and another started over the same file once the first has let go of it: nothing but the file is carried over. */
 export async function restart(running: Running, options: Partial<AgentOptions> = {}): Promise<void> {
   const self = running as Started;
-  if (!self.dead) {
-    self.agent.close();
-    await self.runtime.close();
-  }
+  await end(self);
   const vault = await openVault(openNodeSqlite(self.file, { mode: "readwrite" }), self.party.seedKey);
+  const life: Life = { death: null, ended: null };
   self.runtime = vault.runtime;
   self.keys = vault.keys;
+  self.life = life;
   self.dead = false;
-  self.agent = await agentOver(self.party.mediator, () => self, vault, await AgentTrace.open(vault.runtime.local), { ...self.options, ...options });
+  self.agent = await agentOver(self.party.mediator, () => self, life, vault, await AgentTrace.open(vault.runtime.local), { ...self.options, ...options });
 }
 
-/** Closes every party started here and removes its file. */
 export async function stopAll(): Promise<void> {
-  for (const self of started.splice(0)) {
-    if (self.dead) continue;
-    self.agent.close();
-    await self.runtime.close();
-  }
+  await Promise.all(started.splice(0).map(end));
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 }

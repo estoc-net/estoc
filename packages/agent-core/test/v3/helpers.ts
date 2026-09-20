@@ -320,6 +320,21 @@ export function refuseCommits(runtime: VaultRuntime, type: VaultEventType, times
   );
 }
 
+/** Once the next commit of an event of `type` under `runtime`'s lock is durable, `then` runs before the committer hears of it; what `then` throws is what the committer hears. */
+export function afterNextCommit(runtime: VaultRuntime, type: VaultEventType, then: (...committed: Parameters<Held["commit"]>) => void): void {
+  let armed = true;
+  underLock(runtime, (held) =>
+    overriding(held, "commit", async (...args: Parameters<Held["commit"]>) => {
+      const committed = await held.commit(...args);
+      if (armed && args[1].some((draft) => draft.type === type)) {
+        armed = false;
+        then(...args);
+      }
+      return committed;
+    })
+  );
+}
+
 /** The next `times` reads of the object `cid` under `runtime`'s lock throw, as a disk refusing the read would; every read of it, by default. */
 export function refuseReads(runtime: VaultRuntime, cid: Cid, times = Infinity): void {
   let left = times;
