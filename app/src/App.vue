@@ -2,7 +2,6 @@
 import { computed, ref, watch } from "vue";
 
 import { pairKey, successorOf } from "./core/conversations.js";
-import { carryDrafts } from "./core/drafts.js";
 import { discardFolderVault, state } from "./core/store.js";
 import ChatPane from "./ui/ChatPane.vue";
 import Onboarding from "./ui/Onboarding.vue";
@@ -47,11 +46,6 @@ watch(
     if (successor !== null) select(successor.key);
   },
   { immediate: true }
-);
-
-watch(
-  () => state.snapshot,
-  (snapshot) => carryDrafts(snapshot?.channels ?? [])
 );
 
 const mediated = computed(() => state.snapshot?.mediations.some((m) => m.selected) ?? false);

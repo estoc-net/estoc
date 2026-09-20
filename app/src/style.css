@@ -624,7 +624,8 @@ textarea {
    actions ahead of the text, so that neither is pushed off a frame that
    does not scroll and the composer keeps its place. */
 .drafts-kept {
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 3em;
   max-height: 40%;
   overflow-y: auto;
 }
