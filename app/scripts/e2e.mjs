@@ -220,6 +220,29 @@ try {
     fail("what was written to Carol should reach nobody else");
   }
   ok("Carol rotated while Bob was writing to her: the draft stayed hers and reached her alone");
+
+  // The same with Bob looking elsewhere: what he left unsent for Carol
+  // follows her channel, and is there when he comes back to her.
+  await bob.click('.contact-chip.nameless:has-text("Carol")');
+  await bob.fill(".composer input.field", "kept for carol");
+  await bob.click('.contact-chip:has-text("Alice")');
+  await bob.fill(".composer input.field", "kept for alice");
+  const carolChannels = await carol.locator("[data-channel]").count();
+  await carol.locator("[data-channel]", { hasText: "current" }).locator("[data-rotate]").click();
+  await carol.waitForFunction((count) => document.querySelectorAll("[data-channel]").length > count, carolChannels, { timeout: 45000 });
+  await send(carol, "Bob (invited)", "moved again");
+  await bob.click('.contact-chip.nameless:has-text("Carol")');
+  await expectBubble(bob, "moved again", 45000);
+  await channelsShown(bob, 4);
+  if ((await bob.inputValue(".composer input.field")) !== "kept for carol") {
+    fail("a draft left for a peer who rotates in the background should still be theirs");
+  }
+  await bob.click('.contact-chip:has-text("Alice")');
+  if ((await bob.inputValue(".composer input.field")) !== "kept for alice") {
+    fail("a draft for somebody else should be untouched by it");
+  }
+  await bob.fill(".composer input.field", "");
+  ok("Carol rotated while Bob was elsewhere: his draft for her was there when he came back");
   await carolCtx.close();
 
   // Reload: history and identity come back from the vault, no passphrase.

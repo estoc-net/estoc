@@ -5,9 +5,11 @@ import { explainedRestore } from "../core/store.js";
 
 /**
  * Shown over a vault restored from a backup until the person says they
- * have read it. Receiving goes on underneath; before that the vault
- * sends nothing of theirs, by itself or by a manual step. Steps that
- * send nothing, such as cancelling, stay open.
+ * have read it. Until then the daemon refuses what the person would
+ * send: a message, accepting an invitation, a rotation, and sending
+ * again or completing by hand. Receiving goes on underneath, with the
+ * acknowledgements it answers by itself, and steps that send nothing,
+ * such as cancelling, stay open.
  */
 const busy = ref(false);
 const failure = ref<string | null>(null);

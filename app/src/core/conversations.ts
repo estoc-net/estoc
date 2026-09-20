@@ -15,17 +15,17 @@ function threadOf(channels: readonly ChannelRecord[]): MessageRecord[] {
   return [...messages.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 
-/**
- * The name claimed last across the channels: by when this vault recorded
- * the input that claimed it. A message ID is derived from the pair and
- * says nothing of order; it only settles two claims recorded at once.
- */
 function unplacedOf(channels: readonly ChannelRecord[]): UnplacedInput[] {
   const inputs = new Map<string, UnplacedInput>();
   for (const channel of channels) for (const input of channel.unplaced) inputs.set(input.sourceEventId, input);
   return [...inputs.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 
+/**
+ * The name claimed last across the channels: by when this vault recorded
+ * the input that claimed it. A message ID is derived from the pair and
+ * says nothing of order; it only settles two claims recorded at once.
+ */
 function claimedNameOf(channels: readonly ChannelRecord[]): string | null {
   const claims = channels.flatMap(({ peerName, messages }) => {
     if (peerName === null) return [];

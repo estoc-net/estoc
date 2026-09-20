@@ -619,6 +619,13 @@ textarea {
   flex: 1;
 }
 
+.draft-elsewhere {
+  font-size: 12px;
+  color: var(--steel);
+  padding: 0 18px 8px;
+  margin: 0;
+}
+
 .compose-error {
   font-family: var(--mono);
   font-size: 11px;

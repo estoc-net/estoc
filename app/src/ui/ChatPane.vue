@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { pairKey } from "../core/conversations.js";
+import { draftIn, moveDraft, writeDraft } from "../core/drafts.js";
 import { acceptInvitation, dismissPendingInvitation, sendMessage, state } from "../core/store.js";
 import type { Conversation } from "../core/types.js";
 import { rendererFor, showsInThread, typeOf } from "../renderers/index.js";
@@ -93,7 +94,6 @@ async function acceptPending() {
   }
 }
 
-const draft = defineModel<string>("draft", { required: true });
 const sending = ref(false);
 const sendError = ref("");
 /** the channel picked to write in, by pair; none while the conversation's own choice is taken */
@@ -107,13 +107,41 @@ watch(
   }
 );
 
+// The channel this conversation writes in now. A send names it, never
+// the contact: what was written for one pair goes out in that pair, or
+// is refused if the pair has been replaced since the snapshot on screen.
 const target = computed(() => {
   const c = conversation.value;
   if (c === null) return null;
-  const channel = c.writeTo.find((candidate) => pairKey(candidate) === picked.value) ?? null;
-  if (channel !== null) return { channel };
-  if (c.defaultWriteTo === null) return null;
-  return c.contactId === null ? { channel: c.defaultWriteTo } : { contactId: c.contactId };
+  return c.writeTo.find((candidate) => pairKey(candidate) === picked.value) ?? c.defaultWriteTo;
+});
+
+const draft = computed({
+  get: () => (target.value === null ? "" : (draftIn(pairKey(target.value))?.text ?? "")),
+  set: (text) => {
+    if (target.value !== null) writeDraft(pairKey(target.value), text);
+  },
+});
+
+// Picking another channel of the same conversation takes what is being written along.
+function pick(event: Event) {
+  const before = target.value;
+  const value = (event.target as HTMLSelectElement).value;
+  picked.value = value === "" ? null : value;
+  if (before !== null && target.value !== null) moveDraft(pairKey(before), pairKey(target.value));
+}
+
+/** Drafts of this conversation that are not in the channel it writes in now: another it may write in, or one that takes no send any more. */
+const draftsElsewhere = computed(() => {
+  const c = conversation.value;
+  if (c === null) return [];
+  const writable = new Set(c.writeTo.map(pairKey));
+  const current = target.value === null ? null : pairKey(target.value);
+  const pairs = new Map([...c.writeTo, ...c.channels.map(({ channel }) => channel)].map((channel) => [pairKey(channel), channel]));
+  return [...pairs].flatMap(([pair, channel]) => {
+    const draft = pair === current ? null : draftIn(pair);
+    return draft === null ? [] : [{ pair, channel, draft, writable: writable.has(pair) }];
+  });
 });
 
 // A contact that prefers a DID none of its open channels is under gets
@@ -134,15 +162,17 @@ const closedBecause = computed(() => {
 
 async function send() {
   const text = draft.value.trim();
-  if (text === "" || target.value === null || sending.value) {
+  const channel = target.value;
+  if (text === "" || channel === null || sending.value) {
     return;
   }
+  // held by identity: the conversation on screen, and the pair the draft is under, may both move before this returns
+  const written = draftIn(pairKey(channel));
   sending.value = true;
   sendError.value = "";
   try {
-    await sendMessage(target.value, text);
-    // the selection may have moved while this was sealed: only the draft that was sent is cleared
-    if (draft.value.trim() === text) draft.value = "";
+    await sendMessage({ channel }, text);
+    if (written !== null && written.text.trim() === text) written.text = "";
     void toFoot();
   } catch (err) {
     sendError.value = err instanceof Error ? err.message : String(err);
@@ -297,23 +327,31 @@ onMounted(() => {
       </p>
     </div>
 
+    <p v-for="{ pair, channel, draft: kept, writable } in draftsElsewhere" :key="pair" class="draft-elsewhere" :title="`${channel.localDid} → ${channel.peerDid}`" data-draft-elsewhere>
+      <template v-if="writable">Something you were writing waits in another channel, as {{ shortDid(channel.localDid) }} → {{ shortDid(channel.peerDid) }}.</template>
+      <template v-else>You were writing “{{ kept.text }}” as {{ shortDid(channel.localDid) }} → {{ shortDid(channel.peerDid) }}, which takes no send now.</template>
+      <button v-if="writable" type="button" class="link-quiet" @click="picked = pair">write there</button>
+      <button v-else-if="target !== null && draft === ''" type="button" class="link-quiet" @click="moveDraft(pair, pairKey(target))">write it here instead</button>
+      <button type="button" class="link-quiet" @click="kept.text = ''">discard</button>
+    </p>
     <p v-if="sendError" class="compose-error">{{ sendError }}</p>
     <p v-if="mustPick" class="compose-error" data-must-pick>{{ mustPick }}</p>
     <p v-if="conversation && closedBecause" class="compose-error" data-closed>Nothing can be written here: {{ closedBecause }}</p>
     <form v-else-if="conversation" class="composer" @submit.prevent="send">
       <select
         v-if="conversation.writeTo.length > 1 || conversation.defaultWriteTo === null"
-        v-model="picked"
+        :value="picked ?? ''"
         class="field channel-pick"
         title="the channel this goes out in"
         data-channel-pick
+        @change="pick"
       >
-        <option :value="null" :disabled="conversation.defaultWriteTo === null">{{ conversation.defaultWriteTo === null ? "choose a channel" : "the usual channel" }}</option>
+        <option value="" :disabled="conversation.defaultWriteTo === null">{{ conversation.defaultWriteTo === null ? "choose a channel" : "the usual channel" }}</option>
         <option v-for="channel in conversation.writeTo" :key="pairKey(channel)" :value="pairKey(channel)" :title="`${channel.localDid} → ${channel.peerDid}`">
           as {{ shortDid(channel.localDid) }} → {{ shortDid(channel.peerDid) }}
         </option>
       </select>
-      <input v-model="draft" class="field" :placeholder="`Write to ${labelOf(conversation)}`" :disabled="sending || sendsClosed" />
+      <input v-model="draft" class="field" :placeholder="target === null ? 'choose a channel to write in' : `Write to ${labelOf(conversation)}`" :disabled="sending || sendsClosed || target === null" />
       <button class="btn" type="submit" :disabled="sending || sendsClosed || target === null || draft.trim() === ''">
         {{ sending ? "Sealing…" : "Send" }}
       </button>

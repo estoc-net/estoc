@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 import { pairKey, successorOf } from "./core/conversations.js";
+import { carryDrafts } from "./core/drafts.js";
 import { discardFolderVault, state } from "./core/store.js";
 import ChatPane from "./ui/ChatPane.vue";
 import Onboarding from "./ui/Onboarding.vue";
@@ -19,48 +20,38 @@ function startOver() {
 // rotates, so the conversation last open is remembered by the channels
 // it showed, and followed to whichever conversation shows them next.
 const selected = ref<string | null>(null);
-let lastOpen: { key: string; pairs: Set<string> } | null = null;
-
-// What is being written stays with the conversation it was written in:
-// a selection that changes never hands a draft to somebody else.
-const drafts = reactive(new Map<string, string>());
-const draft = computed({
-  get: () => (selected.value === null ? "" : (drafts.get(selected.value) ?? "")),
-  set: (text) => {
-    if (selected.value !== null) drafts.set(selected.value, text);
-  },
-});
+let lastShown: Set<string> | null = null;
 
 function select(key: string | null) {
   selected.value = key;
   const conversation = state.conversations.find((c) => c.key === key);
-  lastOpen = conversation === undefined ? null : { key: conversation.key, pairs: new Set(conversation.channels.map(({ channel }) => pairKey(channel))) };
+  lastShown = conversation === undefined ? null : new Set(conversation.channels.map(({ channel }) => pairKey(channel)));
 }
 
 // The first conversation, opened by an invitation either way, becomes the
 // open one while nothing has been. One that was open and is gone is
-// followed with its draft; while nothing says which conversation it
-// became, none is open until the person opens one. A key selected ahead
-// of the snapshot that brings its conversation is waited for.
+// followed; while nothing says which conversation it became, none is
+// open until the person opens one. A key selected ahead of the snapshot
+// that brings its conversation is waited for. Following is display
+// only: what is being written goes its own way, by channel.
 watch(
   () => state.conversations,
   (conversations) => {
     if (conversations.some((c) => c.key === selected.value)) return select(selected.value);
-    if (lastOpen === null) {
+    if (lastShown === null) {
       if (selected.value === null) select(conversations[0]?.key ?? null);
       return;
     }
     selected.value = null;
-    const successor = successorOf(lastOpen.pairs, conversations);
-    if (successor === null) return;
-    const written = drafts.get(lastOpen.key);
-    if (written) {
-      drafts.delete(lastOpen.key);
-      drafts.set(successor.key, written);
-    }
-    select(successor.key);
+    const successor = successorOf(lastShown, conversations);
+    if (successor !== null) select(successor.key);
   },
   { immediate: true }
+);
+
+watch(
+  () => state.snapshot,
+  (snapshot) => carryDrafts(snapshot?.channels ?? [])
 );
 
 const mediated = computed(() => state.snapshot?.mediations.some((m) => m.selected) ?? false);
@@ -124,7 +115,6 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
     <ChatPane
       v-if="state.snapshot"
       :conversations="state.conversations"
-      v-model:draft="draft"
       :selected="selected"
       :mediated="mediated"
       :sends-closed="state.snapshot.restoreUnexplained"
