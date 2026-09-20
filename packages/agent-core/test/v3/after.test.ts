@@ -4,7 +4,7 @@ import { didKeyName, inboundMessageId, scanVault, signFromPrior, type DidId, typ
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
 import type { IMessage } from "../../src/protocol/didcomm.js";
-import { AgentTrace, Keyring, Receiver, acknowledgementDrafts, afterReceipt, createDid, disclose, prepare, receiptOf, recordAcks, recordReceipt, send, type Authenticated, type Content, type Received, type Source } from "../../src/v3/index.js";
+import { AgentTrace, Keyring, Receiver, acknowledgementDrafts, afterReceipt, createDid, disclose, prepare, receiptOf, recordAcks, recordReceipt, send, type Authenticated, type Content, type ReceiptOutcome, type Source } from "../../src/v3/index.js";
 import { didcomm, directParty, peerSealer, sealed, type DirectParty, type Fresh } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
@@ -109,7 +109,7 @@ describe("after the receipt", () => {
 
     const last = seen.at(-1) as Authenticated;
     const bogus = await recordReceipt(alice.runtime, alice.keys, { ...last, plaintext: { ...last.plaintext, from_prior: "not-a-jwt" } as IMessage, fromPrior: "not-a-jwt" });
-    const eventId = (bogus as Extract<Received, { outcome: "received" }>).eventId;
+    const eventId = (bogus as Extract<ReceiptOutcome, { outcome: "received" }>).eventId;
     const after = await afterReceipt(alice.runtime, alice.keys, eventId, { trace });
     expect(after.proof).toMatchObject({ status: "invalid" });
     expect((await trace.read({ type: "diag.proof" })).map((entry) => entry.data)).toEqual([{ eventId, ...after.proof }]);

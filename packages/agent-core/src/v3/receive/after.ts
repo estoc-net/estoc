@@ -17,17 +17,21 @@
  */
 
 import type { VaultRuntime } from "@estoc/event-store/v3";
-import { consumptionDrafts, type EventReference, type Keys, type Status, type VaultEvent } from "@estoc/vault/v3";
+import { consumptionDrafts, type EventReference, type Keys, type Status, type VaultEvent, type VaultFold } from "@estoc/vault/v3";
 
 import { decide } from "../procedure.js";
 import { note, type AgentTrace } from "../trace.js";
 import { acknowledgementDrafts } from "./acks.js";
 
-export interface AfterReceipt {
-  /** what continuity made of the proof the observation carried; `not-present` for one that carried none */
-  proof: Status;
+/** What one pass over the whole fold recorded of what the vault owes on its own. */
+export interface Owed {
   consumed: VaultEvent<"invitation.consumed">[];
   acknowledged: VaultEvent<"delivery.acknowledged">[];
+}
+
+export interface AfterReceipt extends Owed {
+  /** what continuity made of the proof the observation carried; `not-present` for one that carried none */
+  proof: Status;
 }
 
 export interface AfterReceiptOptions {
@@ -36,11 +40,22 @@ export interface AfterReceiptOptions {
 }
 
 export async function afterReceipt(runtime: VaultRuntime, keys: Keys, eventId: EventReference<"message.in">, options: AfterReceiptOptions = {}): Promise<AfterReceipt> {
-  const { fold, events } = await decide(runtime, keys, (fold) => [...consumptionDrafts(fold), ...acknowledgementDrafts(fold)]);
+  const { fold, ...owed } = await pass(runtime, keys);
   const proof = fold.continuity.status(eventId);
   if (proof.status !== "verified" && proof.status !== "not-present") await note(options.trace ?? null, { stream: "diag", what: "proof", data: { eventId, ...proof } });
+  return { proof, ...owed };
+}
+
+/** The same pass with no observation in hand: an open's, over whatever a crash left between a receipt and its pass. */
+export async function recordOwed(runtime: VaultRuntime, keys: Keys): Promise<Owed> {
+  const { consumed, acknowledged } = await pass(runtime, keys);
+  return { consumed, acknowledged };
+}
+
+async function pass(runtime: VaultRuntime, keys: Keys): Promise<Owed & { fold: VaultFold }> {
+  const { fold, events } = await decide(runtime, keys, (fold) => [...consumptionDrafts(fold), ...acknowledgementDrafts(fold)]);
   return {
-    proof,
+    fold,
     consumed: events.filter((event): event is VaultEvent<"invitation.consumed"> => event.type === "invitation.consumed"),
     acknowledged: events.filter((event): event is VaultEvent<"delivery.acknowledged"> => event.type === "delivery.acknowledged"),
   };

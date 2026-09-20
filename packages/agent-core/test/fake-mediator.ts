@@ -1,6 +1,6 @@
 import { Message } from "@estoc/didcomm-node";
 import type { IMessage } from "@estoc/didcomm-node";
-import { encodeLongForm, resolveDIDCommDoc } from "@estoc/did-peer";
+import { encodeLongForm, longToShort, resolveDIDCommDoc } from "@estoc/did-peer";
 import type { Secret } from "@estoc/did-peer";
 import bs58 from "bs58";
 import { base64urlToBytes } from "@estoc/did-peer";
@@ -135,6 +135,8 @@ export class FakeMediator {
   readonly refuse = new Set<string>();
   /** seal every reply and frame with the sender hidden under an anonymous outer layer, as DIDComm's sender protection does */
   protectSender = false;
+  /** seal every reply and frame as the mediator's short form, the other spelling of the same DID */
+  answerAsShortForm = false;
   readonly queues = new Map<string, Queued[]>();
   private readonly sockets = new Map<string, FakeSocket>();
   /** every plaintext type the mediator handled, in order — for assertions */
@@ -186,12 +188,28 @@ export class FakeMediator {
   }
 
   private async pack(msg: IMessage, to: string): Promise<string> {
+    if (this.answerAsShortForm) return this.packAsShortForm(msg, to);
     const [packed] = await new Message(msg).pack_encrypted(
       to,
       this.did,
       null,
       resolver,
       secretsResolverFor(this.secrets),
+      { forward: false, protect_sender: this.protectSender }
+    );
+    return packed;
+  }
+
+  private async packAsShortForm(msg: IMessage, to: string): Promise<string> {
+    const short = longToShort(this.did);
+    const respelled = <T>(value: T): T => JSON.parse(JSON.stringify(value).replaceAll(this.did, short)) as T;
+    const document = respelled(await resolveDIDCommDoc(this.did));
+    const [packed] = await new Message({ ...msg, from: short }).pack_encrypted(
+      to,
+      short,
+      null,
+      { resolve: async (did: string) => (did === short ? document : resolveDIDCommDoc(did)) },
+      secretsResolverFor(respelled(this.secrets)),
       { forward: false, protect_sender: this.protectSender }
     );
     return packed;
