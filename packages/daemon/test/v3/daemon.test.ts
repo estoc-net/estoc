@@ -9,7 +9,7 @@ import { PING_TYPE, type Channel, type DidId } from "@estoc/vault/v3";
 import { RECIPIENT_QUERY, RECIPIENT_UPDATE } from "@estoc/agent-core";
 import { newMediator } from "../../../agent-core/test/v3/helpers.js";
 import type { FakeMediator } from "../../../agent-core/test/fake-mediator.js";
-import { connect, createDaemon, decode, encode, type Daemon, type DaemonCore, type DaemonEvents, type Lines, type Port, type Snapshot } from "../../src/v3/index.js";
+import { connect, createDaemon, decode, encode, type Daemon, type DaemonCore, type DaemonEvents, type DaemonHost, type Lines, type Port, type Snapshot } from "../../src/v3/index.js";
 import { nodeHost, serveDaemon } from "../../src/v3/node/index.js";
 
 const BASIC_MESSAGE = "https://didcomm.org/basicmessage/2.0/message";
@@ -59,9 +59,10 @@ async function until(what: string, condition: () => boolean, ms = 60_000): Promi
 }
 
 /** A daemon over a folder, its agent's transports the mediator's when there is one. */
-function daemonOver(root: string, mediator?: FakeMediator): { daemon: DaemonCore; heard: Told } {
+function daemonOver(root: string, mediator?: FakeMediator, agentOptions: Partial<NonNullable<DaemonHost["agentOptions"]>> = {}): { daemon: DaemonCore; heard: Told } {
   const heard = told();
-  const daemon = createDaemon(nodeHost(root, mediator === undefined ? {} : { fetch: mediator.fetch, WebSocket: mediator.WebSocket }), heard.emit);
+  const host = nodeHost(root, mediator === undefined ? {} : { fetch: mediator.fetch, WebSocket: mediator.WebSocket });
+  const daemon = createDaemon({ ...host, agentOptions: { ...host.agentOptions!, ...agentOptions } }, heard.emit);
   daemons.push(daemon);
   return { daemon, heard };
 }
@@ -377,6 +378,74 @@ describe("two daemons over a mediator", () => {
           removal.release();
           mediator.intercept = null;
         }
+      }
+    },
+    LONG
+  );
+
+  it(
+    "waits as well for what the agent began on its own: the removal a retry has with the mediator lands before the next daemon registers",
+    async () => {
+      const mediator = await newMediator();
+      const original = await person(mediator, "Alice");
+      const before = await original.daemon.exportBackup();
+      await original.daemon.createInvitation("one");
+      const newer = await original.daemon.exportBackup();
+      const [[invited, account]] = [...mediator.recipients] as [[string, string]];
+      await original.daemon.close();
+
+      const root = await folder();
+      const current = daemonOver(root, mediator, { retry: { firstWaitMs: 500 } });
+      await current.daemon.boot();
+      await current.daemon.restoreIdentity(before.bytes, PASSPHRASE);
+      await current.daemon.reconnect();
+      await current.daemon.explainedRestore();
+      expect(mediator.recipients.has(invited)).toBe(false);
+      const bob = await person(mediator, "Bob");
+      const { invitation } = await bob.daemon.createInvitation("many");
+
+      // Another copy of the vault, from after the invitation, registers its address again.
+      const ahead = daemonOver(await folder(), mediator);
+      await ahead.daemon.boot();
+      await ahead.daemon.restoreIdentity(newer.bytes, PASSPHRASE);
+      await ahead.daemon.reconnect();
+      expect(mediator.recipients.get(invited)).toBe(account);
+      await ahead.daemon.close();
+
+      // The call answers `pending` on a registration that failed; the retry is the dispatcher's own, and reconciles from a fold without the invitation.
+      let refused = false;
+      let removing = false;
+      let release = (): void => undefined;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      mediator.intercept = async (message, from) => {
+        if (from !== account) return undefined;
+        if (message.type === RECIPIENT_QUERY && !refused) {
+          refused = true;
+          throw new Error("not just now");
+        }
+        if (message.type === RECIPIENT_UPDATE && !removing && (message.body as { updates: { action: string }[] }).updates.some((update) => update.action === "remove")) {
+          removing = true;
+          await released;
+        }
+        return undefined;
+      };
+      try {
+        expect((await current.daemon.acceptInvitation(invitation, "Bob")).outcome).toBe("pending");
+        await until("the retry's removal is with the mediator", () => removing);
+        const closing = current.daemon.close();
+        expect(await stillWaiting(closing)).toBe(true);
+        release();
+        await closing;
+
+        const next = daemonOver(root, mediator);
+        await next.daemon.boot();
+        await next.daemon.unlock(PASSPHRASE);
+        await next.daemon.mergeBackup(newer.bytes);
+        await next.daemon.reconnect();
+        expect(mediator.recipients.get(invited)).toBe(account);
+      } finally {
+        release();
+        mediator.intercept = null;
       }
     },
     LONG

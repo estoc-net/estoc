@@ -50,5 +50,5 @@ export interface DaemonHost {
   didcomm(): Promise<DidcommApi>;
   /** Called when the network comes back, if the host can tell. */
   onOnline?(callback: () => void): void;
-  agentOptions?: Pick<AgentOptions, "fetch" | "WebSocket" | "timeoutMs">;
+  agentOptions?: Pick<AgentOptions, "fetch" | "WebSocket" | "timeoutMs" | "retry">;
 }

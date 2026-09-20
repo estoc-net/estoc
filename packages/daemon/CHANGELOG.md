@@ -25,16 +25,20 @@
   for files held elsewhere, waits for the operation under way, lets go
   of everything, and answers the same to every caller; nothing is
   opened or said after it.
-- **An agent let go of starts no request, and the one it has is waited
-  for.** When the daemon closes, locks, forgets the vault or replaces
-  the agent after a merge, the agent's fetch refuses whatever it is
-  asked next, new calls over the agent are refused, and what is under
-  way is waited for before the vault closes or the next agent
-  connects: a request already with a mediator is answered first, for
-  as long as the agent's own deadline gives it, so a removal on its
-  way does not land on what is registered next. Past that deadline
-  what the request did at the mediator is unknown until the next
-  reconciliation. `close()` can take that long.
+- **An agent let go of starts no request, and the ones it has are
+  waited for.** When the daemon closes, locks, forgets the vault or
+  replaces the agent after a merge, the agent's fetch refuses whatever
+  it is asked next, new calls over the agent are refused, and what is
+  under way is waited for before the vault closes or the next agent
+  connects: every call over the agent, and every request it has out
+  until its response is over, whether a call began it, a retry on its
+  timer or a delivery down its socket. A removal on its way so lands
+  before anything is registered next. A request is waited for as long
+  as the deadline its caller set, which is how long `close()` can take;
+  one that outlasts it may still take effect at the other end later,
+  and a reconciliation after it sees and mends only what stands there
+  at the time. A host may set the agent's retry policy
+  (`agentOptions.retry`).
 - **The text encoding carries any record as it was.** A record whose
   one key starts with `$` — `{"$bytes": "…"}` in a message body — came
   back as bytes or a Map, or failed to decode. Such a record now goes

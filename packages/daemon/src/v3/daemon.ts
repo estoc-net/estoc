@@ -86,14 +86,16 @@ const SCAN = { effectTypes: effectTypesOf(BUILT_IN_HANDLERS) };
  * flow of its own already under way, and such a flow goes on from what
  * it read before: a reconciliation would take away the addresses
  * whoever has the vault next has registered since. So once `ended`
- * the agent starts no request, and whatever runs over it is kept in
- * `work`, to be waited for before the vault is closed or handed to
- * another agent. A request already with a mediator is left to be
- * answered: giving it up here would not undo it there, and whoever
- * came next would register addresses under a removal still to land.
- * One that outlasts the agent's own deadline is past waiting for, and
- * what it did at the mediator stays unknown until the next
- * reconciliation.
+ * the agent starts no request, and `work` is waited for before the
+ * vault is closed or handed to another agent: every call made over
+ * the agent, and every request the agent has out, whoever began it —
+ * a call, a retry on its timer, a delivery pushed down its socket. A
+ * request already out is left to be answered: giving it up here would
+ * not undo it there, and whoever came next would register addresses
+ * under a removal still to land. One that outlasts the deadline its
+ * caller set is past waiting for; it may still take effect at the
+ * other end later, and a reconciliation after it sees and mends only
+ * what stands there at the time.
  */
 interface Attached {
   agent: Promise<Agent>;
@@ -106,6 +108,49 @@ interface Open {
   keys: Keys;
   trace: AgentTrace;
   attached: Attached;
+}
+
+/**
+ * `ask`'s response, kept in `work` until it is over: its body read to
+ * the end or let go of by its reader, the request failed, or `deadline`
+ * passed. The body goes through as it comes, so a reader's bound on it
+ * still bounds what is read.
+ */
+async function answered(work: Set<Promise<void>>, deadline: AbortSignal | null, ask: () => Promise<Response>): Promise<Response> {
+  let over = (): void => undefined;
+  const pending = new Promise<void>((resolve) => (over = resolve));
+  work.add(pending);
+  void pending.then(() => work.delete(pending));
+  deadline?.addEventListener("abort", over, { once: true });
+  let response: Response;
+  try {
+    response = await ask();
+  } catch (err) {
+    over();
+    throw err;
+  }
+  if (response.body === null) {
+    over();
+    return response;
+  }
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (!done) return controller.enqueue(value);
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+      over();
+    },
+    async cancel(reason) {
+      over();
+      await reader.cancel(reason);
+    },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 const failure = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -313,7 +358,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
           ...host.agentOptions,
           fetch: async (input, init) => {
             if (attached.ended) throw new Error(DETACHED);
-            return reach(input, init);
+            return answered(attached.work, init?.signal ?? null, () => reach(input, init));
           },
           didcomm: await host.didcomm(),
           trace,
@@ -348,7 +393,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
 
   async function detach(attached: Attached): Promise<void> {
     attached.ended = true;
-    await Promise.all(attached.work);
+    while (attached.work.size > 0) await Promise.all(attached.work);
     await attached.agent.then(
       (agent) => agent.close(),
       () => undefined
