@@ -9,7 +9,7 @@ export { effectTypesOf, handlerFor, type Handler, type Input, type Response } fr
 export { trustPing } from "./trust-ping.js";
 export { basicMessage } from "./basicmessage.js";
 export { empty } from "./empty.js";
-export { reportProblem } from "./report-problem.js";
+export { reportProblem, reportedProblem } from "./report-problem.js";
 export { claimedName, userProfile } from "./user-profile.js";
 
 export const BUILT_IN_HANDLERS: readonly Handler[] = [trustPing, basicMessage, empty, reportProblem, userProfile];

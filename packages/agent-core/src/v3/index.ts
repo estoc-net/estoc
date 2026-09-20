@@ -111,4 +111,29 @@ export { afterReceipt, type AfterReceipt, type AfterReceiptOptions } from "./rec
 export { completeResponse, reactTo, type Called, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
 export { completeNotification, rotate, type RotateOptions, type Rotated, type RotationTarget } from "./rotate.js";
 export { privacyPolicy, privateAddress, type PrivacyPolicy, type PrivateAddress } from "./privacy.js";
-export { BUILT_IN_HANDLERS, basicMessage, claimedName, effectTypesOf, empty, handlerFor, handlersOf, reportProblem, trustPing, userProfile, type Handler, type Input, type Response } from "./handlers/index.js";
+export { BUILT_IN_HANDLERS, basicMessage, claimedName, effectTypesOf, empty, handlerFor, handlersOf, reportProblem, reportedProblem, trustPing, userProfile, type Handler, type Input, type Response } from "./handlers/index.js";
+export {
+  recorder,
+  type BodyRecord,
+  type ChannelRecord,
+  type ConflictingNotification,
+  type ContactChannelRecord,
+  type ContactRecord,
+  type Diagnostic,
+  type DiagnosticKind,
+  type InvitationRecord,
+  type ManualEntry,
+  type MessageHeaders,
+  type MessageRecord,
+  type OwedNotification,
+  type OwedResponse,
+  type OpenOutbound,
+  type WaitingProof,
+  type PendingWork,
+  type Recorder,
+  type Unplaced,
+  type UnplacedInput,
+  type UnplacedOutput,
+  type ViewOptions,
+} from "./records.js";
+export { manualProcedures, readRecords, type Manual, type ManualOptions } from "./views.js";
