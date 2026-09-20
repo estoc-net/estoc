@@ -2,12 +2,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { resolveDIDCommDoc } from "@estoc/did-peer";
 import { openNodeSqlite } from "@estoc/event-store/node";
-import { scanVault, type Channel, type Did, type DidId, type Keys, type VaultFold } from "@estoc/vault/v3";
+import { SqliteVault, exportVault, importVault, openPortable, parseStrict, restoreVault, type Imported } from "@estoc/event-store/v3";
+import { Keys, scanVault, vaultHeldRoots, vaultRetention, type Channel, type Did, type DidId, type VaultFold } from "@estoc/vault/v3";
 
+import { PLAIN_TYP, packEncrypted, secretsResolverFor, type IMessage } from "../../../src/protocol/didcomm.js";
 import { FORWARD } from "../../../src/protocol/spec.js";
 import { Agent, AgentTrace, openVault, type AgentOptions, type Inbound, type OpenedVault } from "../../../src/v3/index.js";
-import type { FakeMediator } from "../../fake-mediator.js";
+import { MEDIATOR_HTTP, type FakeMediator } from "../../fake-mediator.js";
 import { afterNextCommit, didcomm, mediatedParty, until as untilWithin, type MediatedParty } from "../helpers.js";
 
 /**
@@ -33,6 +36,8 @@ export interface Running {
   calls: number;
   /** the next call to the mediator is answered 503 instead of reaching it */
   refuseNext: { armed: boolean };
+  /** the next forward is answered 503 instead of reaching the mediator, whatever else is called before it */
+  refuseForward: { armed: boolean };
   /** the process died: nothing of it calls the transport again, though its runtime may still be closing */
   dead: boolean;
 }
@@ -99,10 +104,11 @@ function transportOf(mediator: FakeMediator, self: () => Started, life: Life): t
   return async (input, init) => {
     const party = self();
     party.calls++;
-    const mine = life.death !== null && (await mediator.typeOf(String(init?.body))) === FORWARD;
+    const mine = (life.death !== null || party.refuseForward.armed) && (await mediator.typeOf(String(init?.body))) === FORWARD;
     if (life.ended !== null) throw gone();
-    if (party.refuseNext.armed) {
+    if (party.refuseNext.armed || (mine && party.refuseForward.armed)) {
       party.refuseNext.armed = false;
+      if (mine) party.refuseForward.armed = false;
       return new Response(null, { status: 503 });
     }
     const death = life.death;
@@ -125,14 +131,18 @@ async function agentOver(mediator: FakeMediator, self: () => Started, life: Life
   });
 }
 
-/** A party of `mediator` with one communication DID, its vault in a file of its own, and its agent started. */
-export async function run(mediator: FakeMediator, fill: number, didId: DidId, options: Partial<AgentOptions> = {}): Promise<Running> {
+async function freshFile(name: string): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), "estoc-e2e-"));
   directories.push(directory);
-  const file = path.join(directory, "vault.sqlite");
+  return path.join(directory, name);
+}
+
+/** A party of `mediator` with one communication DID, its vault in a file of its own, and its agent started. */
+export async function run(mediator: FakeMediator, fill: number, didId: DidId, options: Partial<AgentOptions> = {}): Promise<Running> {
+  const file = await freshFile("vault.sqlite");
   const party = await mediatedParty(mediator, fill, didId, openNodeSqlite(file, { mode: "create" }));
   const life: Life = { death: null, ended: null };
-  const self: Started = { party, runtime: party.runtime, keys: party.keys, agent: undefined as unknown as Agent, inbounds: [], log: [], calls: 0, refuseNext: { armed: false }, dead: false, file, options, life };
+  const self: Started = { party, runtime: party.runtime, keys: party.keys, agent: undefined as unknown as Agent, inbounds: [], log: [], calls: 0, refuseNext: { armed: false }, refuseForward: { armed: false }, dead: false, file, options, life };
   started.push(self);
   self.agent = await agentOver(mediator, () => self, life, party, party.trace, options);
   return self;
@@ -149,6 +159,61 @@ export async function restart(running: Running, options: Partial<AgentOptions> =
   self.life = life;
   self.dead = false;
   self.agent = await agentOver(self.party.mediator, () => self, life, vault, await AgentTrace.open(vault.runtime.local), { ...self.options, ...options });
+}
+
+/** The party's process ended, with nothing started in its place. */
+export async function stop(running: Running): Promise<void> {
+  await end(running as Started);
+}
+
+/** The party's vault as it stands, exported to a snapshot file. */
+export async function snapshotOf(running: Running): Promise<string> {
+  const file = await freshFile("snapshot.sqlite");
+  await exportVault(running.runtime, (mode) => openNodeSqlite(file, { mode }), { heldRoots: vaultHeldRoots(running.keys) });
+  return file;
+}
+
+/**
+ * The party on another machine: `snapshot` restored under the same
+ * seed into a runtime of its own, and an agent started over it. It
+ * speaks to the mediator as the same account, so the process it was
+ * taken from is stopped first unless the two are to run side by side.
+ */
+export async function restoredFrom(running: Running, snapshot: string, options: Partial<AgentOptions> = {}): Promise<Running> {
+  const { party } = running;
+  const file = await freshFile("vault.sqlite");
+  const source = openPortable(openNodeSqlite(snapshot, { mode: "readonly" }));
+  let runtime: SqliteVault;
+  try {
+    const restored = await restoreVault(source, (mode) => openNodeSqlite(file, { mode }), { heldRoots: vaultHeldRoots(null), anchor: await Keys.anchorOf(party.seedKey) });
+    runtime = new SqliteVault(restored.runtime);
+  } finally {
+    source.close();
+  }
+  const keys = await Keys.open(party.seedKey, runtime.metadata.anchor);
+  const life: Life = { death: null, ended: null };
+  const self: Started = { party, runtime, keys, agent: undefined as unknown as Agent, inbounds: [], log: [], calls: 0, refuseNext: { armed: false }, refuseForward: { armed: false }, dead: false, file, options, life };
+  started.push(self);
+  self.agent = await agentOver(party.mediator, () => self, life, { runtime, keys }, await AgentTrace.open(runtime.local), options);
+  return self;
+}
+
+/** `snapshot` imported into the party's running vault. */
+export async function imported(running: Running, snapshot: string): Promise<Imported> {
+  const source = openPortable(openNodeSqlite(snapshot, { mode: "readonly" }));
+  try {
+    return await importVault(running.runtime, source, { retainedRoots: vaultRetention(running.keys) });
+  } finally {
+    source.close();
+  }
+}
+
+/** An envelope anyone sealed, handed to the mediator for `next` as a sender's agent would hand it. */
+export async function forwarded(mediator: FakeMediator, next: Did, envelope: string): Promise<void> {
+  const message = { id: crypto.randomUUID(), typ: PLAIN_TYP, type: FORWARD, to: [mediator.did], body: { next }, attachments: [{ media_type: "application/didcomm-encrypted+json", data: { json: parseStrict(envelope) } }] } as unknown as IMessage;
+  const [packed] = await packEncrypted(didcomm, message, mediator.did, null, null, { resolve: resolveDIDCommDoc }, secretsResolverFor([]), { forward: false });
+  const answer = await mediator.fetch(MEDIATOR_HTTP, { method: "POST", headers: { "content-type": "application/didcomm-encrypted+json" }, body: packed });
+  if (!answer.ok) throw new Error(`the mediator answered the forward ${answer.status}`);
 }
 
 export async function stopAll(): Promise<void> {
