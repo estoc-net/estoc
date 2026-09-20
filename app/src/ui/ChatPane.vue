@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { pairKey } from "../core/conversations.js";
-import { draftIn, moveDraft, writeDraft } from "../core/drafts.js";
+import { draftIn, moveDraft, writeDraft, writtenDrafts } from "../core/drafts.js";
 import { acceptInvitation, dismissPendingInvitation, sendMessage, state } from "../core/store.js";
 import type { Conversation } from "../core/types.js";
 import { rendererFor, showsInThread, typeOf } from "../renderers/index.js";
@@ -117,9 +117,9 @@ const target = computed(() => {
 });
 
 const draft = computed({
-  get: () => (target.value === null ? "" : (draftIn(pairKey(target.value))?.text ?? "")),
+  get: () => (target.value === null ? "" : (draftIn(target.value)?.text ?? "")),
   set: (text) => {
-    if (target.value !== null) writeDraft(pairKey(target.value), text);
+    if (target.value !== null) writeDraft(target.value, text);
   },
 });
 
@@ -128,21 +128,39 @@ function pick(event: Event) {
   const before = target.value;
   const value = (event.target as HTMLSelectElement).value;
   picked.value = value === "" ? null : value;
-  if (before !== null && target.value !== null) moveDraft(pairKey(before), pairKey(target.value));
+  if (before !== null && target.value !== null) moveDraft(before, target.value);
 }
 
-/** Drafts of this conversation that are not in the channel it writes in now: another it may write in, or one that takes no send any more. */
+const pairsOf = (c: Conversation) => [...c.writeTo, ...c.channels.map(({ channel }) => channel)].map(pairKey);
+
+/**
+ * What is written and not in the composer: in another channel of this
+ * conversation, or in a channel no conversation shows any more. A newer
+ * selection can take a channel with no message in it out of every
+ * conversation; its draft is listed wherever the person is, or nothing
+ * would be left to read it by. A draft in another conversation's channel
+ * waits there.
+ */
 const draftsElsewhere = computed(() => {
   const c = conversation.value;
-  if (c === null) return [];
-  const writable = new Set(c.writeTo.map(pairKey));
+  const here = new Set(c === null ? [] : pairsOf(c));
+  const shown = new Set(props.conversations.flatMap(pairsOf));
+  const writable = new Set(c?.writeTo.map(pairKey) ?? []);
   const current = target.value === null ? null : pairKey(target.value);
-  const pairs = new Map([...c.writeTo, ...c.channels.map(({ channel }) => channel)].map((channel) => [pairKey(channel), channel]));
-  return [...pairs].flatMap(([pair, channel]) => {
-    const draft = pair === current ? null : draftIn(pair);
-    return draft === null ? [] : [{ pair, channel, draft, writable: writable.has(pair) }];
+  return writtenDrafts().flatMap((draft) => {
+    const pair = pairKey(draft.channel);
+    if (pair === current || (shown.has(pair) && !here.has(pair))) return [];
+    return [{ pair, draft, writable: writable.has(pair) }];
   });
 });
+
+async function copy(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    sendError.value = "It could not be copied from here: select the text instead.";
+  }
+}
 
 // A contact that prefers a DID none of its open channels is under gets
 // no default, even with one channel open: writing as another DID is the
@@ -167,7 +185,7 @@ async function send() {
     return;
   }
   // held by identity: the conversation on screen, and the pair the draft is under, may both move before this returns
-  const written = draftIn(pairKey(channel));
+  const written = draftIn(channel);
   sending.value = true;
   sendError.value = "";
   try {
@@ -255,6 +273,7 @@ onMounted(() => {
         :key="c.key"
         class="contact-chip"
         :class="{ active: c.key === selected, nameless: c.contactId === null }"
+        :data-conversation="c.key"
         @click="emit('select', c.key)"
       >
         {{ labelOf(c) }}
@@ -327,12 +346,15 @@ onMounted(() => {
       </p>
     </div>
 
-    <p v-for="{ pair, channel, draft: kept, writable } in draftsElsewhere" :key="pair" class="draft-elsewhere" :title="`${channel.localDid} → ${channel.peerDid}`" data-draft-elsewhere>
-      <template v-if="writable">Something you were writing waits in another channel, as {{ shortDid(channel.localDid) }} → {{ shortDid(channel.peerDid) }}.</template>
-      <template v-else>You were writing “{{ kept.text }}” as {{ shortDid(channel.localDid) }} → {{ shortDid(channel.peerDid) }}, which takes no send now.</template>
+    <p v-for="{ pair, draft: kept, writable } in draftsElsewhere" :key="pair" class="draft-elsewhere" :title="`${kept.channel.localDid} → ${kept.channel.peerDid}`" data-draft-elsewhere>
+      <template v-if="writable">Something you were writing waits in another channel, as {{ shortDid(kept.channel.localDid) }} → {{ shortDid(kept.channel.peerDid) }}.</template>
+      <template v-else>You were writing “{{ kept.text }}” as {{ shortDid(kept.channel.localDid) }} → {{ shortDid(kept.channel.peerDid) }}, which takes no send now.</template>
       <button v-if="writable" type="button" class="link-quiet" @click="picked = pair">write there</button>
-      <button v-else-if="target !== null && draft === ''" type="button" class="link-quiet" @click="moveDraft(pair, pairKey(target))">write it here instead</button>
-      <button type="button" class="link-quiet" @click="kept.text = ''">discard</button>
+      <template v-else>
+        <button v-if="target !== null && draft === ''" type="button" class="link-quiet" data-draft-here @click="moveDraft(kept.channel, target)">write it here instead</button>
+        <button type="button" class="link-quiet" data-draft-copy @click="copy(kept.text)">copy</button>
+      </template>
+      <button type="button" class="link-quiet" data-draft-discard @click="kept.text = ''">discard</button>
     </p>
     <p v-if="sendError" class="compose-error">{{ sendError }}</p>
     <p v-if="mustPick" class="compose-error" data-must-pick>{{ mustPick }}</p>

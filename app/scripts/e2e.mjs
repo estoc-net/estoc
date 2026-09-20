@@ -155,6 +155,9 @@ try {
   await bob.waitForSelector('.contact-chip.active:not(.nameless):has-text("Alice")', { timeout: 15000 });
   ok("Bob named the conversation: a contact of his now");
 
+  // Bob answers her Ping from the private DID that replaces the disclosed one. A send names the pair on
+  // screen and is refused once that pair is replaced, so she writes after his answer has reached her page.
+  await channelsShown(alice, 2);
   await send(alice, "Bob", "hello bob, through the mediator");
   await expectBubble(alice, "hello bob");
   await alice.waitForSelector('.bubble:has-text("hello bob") [data-delivery]:has-text("handed over")', { timeout: 30000 });
@@ -227,10 +230,16 @@ try {
   await bob.fill(".composer input.field", "kept for carol");
   await bob.click('.contact-chip:has-text("Alice")');
   await bob.fill(".composer input.field", "kept for alice");
+  const carolKey = await bob.getAttribute('.contact-chip.nameless:has-text("Carol")', "data-conversation");
   const carolChannels = await carol.locator("[data-channel]").count();
   await carol.locator("[data-channel]", { hasText: "current" }).locator("[data-rotate]").click();
   await carol.waitForFunction((count) => document.querySelectorAll("[data-channel]").length > count, carolChannels, { timeout: 45000 });
   await send(carol, "Bob (invited)", "moved again");
+  // A nameless conversation is known by the pair it leads to, so its key moving says her new DID reached Bob, here while he looks at Alice.
+  await bob.waitForFunction((key) => document.querySelector(".contact-chip.nameless")?.dataset.conversation !== key, carolKey, { timeout: 45000 });
+  if ((await bob.locator(".chat-head h2").innerText()) !== "Alice") {
+    fail("Bob should still be looking at Alice when Carol's rotation reaches him");
+  }
   await bob.click('.contact-chip.nameless:has-text("Carol")');
   await expectBubble(bob, "moved again", 45000);
   await channelsShown(bob, 4);
