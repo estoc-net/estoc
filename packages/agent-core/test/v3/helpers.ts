@@ -91,8 +91,8 @@ export interface Party extends Fresh {
 }
 
 /** A vault with a mediation created toward `mediator` (not yet granted), its ring loaded, and a link over it. */
-export async function party(mediator: FakeMediator, fill = 1, over: Partial<LinkOptions> = {}): Promise<Party> {
-  const fresh = await freshVault(fill);
+export async function party(mediator: FakeMediator, fill = 1, over: Partial<LinkOptions> = {}, driver = memoryDriver()): Promise<Party> {
+  const fresh = await freshVault(fill, `party ${fill}`, driver);
   const created = await createMediation(fresh.runtime, fresh.keys, mediator.did as Did);
   const fold = await scanVault(fresh.runtime.vault, fresh.keys);
   const ring = await Keyring.load(fresh.keys, fold);
@@ -257,8 +257,8 @@ export interface MediatedParty extends Party {
 }
 
 /** A party with its arrangement granted and one communication DID, `didId`, on a route over the mediator: the DID's document sends to the mediator. */
-export async function mediatedParty(mediator: FakeMediator, fill: number, didId: DidId): Promise<MediatedParty> {
-  const p = await party(mediator, fill);
+export async function mediatedParty(mediator: FakeMediator, fill: number, didId: DidId, driver = memoryDriver()): Promise<MediatedParty> {
+  const p = await party(mediator, fill, {}, driver);
   await establish(p.link, p.runtime, p.keys, p.mediationId);
   const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
   const { minted } = await createDid(p.runtime, p.keys, routeId, didId);
