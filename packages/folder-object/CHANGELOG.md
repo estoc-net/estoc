@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`encodeCar` / `decodeCar` go through `@ipld/car`**; the dag-cbor
+  header and the varints written by hand are gone. The bytes written are
+  the same. Every block is still checked against its CID here, which the
+  library leaves to its caller. A malformed container now fails in the
+  library's words (`Unexpected end of data`, `Invalid CAR header
+  format`); a CARv2 is refused as a version that is not 1.
 - **`verifyCard` verifies through `jose`** (`compactVerify`, EdDSA only):
   the compact form, the header, `crit` and the signature are the
   library's to check, under the did:key the `kid` names; the card's own

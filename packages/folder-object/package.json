@@ -39,6 +39,7 @@
   },
   "dependencies": {
     "@estoc/keystore": "workspace:^",
+    "@ipld/car": "^5.4.7",
     "@ipld/dag-pb": "^4.1.7",
     "fflate": "^0.8.2",
     "ipfs-unixfs": "^13.0.0",

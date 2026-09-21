@@ -329,6 +329,9 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
+      '@ipld/car':
+        specifier: ^5.4.7
+        version: 5.4.7
       '@ipld/dag-pb':
         specifier: ^4.1.7
         version: 4.1.7
@@ -1494,6 +1497,10 @@ packages:
     engines: {node: '>=20.9.0'}
     cpu: [x64]
     os: [win32]
+
+  '@ipld/car@5.4.7':
+    resolution: {integrity: sha512-fohzeOYlm0vM1kGn48zcyDunamXSJaeM5xt0Fmkp5YJkZzgZyjLbb0DcDK6TDgZWo54btkXNACaXUw2H86Elag==}
+    engines: {node: '>=16.0.0', npm: '>=7.0.0'}
 
   '@ipld/dag-cbor@10.0.2':
     resolution: {integrity: sha512-1eCD4YMTlkx5i36oQUmeAojLS/wu+XCd1Gs31BA0afk0TaVkhnyMofIAT/pi0wV3HS3/G7QSN/1NibhiksMyZQ==}
@@ -3047,6 +3054,9 @@ packages:
     resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
 
+  varint@6.0.0:
+    resolution: {integrity: sha512-cXEIW6cfr15lFv563k4GuVuW/fiwjknytD37jIOLSdSWuOI6WnO/oKwmP2FQTU2l01LP8/M5TSAJpzUaGe3uWg==}
+
   vite-node@3.2.4:
     resolution: {integrity: sha512-EbKSKh+bh1E1IFxeO0pg1n4dvoOTt0UDiXMd/qn++r98+jPO1xtJilvXldeuQ8giIB5IkpjCgMleHMNEsGH6pg==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
@@ -4265,6 +4275,13 @@ snapshots:
 
   '@img/sharp-win32-x64@0.35.2':
     optional: true
+
+  '@ipld/car@5.4.7':
+    dependencies:
+      '@ipld/dag-cbor': 10.0.2
+      cborg: 6.1.1
+      multiformats: 14.0.5
+      varint: 6.0.0
 
   '@ipld/dag-cbor@10.0.2':
     dependencies:
@@ -6049,6 +6066,8 @@ snapshots:
   util-deprecate@1.0.2: {}
 
   uuid@11.1.1: {}
+
+  varint@6.0.0: {}
 
   vite-node@3.2.4(@types/node@22.20.1)(terser@5.50.0):
     dependencies:
