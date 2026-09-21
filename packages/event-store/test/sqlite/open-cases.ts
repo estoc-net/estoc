@@ -17,6 +17,8 @@ export interface OpenHarness {
   open(target: string, mode: OpenMode): Promise<SqliteDriver>;
   /** Puts `bytes`, a complete database file, at `target`. */
   importFile(target: string, bytes: Uint8Array): Promise<void>;
+  /** Runs `sql` on the database at `target` with `writable_schema` on, over a connection that allows it: Node's SQLite refuses it by default. */
+  writeSchema(target: string, sql: string): Promise<void>;
   /** Files declared UTF-16, which only Node's SQLite can make: a snapshot written in UTF-16, and a UTF-8 one whose header alone claims it. */
   utf16: { snapshot: Uint8Array; forged: Uint8Array };
 }
@@ -135,8 +137,9 @@ export const openCases: OpenCase[] = [
         ["a table whose stored name ends in a NUL", `${table}; ${rename("TEXT", "00")}`, nul],
         ["a view whose stored name runs past a NUL", `${view}; ${rename("TEXT", "0078")}`, nul],
         ["a view whose blob name runs past a NUL", `${view}; ${rename("BLOB", "0078")}`, nul],
-      ]) {
-        const target = await snapshot(h, (db) => db.exec(`PRAGMA writable_schema = ON; ${ddl}; PRAGMA writable_schema = OFF`));
+      ] as const) {
+        const target = await snapshot(h);
+        await h.writeSchema(target, ddl);
         for (const [how, attempt] of [
           ["portable", async () => openPortable(await h.open(target, "readonly"))],
           ["runtime", async () => openRuntime(await h.open(target, "readwrite"), { anchor: ANCHOR })],

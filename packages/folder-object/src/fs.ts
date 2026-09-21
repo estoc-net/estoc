@@ -13,7 +13,7 @@ export async function readTree(dir: string): Promise<TreeFiles> {
   const out: TreeFiles = {};
   const entries = await readdir(dir, { recursive: true, withFileTypes: true });
   for (const e of entries) {
-    const abs = join(e.parentPath ?? (e as { path: string }).path, e.name);
+    const abs = join(e.parentPath, e.name);
     const rel = relative(dir, abs).split(sep).join("/");
     if (rel.split("/").some((s) => s.startsWith("."))) continue;
     if (e.isDirectory()) continue;
