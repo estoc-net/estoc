@@ -238,13 +238,21 @@ function checkType(type: unknown): asserts type is string {
   if (typeof type !== "string" || type === "") throw new InvalidEvent("type is not a non-empty string");
 }
 
-/** `roots` as an array of its own, each element read once and checked. */
+/**
+ * `roots` as an array of its own, each element read once and checked. Read by
+ * index, as `plainJson` reads an array: what an array's iterator yields need not
+ * be the elements it serializes as.
+ */
 function checkedRoots(roots: unknown): Cid[] {
   if (!Array.isArray(roots)) throw new InvalidEvent("roots is not an array");
-  return Array.from(roots as unknown[], (root) => {
+  const length = roots.length;
+  const checked: Cid[] = [];
+  for (let i = 0; i < length; i++) {
+    const root: unknown = roots[i];
     if (!isRawCid(root)) throw new InvalidEvent(`roots: ${JSON.stringify(root)} is not a canonical raw DASL CID`);
-    return root;
-  });
+    checked.push(root);
+  }
+  return checked;
 }
 
 function plain(value: unknown): JsonValue {

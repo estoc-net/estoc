@@ -215,6 +215,16 @@ describe("envelope validation", () => {
     expect(new TextDecoder().decode(canonicalEventBytes(event))).toBe(JSON.stringify({ at: base.at, author: base.author, data: { x: "ok" }, eventId: base.eventId, roots: [RAW_HELLO], type: "t" }));
   });
 
+  it("roots are the elements the array holds by index, whatever its iterator yields", () => {
+    const silent = (elements: unknown[]): unknown[] => Object.defineProperty(elements.slice(), Symbol.iterator, { value: function* () {} });
+    expect(validateEvent({ ...base, roots: silent([RAW_HELLO]) }).roots).toEqual([RAW_HELLO]);
+    expect(validateDraft({ type: "t", roots: silent([RAW_HELLO]), data: {} }).roots).toEqual([RAW_HELLO]);
+    for (const elements of [[undefined], ["not a cid"], new Array(1)]) {
+      expect(() => validateEvent({ ...base, roots: silent(elements) })).toThrow(/roots: .* is not a canonical raw DASL CID/);
+      expect(() => validateDraft({ type: "t", roots: silent(elements), data: {} })).toThrow(InvalidEvent);
+    }
+  });
+
   it("checks eventId and at independently and never compares their timestamps", () => {
     // the UUID says 1000 ms after the epoch; `at` says 2026 — immutable history is not rejected for it
     const event = { ...base, eventId: "00000000-03e8-7000-8000-000000000000" };

@@ -389,6 +389,20 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect((await store.tally()).events).toBe(3);
     });
 
+    it("an event whose roots array has an iterator of its own is held with the roots it has by index, and its canonical bytes arriving again are a duplicate", async () => {
+      const c = clock(T0);
+      const [minted] = await foreign(authorN(2), c.now, [{ type: "t" }]);
+      const event = { ...(minted as Event), roots: [RAW_HELLO] };
+      const silent = { ...event, roots: Object.defineProperty([RAW_HELLO], Symbol.iterator, { value: function* () {} }) };
+      const store = await open({ author: authorN(1), now: c.now });
+      expect((await store.ingest([silent])).added).toBe(1);
+      expect(await all(store.scan())).toEqual([event]);
+      expect((await store.ingest([JSON.parse(new TextDecoder().decode(canonicalize(silent)))])).duplicates).toBe(1);
+      const hollow = { ...silent, eventId: uuidv7At(c.now(), 9), roots: Object.defineProperty([undefined], Symbol.iterator, { value: function* () {} }) };
+      expect((await store.ingest([hollow])).rejected).toHaveLength(1);
+      expect((await store.tally()).events).toBe(1);
+    });
+
     it("ingest checks `eventId` and `at` each on its own and never compares the UUID's embedded time with `at`", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
