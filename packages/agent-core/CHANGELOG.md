@@ -9,8 +9,11 @@
   successor recorded already keeps the route it was created on.
 - `Reconciled.unknown`: what the mediator held that no DID the vault
   ever created accounts for. `Connection.unknownRegistrations` keeps the
-  first `UNKNOWN_REGISTRATIONS_KEPT` of them for the agent's life, since
-  a reconciliation removes what it finds and the next reports nothing.
+  first `UNKNOWN_REGISTRATIONS_KEPT` of them for the agent's life,
+  whichever reconciliation over the line found them — a connection, a
+  grant, a disclosure, a send (`watchUnknownRegistrations`) — since a
+  reconciliation asks for their removal and the next reports nothing of
+  one the mediator took off; one it would not is in `refused`.
 - `openVault` takes `resetIdentity` (`OpenVaultOptions`): a fresh replica
   ID and store generation as the runtime opens, its history untouched.
 

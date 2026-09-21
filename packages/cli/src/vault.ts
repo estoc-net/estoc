@@ -207,7 +207,7 @@ export interface VaultStatus {
   label: string | null;
   /** the daemon that holds the folder, when one does */
   daemon: { at: string; phase: Phase; detail: string | null } | null;
-  /** the damage to the vault's history, in words, where this process read the vault and met some: the label is then read from a history short of what was damaged */
+  /** the damage to the vault's history, in words, as this process met it reading the vault or as the daemon that holds it says: a label beside it is read from a history short of what was damaged */
   damaged: string | null;
 }
 

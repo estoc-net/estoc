@@ -4,14 +4,17 @@
 
 - **Phase `damaged`**: a vault whose history no longer reads whole is
   not run. The daemon says so with the damage as the detail, whether it
-  finds it locked, with its seed at hand, or while the vault runs (the
+  finds it locked, with its seed at hand, or while the vault runs,
+  whichever read meets it first — the one a vault opens with, the one
+  after a change, the one replayed to a listener that joins (the
   records short of the damaged event are not shown, the agent is
   stopped and the file let go of). `forgetIdentity` makes room for a
   restore. `DAMAGE_RECOURSE` is the explanation for a host with no
   words of its own.
 - `mergeBackup` recovers from a forked author: when the backup and the
   vault both wrote under one replica ID, the vault is reopened under a
-  fresh one and the merge made again; `Merged.renewed` says so.
+  fresh one and the merge made again, with no agent over it until the
+  merge is over; `Merged.renewed` says so.
 - `Lines.connections[].unknownRegistrations`, from the agent.
 - `createContact` refuses an empty channel list: a contact is created
   with at least one channel.

@@ -227,6 +227,33 @@ describe("opening an agent", () => {
     expect((await fold(alice)).routes.dids.size).toBe(1);
   });
 
+  it("keeps what it cannot account for whichever reconciliation found it, a grant's or a disclosure's as much as a connection's, and one the mediator would not take off beside the refusal", async () => {
+    const mediator = await newMediator();
+    const alice = await partyOf(mediator, 1, ALICE);
+    const agent = await agentOf(alice, "open");
+    const unknown = (name: string): Did => {
+      const did = `did:peer:2.Ez6${name}` as Did;
+      mediator.recipients.set(did, alice.created.data.me.did);
+      return did;
+    };
+
+    const atGrant = unknown("atGrant");
+    await agent.establish(alice.mediationId);
+    expect(mediator.recipients.has(atGrant)).toBe(false);
+    expect(agent.connections()).toMatchObject([{ reconciled: { unknown: [] }, unknownRegistrations: [atGrant] }]);
+
+    const atDisclosure = unknown("atDisclosure");
+    await agent.disclose(alice.didId, { as: "oob", uses: "many" });
+    expect(mediator.recipients.has(atDisclosure)).toBe(false);
+    expect(agent.connections()[0]!.unknownRegistrations).toEqual([atGrant, atDisclosure]);
+
+    const kept = unknown("kept");
+    mediator.refuse.add(kept);
+    await agent.connect();
+    expect(mediator.recipients.has(kept)).toBe(true);
+    expect(agent.connections()).toMatchObject([{ reconciled: { unknown: [kept], removed: [], refused: [kept] }, unknownRegistrations: [atGrant, atDisclosure, kept] }]);
+  });
+
   it("is the one agent of its runtime until it is closed", async () => {
     const mediator = await newMediator();
     const alice = await partyOf(mediator, 1, ALICE);

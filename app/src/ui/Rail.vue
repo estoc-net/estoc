@@ -22,8 +22,9 @@ async function moveMediator(did: string) {
   changingMediator.value = false;
 }
 
-// the line to the selected mediator, which only the running agent knows
 const unknownRegistrations = computed(() => (state.lines?.connections ?? []).flatMap((c) => c.unknownRegistrations));
+const unknownStillHeld = computed(() => (state.lines?.connections ?? []).flatMap((c) => c.unknownRegistrations.filter((did) => c.reconciled?.refused.includes(did) === true)));
+// the line to the selected mediator, which only the running agent knows
 const line = computed(() => state.lines?.connections.find((c) => c.mediationId === mediation.value?.mediationId) ?? null);
 
 const lamp = computed(() => {
@@ -238,8 +239,11 @@ function forget() {
       <p class="status-line error">
         The mediator was holding {{ unknownRegistrations.length }} address{{ unknownRegistrations.length === 1 ? "" : "es" }} for this account that this
         vault has no record of creating ({{ unknownRegistrations.map(shortDid).join(", ") }}). This vault registers only its own addresses, so
-        they were taken off and nothing was recreated for them. This vault and the mediator disagree about what was registered; a vault restored from a backup older than those
-        addresses is one way that happens.
+        it asked the mediator to take them off and created nothing for them. This vault and the mediator disagree about what was registered; a vault restored from a backup older
+        than those addresses is one way that happens.
+      </p>
+      <p v-if="unknownStillHeld.length" class="status-line error" data-unknown-still-held>
+        The mediator would not take off {{ unknownStillHeld.map(shortDid).join(", ") }}: what is sent there still reaches this account, and this vault has no key to read it.
       </p>
     </div>
 

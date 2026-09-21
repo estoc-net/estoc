@@ -341,34 +341,41 @@ describe("a vault whose history is damaged", () => {
     expect(heard.events).toEqual([["phase", "damaged", expect.stringMatching(/^events\/.* is damaged/)]]);
   });
 
-  it("met by a read while the vault runs, stops it there: no records short of the damaged event are shown, the daemon goes from open to damaged and lets the vault go", async () => {
-    const root = await folder();
-    const heard = told();
+  /** A host whose daemon's own connection to the vault, the one way to the file while it holds it, cuts an accepted event's bytes short. */
+  function damageable(root: string): { host: DaemonHost; damageAnEvent(): void } {
     const host = nodeHost(root);
     let held: SqliteDriver | null = null;
-    const daemon = createDaemon(
-      {
+    return {
+      host: {
         ...host,
         async storage() {
           const storage = await host.storage();
           return { ...storage, open: async (name, mode, kind) => (held = await storage.open(name, mode, kind)) };
         },
       },
-      heard.emit
-    );
+      damageAnEvent() {
+        const last = held!.prepare("SELECT event_id, canonical FROM events ORDER BY event_id DESC LIMIT 1");
+        const { event_id: eventId, canonical } = last.get() as { event_id: string; canonical: Uint8Array };
+        last.finalize();
+        const cut = held!.prepare("UPDATE events SET canonical = ? WHERE event_id = ?");
+        cut.run(canonical.slice(0, -3), eventId);
+        cut.finalize();
+      },
+    };
+  }
+
+  it("met by a read while the vault runs, stops it there: no records short of the damaged event are shown, the daemon goes from open to damaged and lets the vault go", async () => {
+    const root = await folder();
+    const heard = told();
+    const running = damageable(root);
+    const daemon = createDaemon(running.host, heard.emit);
     daemons.push(daemon);
     await daemon.boot();
     await daemon.createIdentity("Alice", PASSPHRASE);
     await daemon.createContact("Bob", pairWith("Bob"));
     const shown = heard.events.length;
 
-    // The daemon's own connection is the one way to the file while it holds it.
-    const last = held!.prepare("SELECT event_id, canonical FROM events ORDER BY event_id DESC LIMIT 1");
-    const { event_id: eventId, canonical } = last.get() as { event_id: string; canonical: Uint8Array };
-    last.finalize();
-    const cut = held!.prepare("UPDATE events SET canonical = ? WHERE event_id = ?");
-    cut.run(canonical.slice(0, -3), eventId);
-    cut.finalize();
+    running.damageAnEvent();
 
     await daemon.refresh();
     await until("the daemon says damaged", () => heard.phases().at(-1) === "damaged");
@@ -378,6 +385,34 @@ describe("a vault whose history is damaged", () => {
     const next = daemonOver(root);
     await next.daemon.boot();
     expect(next.heard.phases()).toEqual(["damaged"]);
+  });
+
+  it("met first by the read for a UI that joins stops the vault all the same: the one joining is shown no records and told damaged, and so is the one already there", async () => {
+    const root = await folder();
+    const running = damageable(root);
+    const served = await serveDaemon({ host: running.host, port: 0, token: "t0k3n" });
+    daemons.push(served.daemon as DaemonCore);
+    // The client answers any name as a call, `then` too: it is handed over inside an object, never awaited itself.
+    const joined = async (heard: ReturnType<typeof told>) => ({
+      ui: connect<Daemon>(await clientPort(served.url), new Proxy({} as DaemonEvents, { get: (_, name: string) => (...args: unknown[]) => heard.emit(name, ...args) }) as never),
+    });
+    const heard = told();
+    const { ui } = await joined(heard);
+    await ui.boot();
+    await ui.createIdentity("Alice", PASSPHRASE);
+    await ui.createContact("Bob", pairWith("Bob"));
+
+    running.damageAnEvent();
+
+    const late = told();
+    await (await joined(late)).ui.boot();
+    const damaged = ["phase", "damaged", expect.stringMatching(/^events\/.* is damaged/)];
+    expect(late.events.filter(([name]) => name === "opened" || name === "changed")).toEqual([]);
+    expect(late.events.at(-1)).toEqual(damaged);
+    await until("the UI already there is told", () => heard.phases().at(-1) === "damaged");
+    expect(heard.events.at(-1)).toEqual(damaged);
+    await expect(ui.createContact("Carmen", pairWith("Carmen"))).rejects.toThrow("no open vault");
+    await served.close();
   });
 });
 
@@ -416,6 +451,78 @@ describe("two copies of one runtime, both written to", () => {
     await here.daemon.createContact("Erin", pairWith("Erin"));
     expect(await there.daemon.mergeBackup((await here.daemon.exportBackup()).bytes)).toMatchObject({ renewed: false, added: 3 });
   });
+
+  it(
+    "asks the mediator nothing between the two merges: an address only the backup knows stays registered, and what waited there for it is received once the merge is over",
+    async () => {
+      const mediator = await newMediator();
+      const first = await person(mediator, "Alice");
+      await first.daemon.close();
+      const copy = await folder();
+      await cp(path.join(first.root, ".estoc"), path.join(copy, ".estoc"), { recursive: true });
+
+      let merges = 0;
+      let secondMergeReached = false;
+      let release = (): void => undefined;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      const heard = told();
+      const host = nodeHost(copy, { fetch: mediator.fetch, WebSocket: mediator.WebSocket });
+      const there = createDaemon(
+        {
+          ...host,
+          async storage() {
+            const storage = await host.storage();
+            return {
+              ...storage,
+              async importFile(name, bytes) {
+                if (name === "merge-source.sqlite" && ++merges === 2) {
+                  secondMergeReached = true;
+                  await released;
+                }
+                return storage.importFile(name, bytes);
+              },
+            };
+          },
+        },
+        heard.emit
+      );
+      daemons.push(there);
+      await there.boot();
+      await there.unlock(PASSPHRASE);
+      await there.reconnect();
+      await there.createContact("Carmen", pairWith("Carmen"));
+
+      const here = daemonOver(first.root, mediator);
+      await here.daemon.boot();
+      await here.daemon.unlock(PASSPHRASE);
+      const { didId, invitation } = await here.daemon.createInvitation("many");
+      const invited = here.heard.snapshot().dids.find((did) => did.didId === didId)!.did!;
+      const backup = await here.daemon.exportBackup();
+      await here.daemon.close();
+      const bob = await person(mediator, "Bob");
+      expect(await bob.daemon.acceptInvitation(invitation, "Alice")).toMatchObject({ outcome: "submitted" });
+      await bob.daemon.close();
+      expect(mediator.recipients.has(invited)).toBe(true);
+
+      const asked = mediator.seenTypes.length;
+      const opened = heard.events.filter(([name]) => name === "opened").length;
+      const merging = there.mergeBackup(backup.bytes);
+      try {
+        await until("the second merge is reached", () => secondMergeReached);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(mediator.seenTypes.slice(asked)).toEqual([]);
+        expect(heard.events.filter(([name]) => name === "opened")).toHaveLength(opened);
+        await expect(there.refresh()).rejects.toThrow("no open vault");
+      } finally {
+        release();
+      }
+      expect(await merging).toMatchObject({ renewed: true, conflicts: 0 });
+      await until("what waited for the backup's address is received", () => messagesOf(heard.snapshot()).some((message) => message.direction === "in" && message.msg?.type === PING_TYPE));
+      expect(mediator.recipients.has(invited)).toBe(true);
+      expect(heard.lines()?.discarded ?? []).toEqual([]);
+    },
+    LONG
+  );
 });
 
 describe("two daemons over a mediator", () => {

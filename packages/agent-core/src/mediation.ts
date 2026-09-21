@@ -115,11 +115,26 @@ export interface Reconciled {
   refused: Did[];
   /**
    * What the mediator held that no DID this vault ever created
-   * accounts for, removed or not: the vault and the mediator disagree
-   * about what was registered, and nothing here says why. A vault
-   * restored from a snapshot older than the address is one way there.
+   * accounts for: asked to be removed, and among `refused` where the
+   * mediator would not. The vault and the mediator disagree about what
+   * was registered, and nothing here says why. A vault restored from a
+   * snapshot older than the address is one way there.
    */
   unknown: Did[];
+}
+
+const unknownWatchers = new WeakMap<MediatorLink, (unknown: Did[]) => void>();
+
+/**
+ * `watcher` is told of the registrations every reconciliation over
+ * `link` finds that the vault cannot account for, whoever runs it and
+ * for whatever: a connection, a grant, a disclosure, a send that needs
+ * its sender held. It is told before the reconciliation asks for their
+ * removal, since a removal that lands under a lost answer leaves the
+ * next query nothing to report.
+ */
+export function watchUnknownRegistrations(link: MediatorLink, watcher: (unknown: Did[]) => void): void {
+  unknownWatchers.set(link, watcher);
 }
 
 /** Is `did` registered with the mediator as of this reconciliation? */
@@ -151,6 +166,7 @@ export async function reconcileNow(link: MediatorLink, fold: VaultFold, mediatio
   const removed = held.filter((did) => !desired.includes(did));
   const created = new Set([...fold.routes.dids.values()].map((entity) => entity.created?.did));
   const unknown = held.filter((did) => !created.has(did));
+  if (unknown.length > 0) unknownWatchers.get(link)?.(unknown);
   const refused: Did[] = [];
   if (added.length > 0 || removed.length > 0) {
     const updates = [...added.map((did) => ({ recipient_did: did, action: "add" })), ...removed.map((did) => ({ recipient_did: did, action: "remove" }))];

@@ -68,7 +68,7 @@ export { MediatorLink, bounded, ritual, sealData, sealerOf, senderOf, type LinkO
 export { Pickup, type Delivered, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
 export { decide, serially, type Decided } from "./procedure.js";
 export { canonicalDid, sameDid } from "./same-did.js";
-export { createMediation, establish, mediationOf, reconcile, reconcileNow, registered, selectMediation, type EstablishStep, type Established, type Reconciled } from "./mediation.js";
+export { createMediation, establish, mediationOf, reconcile, reconcileNow, registered, selectMediation, watchUnknownRegistrations, type EstablishStep, type Established, type Reconciled } from "./mediation.js";
 export {
   configureRoute,
   createDid,

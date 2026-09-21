@@ -285,7 +285,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       }
     );
 
-  async function snapshot({ runtime, keys }: Open): Promise<Snapshot> {
+  async function recordsOf({ runtime, keys }: Open): Promise<Snapshot> {
     const fold = await scanVault(runtime.vault, keys, SCAN);
     const records = recorder(fold, objectReader(runtime.vault.objects, MAX_CONTENT_BYTES));
     const channels = new Map<string, ChannelRecord>();
@@ -325,6 +325,16 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     };
   }
 
+  /**
+   * The records as every listener is given them, or the damage the read
+   * met: a read leaves a damaged event out rather than fail, so what it
+   * met shows in the runtime afterwards and the records are short of it.
+   */
+  async function snapshot(running: Open): Promise<Snapshot | DamagedHistory> {
+    const read = await recordsOf(running);
+    return damageOf(running.runtime) ?? read;
+  }
+
   const explained = async (runtime: SqliteVault): Promise<boolean> => (await runtime.local.options.get(RESTORE_EXPLAINED)) === true;
 
   /** A send of the user's and every manual dispatch wait for the restore to be explained; nothing the vault does on its own does. */
@@ -345,9 +355,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         stale = false;
         if (open === null) continue;
         const read = await snapshot(open);
-        // A read leaves a damaged event out rather than fail: what it met shows in the runtime afterwards, and the records are short of it.
-        const damage = damageOf(open.runtime);
-        if (damage !== null) return void giveUpDamaged(damage);
+        if (read instanceof DamagedHistory) return void giveUpDamaged(read);
         emit("changed", read);
       } while (stale);
     })()
@@ -442,6 +450,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     });
   }
 
+  /** The agent over an open runtime, and the vault shown; one whose first read meets damage is let go of and said to be damaged instead. */
   async function start(runtime: SqliteVault, keys: Keys, seedKey: SeedKey): Promise<void> {
     let running: Open;
     try {
@@ -453,9 +462,21 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       throw err;
     }
     open = running;
+    let read: Snapshot | DamagedHistory;
+    try {
+      read = await snapshot(running);
+    } catch (err) {
+      await stop();
+      throw err;
+    }
+    if (read instanceof DamagedHistory) {
+      await stop();
+      phase("damaged", read.message);
+      return;
+    }
     current = "open";
     detail = null;
-    emit("opened", await snapshot(running));
+    emit("opened", read);
     connect(running);
   }
 
@@ -467,20 +488,25 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     await running.runtime.close();
   }
 
-  async function run(seedKey: SeedKey, options: { resetIdentity?: boolean } = {}): Promise<void> {
+  /** The vault's runtime opened under its seed, with no agent over it yet; one whose history is damaged is closed again and the damage thrown. */
+  async function unlocked(seedKey: SeedKey, options: { resetIdentity?: boolean } = {}): Promise<Pick<Open, "runtime" | "keys">> {
     const opened = await openVault(await takeVault("readwrite"), seedKey, { ...SCAN, ...options });
     const damage = damageOf(opened.runtime);
     if (damage !== null) {
       await opened.runtime.close();
       throw damage;
     }
-    await start(opened.runtime, opened.keys, seedKey);
+    return opened;
   }
 
-  /** Why a vault did not open, as a phase: damage to its history has its own, with what is left to do about it. */
+  async function run(seedKey: SeedKey): Promise<void> {
+    const { runtime, keys } = await unlocked(seedKey);
+    await start(runtime, keys, seedKey);
+  }
+
   const unopened = (err: unknown) => phase(err instanceof DamagedHistory ? "damaged" : "unreadable", failure(err));
 
-  /** The vault owned and looked at without its seed, for `unlock`; one that does not open is said to be unreadable, its bytes left alone. */
+  /** The vault owned and looked at without its seed, for `unlock`; one that does not open is let go of, its bytes left alone. */
   async function look(): Promise<void> {
     try {
       const looked = await inspectRuntime(await takeVault("readwrite"), SCAN);
@@ -563,7 +589,12 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       to("phase", current, detail);
       return;
     }
-    to("opened", await snapshot(running));
+    const read = await snapshot(running);
+    if (read instanceof DamagedHistory) {
+      await giveUpDamaged(read);
+      return replayTo(to);
+    }
+    to("opened", read);
     void running.attached.agent.then(
       (agent) => to("lines", linesOf(agent)),
       () => undefined
@@ -762,7 +793,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
 
     mergeBackup: (bytes) =>
       exclusively(async () => {
-        const merge = ({ runtime, keys }: Open) =>
+        const merge = ({ runtime, keys }: Pick<Open, "runtime" | "keys">) =>
           withSnapshot(MERGE_SOURCE, bytes, async (driver) => {
             const source = openPortable(driver);
             try {
@@ -771,33 +802,39 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
               source.close();
             }
           });
-        let running = vault();
-        let renewed = false;
-        let imported: Awaited<ReturnType<typeof merge>>;
+        const counted = ({ added, duplicates, conflicts, objects, repaired }: Awaited<ReturnType<typeof merge>>, renewed: boolean) => ({ added, duplicates, conflicts: conflicts.length, objects, repaired, renewed });
+        const running = vault();
+        const imported = await merge(running).catch((err: unknown) => {
+          if (err instanceof ForkedAuthor) return null;
+          throw err;
+        });
+        if (imported !== null) {
+          // The agent read its keys and its lines before the merge: another over the merged vault takes its place.
+          await detach(running.attached);
+          running.attached = attach(running.runtime, running.keys, running.trace);
+          await tell();
+          connect(running);
+          return counted(imported, false);
+        }
+        // The backup went on from a copy of this very runtime, or this one from a copy of the backup's: both wrote under one replica ID. Nothing was merged. This runtime takes a fresh one, its history as it is, and the backup's events then come in under the ID they were written with.
+        const { seedKey } = running;
+        await stop();
+        let renewed: Pick<Open, "runtime" | "keys">;
         try {
-          imported = await merge(running);
-        } catch (err) {
-          if (!(err instanceof ForkedAuthor)) throw err;
-          // The backup went on from a copy of this very runtime, or this one from a copy of the backup's: both wrote under one replica ID. Nothing was merged. This runtime takes a fresh one, its history as it is, and the backup's events then come in under the ID they were written with.
-          const { seedKey } = running;
-          await stop();
-          try {
-            await run(seedKey, { resetIdentity: true });
-          } catch (failed) {
+          renewed = await unlocked(seedKey, { resetIdentity: true });
+        } catch (failed) {
+          await look();
+          throw failed;
+        }
+        // No agent runs until the merge is over: one over the history as it stood would take off the mediator the addresses the backup brings, and discard what waits there for them.
+        try {
+          return counted(await merge(renewed), true);
+        } finally {
+          await start(renewed.runtime, renewed.keys, seedKey).catch(async (failed: unknown) => {
             await look();
             throw failed;
-          }
-          running = vault();
-          renewed = true;
-          imported = await merge(running);
+          });
         }
-        // The agent read its keys and its lines before the merge: another over the merged vault takes its place.
-        await detach(running.attached);
-        running.attached = attach(running.runtime, running.keys, running.trace);
-        await tell();
-        connect(running);
-        const { added, duplicates, conflicts, objects, repaired } = imported;
-        return { added, duplicates, conflicts: conflicts.length, objects, repaired, renewed };
       }),
 
     setMediator: (mediatorDid) =>
