@@ -344,6 +344,9 @@ importers:
       ipfs-unixfs-importer:
         specifier: ^17.0.1
         version: 17.0.1
+      jose:
+        specifier: ^6.0.0
+        version: 6.2.9
       multiformats:
         specifier: ^14.0.5
         version: 14.0.5

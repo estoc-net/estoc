@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **`verifyCard` verifies through `jose`** (`compactVerify`, EdDSA only):
+  the compact form, the header, `crit` and the signature are the
+  library's to check, under the did:key the `kid` names; the card's own
+  rules stay here (`typ`, exactly `{did, root}`, the did being the
+  `kid`'s). A card whose `kid` names another key than the one that
+  signed now fails as a signature that does not verify. Signing still
+  assembles the JWS itself, since the signer may be a device that only
+  signs bytes.
+
 ## 0.6.0 — 2026-08-26
 
 The closure as one file, for the package road (`estoc/docs/object-share.md`

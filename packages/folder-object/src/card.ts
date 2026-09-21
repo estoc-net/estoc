@@ -7,30 +7,37 @@
  * cannot be read as some other protocol's statement, and vice versa. The
  * meaning of the card is fixed and single — the signer stands behind the
  * object — and what *that* means for a given tree is defined by the
- * format the tree declares in its own `index.json` (spec §6).
+ * format the tree declares in its own `index.json`.
  */
 
 import { publicKeyFromDidKey } from "@estoc/keystore";
-import { base64urlToBytes, base64urlToUtf8, bytesToBase64url, utf8ToBase64url } from "./base64url.js";
+import { base64url, compactVerify, errors, importJWK, type CompactJWSHeaderParameters } from "jose";
 import { hashObject } from "./object.js";
 import type { CardSigner, FolderObject, ObjectCard } from "./types.js";
 
 /** The JWS `typ` of an object card. */
 export const CARD_TYP = "estoc/object-card";
 
+const DID_KEY = "did:key:";
+
 /** A did:key's verification method: `did:key:z6Mk…#z6Mk…` (the did:key convention). */
 export function didKeyKid(did: string): string {
-  if (!did.startsWith("did:key:")) throw new Error("cards are signed by did:key identities");
-  return `${did}#${did.slice("did:key:".length)}`;
+  if (!did.startsWith(DID_KEY)) throw new Error("cards are signed by did:key identities");
+  return `${did}#${did.slice(DID_KEY.length)}`;
 }
 
-/** Sign a card over a root as `did`. Two cards over the same (did, root) are equivalent. */
+/**
+ * Sign a card over a root as `did`. Two cards over the same (did, root)
+ * are equivalent. The JWS is put together here rather than by a JOSE
+ * library because the signer may be a device that signs bytes and never
+ * gives up a key, and the libraries sign only with a key they hold.
+ */
 export async function signRoot(did: string, root: string, signer: Pick<CardSigner, "sign">): Promise<string> {
-  const header = utf8ToBase64url(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(did) }));
-  const payload = utf8ToBase64url(JSON.stringify({ did, root } satisfies ObjectCard));
+  const header = base64url.encode(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(did) }));
+  const payload = base64url.encode(JSON.stringify({ did, root } satisfies ObjectCard));
   const signature = await signer.sign(new TextEncoder().encode(`${header}.${payload}`));
   if (signature.length !== 64) throw new Error("signer did not return a 64-byte Ed25519 signature");
-  return `${header}.${payload}.${bytesToBase64url(signature)}`;
+  return `${header}.${payload}.${base64url.encode(signature)}`;
 }
 
 /** Sign an object: hash its canonical tree, sign the root as the signer's did:key. */
@@ -38,50 +45,37 @@ export async function signObject(object: FolderObject, signer: CardSigner): Prom
   return signRoot(signer.did(), await hashObject(object), signer);
 }
 
+/** The key an object card's header names: the did:key of its `kid`, which is self-certifying. */
+function cardKey(header: CompactJWSHeaderParameters) {
+  if (header.typ !== CARD_TYP) throw new Error(`not an object card (typ ${String(header.typ)})`);
+  const did = header.kid?.split("#")[0] ?? "";
+  if (!did.startsWith(DID_KEY) || didKeyKid(did) !== header.kid) throw new Error("expected the kid of a did:key");
+  return importJWK({ kty: "OKP", crv: "Ed25519", x: base64url.encode(publicKeyFromDidKey(did)) }, "EdDSA");
+}
+
 /**
  * Verify a card on its own terms: an `estoc/object-card` JWS whose
- * signature checks out under the did:key its payload names. Throws on
- * anything else. Whether the root is the tree you hold is
- * `verifyObjectCard`'s question.
+ * signature checks out under the did:key its `kid` names, saying
+ * `{did, root}` of that same did. Throws on anything else. Whether the
+ * root is the tree you hold is `verifyObjectCard`'s question.
  */
 export async function verifyCard(jws: string): Promise<ObjectCard> {
-  const parts = jws.split(".");
-  if (parts.length !== 3) throw new Error("not a compact JWS");
-  const [h, p, s] = parts as [string, string, string];
-  let header: { alg?: unknown; typ?: unknown; kid?: unknown };
-  try {
-    header = JSON.parse(base64urlToUtf8(h));
-  } catch {
-    throw new Error("malformed JWS header");
-  }
-  if (header.typ !== CARD_TYP) throw new Error(`not an object card (typ ${String(header.typ)})`);
-  if (header.alg !== "EdDSA" || typeof header.kid !== "string") throw new Error("expected an EdDSA JWS with a kid");
+  const verified = await compactVerify(jws, cardKey, { algorithms: ["EdDSA"] }).catch((err: unknown) => {
+    if (err instanceof errors.JWSSignatureVerificationFailed) throw new Error("card signature does not verify");
+    throw err;
+  });
   let payload: unknown;
   try {
-    payload = JSON.parse(base64urlToUtf8(p));
+    payload = JSON.parse(new TextDecoder().decode(verified.payload));
   } catch {
     throw new Error("malformed card payload");
   }
   const { did, root } = (payload ?? {}) as Record<string, unknown>;
   if (typeof did !== "string" || typeof root !== "string") throw new Error("malformed card");
   if (Object.keys(payload as object).length !== 2) throw new Error("a card says exactly {did, root}");
-  if (!did.startsWith("did:key:") || didKeyKid(did) !== header.kid) {
+  if (!did.startsWith(DID_KEY) || didKeyKid(did) !== verified.protectedHeader.kid) {
     throw new Error("the card's kid does not belong to the card's did");
   }
-  const key = await crypto.subtle.importKey(
-    "raw",
-    publicKeyFromDidKey(did) as Uint8Array<ArrayBuffer>,
-    { name: "Ed25519" },
-    false,
-    ["verify"],
-  );
-  const ok = await crypto.subtle.verify(
-    "Ed25519",
-    key,
-    base64urlToBytes(s) as Uint8Array<ArrayBuffer>,
-    new TextEncoder().encode(`${h}.${p}`),
-  );
-  if (!ok) throw new Error("card signature does not verify");
   return { did, root };
 }
 
