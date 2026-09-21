@@ -48,7 +48,7 @@ export async function signObject(object: FolderObject, signer: CardSigner): Prom
 /** The key an object card's header names: the did:key of its `kid`, which is self-certifying. */
 function cardKey(header: CompactJWSHeaderParameters) {
   if (header.typ !== CARD_TYP) throw new Error(`not an object card (typ ${String(header.typ)})`);
-  // RFC 7797 lets a header carry its payload unencoded; no card is signed that way, and a verifier without the extension would refuse one this one took.
+  // RFC 7797 allows an unencoded payload; no card is signed that way, and a verifier without the extension would refuse one this one took.
   if (header.b64 === false) throw new Error("a card's payload is base64url");
   const did = header.kid?.split("#")[0] ?? "";
   if (!did.startsWith(DID_KEY) || didKeyKid(did) !== header.kid) throw new Error("expected the kid of a did:key");

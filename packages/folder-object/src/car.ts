@@ -2,12 +2,13 @@
  * CARv1 (https://ipld.io/specs/transport/car/carv1/): a header naming the
  * roots, then blocks — each a CID and its bytes, length-prefixed. This is
  * how a tree's closure travels as one file. The container is `@ipld/car`'s
- * to write and read; it does not check a block against its CID, which is
- * done here.
+ * to write and to parse. It checks neither a block against its CID nor
+ * that a section is long enough for the CID it opens with, so reading
+ * goes by its index of where each block lies, and both are checked here.
  */
 
-import { CarBufferReader } from "@ipld/car/buffer-reader";
 import * as CarBufferWriter from "@ipld/car/buffer-writer";
+import { CarIndexer } from "@ipld/car/indexer";
 import { CID } from "multiformats/cid";
 import { base32 } from "multiformats/bases/base32";
 import { sha256 } from "multiformats/hashes/sha2";
@@ -37,25 +38,30 @@ export function encodeCar(roots: string[], blocks: Map<string, Uint8Array>): Uin
  * Decode a CAR and check every block against its CID: a block whose bytes
  * do not hash to its name is not kept but listed in `bad`, so the caller
  * trusts every byte in `blocks`. A later block under a CID already seen
- * is ignored. Throws on a malformed container (a bad header, a truncated
- * section, a version other than 1).
+ * is ignored. Throws on a malformed container (a bad header, a section
+ * that ends before its CID or past the file, a version other than 1).
  */
 export async function decodeCar(bytes: Uint8Array): Promise<Car> {
-  const reader = CarBufferReader.fromBytes(bytes);
-  if (reader.version !== 1) throw new Error(`CAR version ${reader.version} is not 1`);
+  const index = await CarIndexer.fromBytes(bytes);
+  if (index.version !== 1) throw new Error(`CAR version ${index.version} is not 1`);
   const blocks = new Map<string, Uint8Array>();
   const bad: string[] = [];
-  for (const block of reader.blocks()) {
-    const name = block.cid.toString();
+  for await (const { cid, blockOffset, blockLength } of index) {
+    const end = blockOffset + blockLength;
+    if (!Number.isSafeInteger(end) || blockLength < 0 || end > bytes.length) {
+      throw new Error("a CAR section does not hold its CID and its block");
+    }
+    const name = cid.toString();
     if (blocks.has(name)) continue;
+    const data = bytes.subarray(blockOffset, end);
     try {
-      await checkCid(block.cid, block.bytes);
-      blocks.set(name, block.bytes);
+      await checkCid(cid, data);
+      blocks.set(name, data);
     } catch {
       bad.push(name);
     }
   }
-  return { roots: reader.getRoots().map((root) => root.toString()), blocks, bad };
+  return { roots: (await index.getRoots()).map((root) => root.toString()), blocks, bad };
 }
 
 /**
