@@ -22,6 +22,7 @@ async function moveMediator(did: string) {
   changingMediator.value = false;
 }
 
+const unknownRegistrations = computed(() => (state.lines?.connections ?? []).flatMap((c) => c.unknownRegistrations));
 // the line to the selected mediator, which only the running agent knows
 const line = computed(() => state.lines?.connections.find((c) => c.mediationId === mediation.value?.mediationId) ?? null);
 
@@ -129,6 +130,7 @@ async function importBackup(event: Event) {
       merged.added === 0 && merged.objects === 0
         ? "nothing new in that backup"
         : `merged: ${merged.added} new event${merged.added === 1 ? "" : "s"}, ${merged.objects} object${merged.objects === 1 ? "" : "s"}`;
+    if (merged.renewed) importNote.value += ". That backup and this vault were copies of one another that both went on being written; this one now writes under a fresh ID of its own, its history unchanged.";
   } catch (err) {
     importNote.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -229,6 +231,16 @@ function forget() {
       <div class="eyebrow">Deliveries not taken in</div>
       <p v-for="(waiting, i) in state.lines.waiting" :key="`w${i}`" class="status-line">waiting: {{ waiting.reason }}</p>
       <p v-for="(discarded, i) in state.lines.discarded" :key="`d${i}`" class="status-line error">{{ discarded.reason }}</p>
+    </div>
+
+    <div v-if="unknownRegistrations.length" class="rail-section" data-unknown-registrations>
+      <div class="eyebrow">Addresses this vault does not know</div>
+      <p class="status-line error">
+        The mediator was holding {{ unknownRegistrations.length }} address{{ unknownRegistrations.length === 1 ? "" : "es" }} for this account that this
+        vault has no record of creating ({{ unknownRegistrations.map(shortDid).join(", ") }}). This vault registers only its own addresses, so
+        it asked the mediator to take them off and created nothing for them. This vault and the mediator disagree about what was registered; a vault restored from a backup older
+        than those addresses is one way that happens.
+      </p>
     </div>
 
     <div v-if="snapshot && snapshot.unplaced.inputs.length + snapshot.unplaced.outputs.length > 0" class="rail-section">

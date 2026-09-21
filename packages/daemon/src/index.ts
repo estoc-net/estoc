@@ -6,6 +6,6 @@
 
 export type { ContactSummary, CreatedInvitation, Daemon, DaemonEvents, Lines, LocalDidSummary, MediationSummary, Merged, Outcome, Phase, SendResult, Snapshot } from "./api.js";
 export { VAULT_FILE, type DaemonHost, type DaemonStorage } from "./host.js";
-export { RESTORE_EXPLAINED, createDaemon, type DaemonCore, type Emit } from "./daemon.js";
+export { DAMAGE_RECOURSE, RESTORE_EXPLAINED, createDaemon, type DaemonCore, type Emit } from "./daemon.js";
 export { connect, serve, type Port } from "./rpc.js";
 export { decode, encode } from "./codec.js";

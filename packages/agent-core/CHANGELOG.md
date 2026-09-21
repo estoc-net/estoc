@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **A rotation's successor goes on the route new addresses go on**
+  (behaviour change): the preferred arrangement's usable route where
+  there is one, the predecessor's otherwise; it was always the
+  predecessor's. `RotateOptions.routeId` still decides outright, and a
+  successor recorded already keeps the route it was created on.
+- `Reconciled.unknown`: what the mediator held that no DID the vault
+  ever created accounts for. `Connection.unknownRegistrations` keeps the
+  first `UNKNOWN_REGISTRATIONS_KEPT` of them for the agent's life,
+  whichever reconciliation over the line found them — a connection, a
+  grant, a disclosure, a send (`watchUnknownRegistrations`) — since a
+  reconciliation asks for their removal and the next reports nothing of
+  one the mediator took off. The list is what was found, not what still
+  stands at the mediator.
+- `openVault` takes `resetIdentity` (`OpenVaultOptions`): a fresh replica
+  ID and store generation as the runtime opens, its history untouched.
+
 ## 0.19.0 — 2026-09-20
 
 The agent over the version-3 vault, in place of the version-2 one.

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `estoc status` says when the vault's history is damaged, read here or
+  held by a daemon, with what that leaves to do, and exits 1
+  (`VaultStatus.damaged`). Keys are still derived from a damaged vault.
 - The libraries are imported from their roots: `@estoc/daemon`,
   `@estoc/daemon/node`, `@estoc/agent-core`, `@estoc/event-store`,
   `@estoc/vault`, the `./v3` entries being gone.

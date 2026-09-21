@@ -27,7 +27,7 @@
 
 import type { DIDDoc } from "@estoc/did-peer";
 import type { VaultRuntime } from "@estoc/event-store";
-import { requiredReceivingSet, scanVault, type DidId, type Keys, type MediationId } from "@estoc/vault";
+import { requiredReceivingSet, scanVault, type Did, type DidId, type Keys, type MediationId } from "@estoc/vault";
 
 import { LiveInput, type LiveAction } from "./action.js";
 import { disclose, didOf, routeOf, type Disclosed, type Disclosure } from "./dids.js";
@@ -38,7 +38,7 @@ import { didcommDocumentOf } from "./evidence.js";
 import { effectTypesOf, handlersOf } from "./handlers/index.js";
 import { Keyring } from "./keyring.js";
 import { MediatorLink } from "./link.js";
-import { establish, mediationOf, reconcile, type Established, type Reconciled } from "./mediation.js";
+import { establish, mediationOf, reconcile, watchUnknownRegistrations, type Established, type Reconciled } from "./mediation.js";
 import { Pickup, type Delivered, type Drained, type Fate, type Handle } from "./pickup.js";
 import { privateAddress, type PrivateAddress } from "./privacy.js";
 import { afterReceipt, recordOwed, type AfterReceipt, type Owed } from "./receive/after.js";
@@ -77,10 +77,22 @@ export interface Connection {
   /** why the last connection stopped short; null when it ran through */
   unreachable: string | null;
   reconciled: Reconciled | null;
+  /**
+   * Every registration a reconciliation over this line found at the
+   * mediator that no DID of the vault accounts for, the first
+   * `UNKNOWN_REGISTRATIONS_KEPT` of them, whatever the reconciliation
+   * was for: a connection, a grant, a disclosure, a send. Each was
+   * asked to be removed, and one the mediator took off is not reported
+   * by the next reconciliation. This is what was found, not what
+   * stands: nothing here says whether the mediator took one off.
+   */
+  unknownRegistrations: Did[];
   drained: Drained | null;
   /** whether the socket is open, or opening */
   live: boolean;
 }
+
+export const UNKNOWN_REGISTRATIONS_KEPT = 32;
 
 export interface Submitted extends Sent {
   dispatched: Called;
@@ -258,12 +270,26 @@ export class Agent {
   }
 
   private shown(connection: Connection): Connection {
-    return { ...connection, live: this.lines.get(connection.mediationId)?.link.live ?? false };
+    return { ...connection, unknownRegistrations: [...connection.unknownRegistrations], live: this.lines.get(connection.mediationId)?.link.live ?? false };
+  }
+
+  private connectionOf(mediationId: MediationId): Connection {
+    const connection: Connection = this.attempts.get(mediationId) ?? { mediationId, unreachable: null, reconciled: null, unknownRegistrations: [], drained: null, live: false };
+    this.attempts.set(mediationId, connection);
+    return connection;
+  }
+
+  private keepUnknown(mediationId: MediationId, unknown: Did[]): void {
+    const kept = this.connectionOf(mediationId).unknownRegistrations;
+    for (const did of unknown) {
+      if (kept.length >= UNKNOWN_REGISTRATIONS_KEPT) break;
+      if (!kept.includes(did)) kept.push(did);
+    }
+    this.log(`the mediator of ${mediationId} held ${unknown.length} registration(s) no DID of this vault accounts for`);
   }
 
   private async connectTo(mediationId: MediationId): Promise<Connection> {
-    const connection: Connection = this.attempts.get(mediationId) ?? { mediationId, unreachable: null, reconciled: null, drained: null, live: false };
-    this.attempts.set(mediationId, connection);
+    const connection = this.connectionOf(mediationId);
     try {
       const { link, pickup } = await this.lineOf(mediationId);
       connection.reconciled = await reconcile(link, this.runtime, this.keys, mediationId);
@@ -313,6 +339,7 @@ export class Agent {
     const raced = this.lines.get(mediationId);
     if (raced !== undefined) return raced;
     this.lines.set(mediationId, line);
+    watchUnknownRegistrations(link, (unknown) => this.keepUnknown(mediationId, unknown));
     return line;
   }
 

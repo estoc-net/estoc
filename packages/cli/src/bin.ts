@@ -16,6 +16,7 @@ import { readTree, writeTree } from "@estoc/folder-object/fs";
 import { isPost, renderPost, validatePost } from "@estoc/post";
 import { unzipTree, zipTree } from "@estoc/folder-object/zip";
 import { appDir } from "@estoc/app";
+import { DAMAGE_RECOURSE } from "@estoc/daemon";
 import { exitOnSignal, runDaemon } from "@estoc/daemon/node";
 import { promptNewPassphrase, promptPassphrase } from "./prompt.js";
 import { fill } from "./template.js";
@@ -104,6 +105,11 @@ async function cmdStatus(vaultFlag: string | undefined) {
   if (status.anchor !== null) {
     process.stdout.write(`label   ${status.label ?? "(none)"}\n`);
     process.stdout.write(`anchor  ${status.anchor}\n`);
+  }
+  if (status.damaged !== null) {
+    if (status.daemon === null) process.stdout.write(`damaged ${status.damaged}\n`);
+    process.stdout.write(`        ${DAMAGE_RECOURSE}\n`);
+    process.exitCode = 1;
   }
 }
 

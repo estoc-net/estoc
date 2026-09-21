@@ -113,6 +113,28 @@ export interface Reconciled {
   removed: Did[];
   /** what the mediator would not add or remove; a desired DID among them is not registered */
   refused: Did[];
+  /**
+   * What the mediator held that no DID this vault ever created
+   * accounts for: asked to be removed, and among `refused` where the
+   * mediator would not. The vault and the mediator disagree about what
+   * was registered, and nothing here says why. A vault restored from a
+   * snapshot older than the address is one way there.
+   */
+  unknown: Did[];
+}
+
+const unknownWatchers = new WeakMap<MediatorLink, (unknown: Did[]) => void>();
+
+/**
+ * `watcher` is told of the registrations every reconciliation over
+ * `link` finds that the vault cannot account for, whoever runs it and
+ * for whatever: a connection, a grant, a disclosure, a send that needs
+ * its sender held. It is told before the reconciliation asks for their
+ * removal, since a removal that lands under a lost answer leaves the
+ * next query nothing to report.
+ */
+export function watchUnknownRegistrations(link: MediatorLink, watcher: (unknown: Did[]) => void): void {
+  unknownWatchers.set(link, watcher);
 }
 
 /** Is `did` registered with the mediator as of this reconciliation? */
@@ -142,6 +164,9 @@ export async function reconcileNow(link: MediatorLink, fold: VaultFold, mediatio
   const held = await queryRecipients(link);
   const added = desired.filter((did) => !held.includes(did));
   const removed = held.filter((did) => !desired.includes(did));
+  const created = new Set([...fold.routes.dids.values()].map((entity) => entity.created?.did));
+  const unknown = held.filter((did) => !created.has(did));
+  if (unknown.length > 0) unknownWatchers.get(link)?.(unknown);
   const refused: Did[] = [];
   if (added.length > 0 || removed.length > 0) {
     const updates = [...added.map((did) => ({ recipient_did: did, action: "add" })), ...removed.map((did) => ({ recipient_did: did, action: "remove" }))];
@@ -155,7 +180,7 @@ export async function reconcileNow(link: MediatorLink, fold: VaultFold, mediatio
     for (const did of added) if (!done(did, "add")) refused.push(did);
     for (const did of removed) if (!done(did, "remove")) refused.push(did);
   }
-  const reconciled: Reconciled = { mediationId, desired, held, added: added.filter((did) => !refused.includes(did)), removed: removed.filter((did) => !refused.includes(did)), refused };
+  const reconciled: Reconciled = { mediationId, desired, held, added: added.filter((did) => !refused.includes(did)), removed: removed.filter((did) => !refused.includes(did)), refused, unknown };
   await link.observe("diag", "reconcile", { ...reconciled });
   return reconciled;
 }

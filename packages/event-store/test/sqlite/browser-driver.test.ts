@@ -57,7 +57,8 @@ const PAGE_CASES = [
 
 const SUITES = ["SqliteEventStore in the pool", "SqliteObjectStore in the pool", "SqliteVault in the pool"];
 
-const BROWSER_TIME_LIMIT = 600_000;
+// The suite takes half a minute alone and up to four beside the rest of the workspace on a two-core runner; a browser that hangs should cost little more than that.
+const BROWSER_TIME_LIMIT = 360_000;
 
 interface Outcome extends SuiteOutput {
   /** The inputs' directory, and the sample vault in it the snapshot was exported from. */
