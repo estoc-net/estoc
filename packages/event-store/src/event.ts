@@ -7,8 +7,8 @@
 
 import { RAW_CODE, codecOf } from "@estoc/dasl";
 import { InvalidEvent, InvalidJson } from "./errors.js";
-import { canonicalText, canonicalize, parseStrict } from "./jcs.js";
-import { isJsonObject, isJsonPrimitive, type JsonObject, type JsonPrimitive } from "./json.js";
+import { canonicalText, canonicalize, parseStrict, plainJson } from "./jcs.js";
+import { isJsonObject, isJsonPrimitive, type JsonObject, type JsonPrimitive, type JsonValue } from "./json.js";
 
 /** A validated canonical raw DASL CID string: the brand says it was checked. */
 export type Cid = string & { readonly __cid: unique symbol };
@@ -182,9 +182,11 @@ const FIELDS = ["eventId", "at", "author", "type", "roots", "data"] as const;
 
 /**
  * Envelope validation: the eight rules, in order, and JCS eligibility
- * of the whole. Returns the same value, typed; throws `InvalidEvent`
- * naming the first rule broken. Validates no payload field — `data` is
- * opaque here.
+ * of the whole. Each member of `value` is read once and the event
+ * returned is the fresh plain data that was checked, so an accessor on
+ * `value` cannot show one event here and another to whoever serializes
+ * it. Throws `InvalidEvent` naming the first rule broken. Validates no
+ * payload field — `data` is opaque here.
  */
 export function validateEvent(value: unknown): Event {
   if (!isJsonObject(value)) throw new InvalidEvent("an event is a JSON object");
@@ -196,15 +198,14 @@ export function validateEvent(value: unknown): Event {
     const extra = keys.filter((k) => !(FIELDS as readonly string[]).includes(k));
     throw new InvalidEvent(`unknown top-level field ${extra.map((k) => JSON.stringify(k)).join(", ")}`);
   }
-  const event = value as Record<(typeof FIELDS)[number], unknown>;
+  const event = { ...value } as Record<(typeof FIELDS)[number], unknown>;
   if (!isEventId(event.eventId)) throw new InvalidEvent("eventId is not a canonical UUIDv7");
   if (!isCanonicalAt(event.at)) throw new InvalidEvent("at is not a canonical RFC 3339 UTC millisecond");
   if (!isAuthorId(event.author)) throw new InvalidEvent("author is not a canonical UUIDv7");
   checkType(event.type);
-  checkRoots(event.roots);
+  const roots = checkedRoots(event.roots);
   if (!isJsonObject(event.data)) throw new InvalidEvent("data is not a JSON object");
-  checkJcs(value);
-  return value as Event;
+  return plain({ ...event, roots }) as Event;
 }
 
 /** What the store mints: a draft that carries one is refused, never silently re-minted. */
@@ -228,27 +229,27 @@ export function validateDraft(draft: unknown): Required<Draft> {
   }
   const { type, roots, data } = draft as Record<string, unknown>;
   checkType(type);
-  if (roots !== undefined) checkRoots(roots);
+  const checked = roots === undefined ? [] : checkedRoots(roots);
   if (!isJsonObject(data)) throw new InvalidEvent("data is not a JSON object");
-  const normalized: Required<Draft> = { type, roots: roots === undefined ? [] : [...roots], data };
-  checkJcs(normalized);
-  return structuredClone(normalized);
+  return plain({ type, roots: checked, data }) as Required<Draft>;
 }
 
 function checkType(type: unknown): asserts type is string {
   if (typeof type !== "string" || type === "") throw new InvalidEvent("type is not a non-empty string");
 }
 
-function checkRoots(roots: unknown): asserts roots is Cid[] {
+/** `roots` as an array of its own, each element read once and checked. */
+function checkedRoots(roots: unknown): Cid[] {
   if (!Array.isArray(roots)) throw new InvalidEvent("roots is not an array");
-  for (const root of roots) {
+  return Array.from(roots as unknown[], (root) => {
     if (!isRawCid(root)) throw new InvalidEvent(`roots: ${JSON.stringify(root)} is not a canonical raw DASL CID`);
-  }
+    return root;
+  });
 }
 
-function checkJcs(value: unknown): void {
+function plain(value: unknown): JsonValue {
   try {
-    canonicalText(value);
+    return plainJson(value);
   } catch (err) {
     if (err instanceof InvalidJson) throw new InvalidEvent(`not I-JSON: ${err.message}`);
     throw err;

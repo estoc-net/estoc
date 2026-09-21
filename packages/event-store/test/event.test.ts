@@ -138,8 +138,11 @@ describe("time", () => {
 });
 
 describe("envelope validation", () => {
-  it("returns the value, typed, when the eight rules hold", () => {
-    expect(validateEvent(base)).toBe(base);
+  it("returns the event as data of its own when the eight rules hold", () => {
+    const event = validateEvent(base);
+    expect(event).toEqual(base);
+    expect(event).not.toBe(base);
+    expect(event.data).not.toBe(base.data);
     expect(validateEvent({ ...base, roots: [RAW_HELLO], data: {} })).toBeDefined();
   });
 
@@ -185,11 +188,38 @@ describe("envelope validation", () => {
     }
   });
 
+  it("reads each member once: an accessor that answers differently later cannot change the event that was checked", () => {
+    const once = <T>(first: T, later: unknown): (() => unknown) => {
+      let reads = 0;
+      return () => (++reads === 1 ? first : later);
+    };
+    const type = once("t", "");
+    const root = once(RAW_HELLO, "not a cid");
+    const x = once("ok", new Date(0));
+    const roots = Object.defineProperty([] as unknown[], 0, { get: root, enumerable: true, configurable: true });
+    roots.length = 1;
+    const shifting = {
+      ...base,
+      get type() {
+        return type();
+      },
+      roots,
+      data: {
+        get x() {
+          return x();
+        },
+      },
+    };
+    const event = validateEvent(shifting);
+    expect(event).toEqual({ ...base, type: "t", roots: [RAW_HELLO], data: { x: "ok" } });
+    expect(new TextDecoder().decode(canonicalEventBytes(event))).toBe(JSON.stringify({ at: base.at, author: base.author, data: { x: "ok" }, eventId: base.eventId, roots: [RAW_HELLO], type: "t" }));
+  });
+
   it("checks eventId and at independently and never compares their timestamps", () => {
     // the UUID says 1000 ms after the epoch; `at` says 2026 — immutable history is not rejected for it
     const event = { ...base, eventId: "00000000-03e8-7000-8000-000000000000" };
     expect(timestampOf(event.eventId)).not.toBe(Date.parse(event.at));
-    expect(validateEvent(event)).toBe(event);
+    expect(validateEvent(event)).toEqual(event);
   });
 
   it("validates a draft the same way and normalizes it into fresh data", () => {

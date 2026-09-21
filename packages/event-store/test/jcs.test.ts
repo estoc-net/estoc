@@ -124,7 +124,6 @@ describe("RFC 8785 canonicalization", () => {
       ["a Uint8Array", new Uint8Array(1)],
       ["a class instance", new (class Foo {})()],
       ["a toJSON member", { toJSON: () => 1 }],
-      ["an array with toJSON", Object.assign([1], { toJSON: () => 2 })],
       ["a lone high surrogate", cp(0xd83d)],
       ["a lone low surrogate", `x${cp(0xde02)}`],
       ["a lone surrogate in a member name", { [cp(0xd800)]: 1 }],
@@ -147,6 +146,31 @@ describe("RFC 8785 canonicalization", () => {
     let ok: unknown = 1;
     for (let i = 0; i < MAX_DEPTH; i++) ok = [ok];
     expect(() => canonicalize(ok)).not.toThrow();
+  });
+
+  it("serializes the members a value has, whatever a toJSON on it would answer", () => {
+    const hidden = (value: object, answer: unknown): object => Object.defineProperty(value, "toJSON", { value: () => answer });
+    expect(canonicalText(hidden({ kept: true }, []))).toBe('{"kept":true}');
+    expect(canonicalText(hidden({ kept: true }, undefined))).toBe('{"kept":true}');
+    expect(canonicalText({ inner: hidden({ kept: true }, 1) })).toBe('{"inner":{"kept":true}}');
+    expect(canonicalText(hidden([1, 2], "x"))).toBe("[1,2]");
+    expect(canonicalText({ toJSON: 1, __proto__: null })).toBe('{"toJSON":1}');
+    expect(canonicalText(JSON.parse('{"__proto__":{"a":1}}'))).toBe('{"__proto__":{"a":1}}');
+  });
+
+  it("reads each member once: what is serialized is what was checked", () => {
+    const changing = (later: unknown): object => {
+      let reads = 0;
+      return {
+        get x() {
+          return ++reads === 1 ? "ok" : later;
+        },
+      };
+    };
+    for (const later of [undefined, cp(0xfdd0), new Date(0), 2]) {
+      expect(canonicalText(changing(later))).toBe('{"x":"ok"}');
+      expect(canonicalText([changing(later)])).toBe('[{"x":"ok"}]');
+    }
   });
 
   it("keeps what I-JSON allows next to a noncharacter", () => {

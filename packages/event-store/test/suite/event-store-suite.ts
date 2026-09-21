@@ -365,6 +365,30 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(JSON.stringify(batch[0]?.data)).toBe('{"a":0,"b":1}');
     });
 
+    it("data carrying a toJSON or an accessor that answers differently later is held as the members it had when read, and the store goes on validating, scanning and appending", async () => {
+      const c = clock(T0);
+      const [event] = await foreign(authorN(2), c.now, [{ type: "t", data: { kept: true } }]);
+      const hooked = { ...(event as Event), data: Object.defineProperty({ kept: true }, "toJSON", { value: () => [] }) };
+      let reads = 0;
+      const shifting = {
+        type: "t",
+        data: {
+          get x(): string {
+            return ++reads === 1 ? "ok" : (undefined as unknown as string);
+          },
+        },
+      };
+
+      const store = await open({ author: authorN(1), now: c.now });
+      expect((await store.ingest([hooked])).added).toBe(1);
+      const appended = await store.append(shifting);
+      expect(appended.data).toEqual({ x: "ok" });
+      expect(await all(store.scan())).toEqual([event, appended]);
+      expect(await store.damaged()).toEqual([]);
+      await store.append({ type: "t", data: {} });
+      expect((await store.tally()).events).toBe(3);
+    });
+
     it("ingest checks `eventId` and `at` each on its own and never compares the UUID's embedded time with `at`", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });

@@ -43,8 +43,17 @@ export function canonicalize(value: unknown): Uint8Array {
 
 /** The RFC 8785 serialization of `value` as a string; `canonicalize` is its UTF-8. */
 export function canonicalText(value: unknown): string {
-  admit(value, [], "$");
-  return serialize(value) as string;
+  return serialize(plainJson(value)) as string;
+}
+
+/**
+ * `value` as plain data of its own, sharing nothing with `value`: every member
+ * read once and checked, held as an own data property. What came back cannot
+ * answer differently later, as an accessor or a `toJSON` on `value` could.
+ * Throws `InvalidJson` when `value` is not I-JSON.
+ */
+export function plainJson(value: unknown): JsonValue {
+  return admit(value, [], "$");
 }
 
 /** How many bytes `encoder.encode(text)` would be, counted without encoding it: a lone surrogate counts as the U+FFFD it would become. */
@@ -62,42 +71,47 @@ export function utf8Length(text: string): number {
   return bytes;
 }
 
-// Everything the serializer would quietly repair is refused first: it drops an
-// undefined member, writes an undefined element as null and calls `toJSON`, and
-// each of those would let two different values share one canonical form.
-function admit(value: unknown, stack: object[], path: string): void {
+// The serializer is handed this copy, never the caller's value: it drops an
+// undefined member, writes an undefined element as null, and calls `toJSON`, each
+// of which would let two different values share one canonical form.
+function admit(value: unknown, stack: object[], path: string): JsonValue {
   switch (typeof value) {
     case "boolean":
-      return;
+      return value;
     case "number":
       if (!Number.isFinite(value)) throw new InvalidJson(`${path}: ${String(value)} is not a finite number`);
-      return;
+      return value;
     case "string":
       admitText(value, path);
-      return;
+      return value;
     case "object":
       break;
     default:
       throw new InvalidJson(`${path}: ${typeof value} is not JSON`);
   }
-  if (value === null) return;
+  if (value === null) return null;
   if (stack.includes(value)) throw new InvalidJson(`${path}: cycle`);
   if (stack.length >= MAX_DEPTH) throw new InvalidJson(`${path}: nested deeper than ${MAX_DEPTH}`);
   stack.push(value);
+  let admitted: JsonValue[] | JsonObject;
   if (Array.isArray(value)) {
-    if ("toJSON" in value) throw new InvalidJson(`${path}: an array with toJSON is not JSON`);
-    for (let i = 0; i < value.length; i++) admit(value[i], stack, `${path}[${i}]`);
+    const length = value.length;
+    admitted = [];
+    for (let i = 0; i < length; i++) admitted.push(admit(value[i], stack, `${path}[${i}]`));
   } else {
     if (!isJsonObject(value)) throw new InvalidJson(`${path}: a ${describe(value)} is not JSON`);
+    admitted = {};
     for (const key of Object.keys(value)) {
       const at = `${path}.${key}`;
       admitText(key, at);
-      const member = (value as Record<string, unknown>)[key];
+      const member: unknown = value[key];
       if (member === undefined) throw new InvalidJson(`${at}: undefined is not JSON`);
-      admit(member, stack, at);
+      // defined, not assigned: a member named `__proto__` is an own property, as in `parseStrict`
+      Object.defineProperty(admitted, key, { value: admit(member, stack, at), enumerable: true, writable: true, configurable: true });
     }
   }
   stack.pop();
+  return admitted;
 }
 
 function admitText(text: string, path: string): void {
