@@ -51,6 +51,7 @@
     "@estoc/dasl": "workspace:^",
     "@noble/hashes": "^1.8.0",
     "@sqlite.org/sqlite-wasm": "3.53.4-build1",
+    "canonicalize": "^5.1.0",
     "jsonc-parser": "^3.3.1",
     "uuid": "^11.1.1"
   },

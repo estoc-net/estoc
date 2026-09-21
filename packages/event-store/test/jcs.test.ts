@@ -123,6 +123,8 @@ describe("RFC 8785 canonicalization", () => {
       ["a Map", new Map()],
       ["a Uint8Array", new Uint8Array(1)],
       ["a class instance", new (class Foo {})()],
+      ["a toJSON member", { toJSON: () => 1 }],
+      ["an array with toJSON", Object.assign([1], { toJSON: () => 2 })],
       ["a lone high surrogate", cp(0xd83d)],
       ["a lone low surrogate", `x${cp(0xde02)}`],
       ["a lone surrogate in a member name", { [cp(0xd800)]: 1 }],

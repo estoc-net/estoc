@@ -62,7 +62,7 @@
     "decentralized-identity"
   ],
   "peerDependencies": {
-    "@estoc/app": "^0.1.0"
+    "@estoc/app": "^0.2.0"
   },
   "peerDependenciesMeta": {
     "@estoc/app": {

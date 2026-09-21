@@ -10,10 +10,12 @@ non-extractable key or a hardware wallet — so anything that hands out
 Signers is interchangeable to callers, and a future hardware-backed
 implementation slots in without touching them. `Signer` covers signing;
 `DidKeySigner` (what this store returns) adds X25519 key agreement, because
-the did:key convention derives a `keyAgreement` key from the Ed25519 key and
-DIDComm decryption needs the private ECDH operation. The two are separate
-interfaces on purpose: hardware devices commonly sign Ed25519 but don't do
-X25519 ECDH, so a hardware-backed `Signer` may never implement the second.
+DIDComm decryption needs the private ECDH operation. The store derives the
+X25519 key on its own, not by converting the Ed25519 key as the did:key
+convention would, so it has to be published alongside the DID. The two are
+separate interfaces on purpose: hardware devices commonly sign Ed25519 but
+don't do X25519 ECDH, so a hardware-backed `Signer` may never implement the
+second.
 
 Everything is data-in/data-out: this package reads and writes *documents*,
 never files. Where the sealed seed lives (the vault's SQLite database,

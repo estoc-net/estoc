@@ -1,13 +1,7 @@
 /**
- * Protocols the DIDComm v2 specification itself defines. These are the
- * agent's own business — routing, liveness, invitations, and (via
- * `from_prior`) DID rotation — and are wired straight into `Agent`, not
- * offered through the handler seam: an application cannot unregister
- * how an envelope is forwarded or how a rotation is verified.
- *
+ * Type URIs of the protocols the DIDComm v2 specification itself defines.
  * Everything else the agent speaks is a community protocol from the
- * didcomm.org registry — see `mediation.ts` for the ones it uses as
- * transport and `handlers/` for the ones it treats as application mail.
+ * didcomm.org registry.
  */
 
 export const FORWARD = "https://didcomm.org/routing/2.0/forward";

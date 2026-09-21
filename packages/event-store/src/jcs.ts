@@ -3,8 +3,9 @@
  * `canonicalize` turns a JSON value into the one byte string that stands for its
  * content; `parseStrict` reads JSON text back the way the event format requires —
  * refusing a duplicate member, an unpaired surrogate and a number outside binary64,
- * which `JSON.parse` would let through. The syntax is jsonc-parser's scanner, held
- * to RFC 8259; the value is built here, where those refusals live.
+ * which `JSON.parse` would let through. The serialization is the `canonicalize`
+ * package's and the syntax is jsonc-parser's scanner, held to RFC 8259; what the
+ * event format refuses beyond them is decided here.
  *
  * Canonical form (RFC 8785 §3): no insignificant whitespace; object members sorted
  * by the UTF-16 code units of their names; arrays in order; numbers in ECMAScript
@@ -13,6 +14,7 @@
  * these bytes are equal.
  */
 
+import serialize from "canonicalize";
 import { printParseErrorCode, visit } from "jsonc-parser";
 
 import { InvalidJson } from "./errors.js";
@@ -41,9 +43,8 @@ export function canonicalize(value: unknown): Uint8Array {
 
 /** The RFC 8785 serialization of `value` as a string; `canonicalize` is its UTF-8. */
 export function canonicalText(value: unknown): string {
-  const out: string[] = [];
-  write(value, out, [], "$");
-  return out.join("");
+  admit(value, [], "$");
+  return serialize(value) as string;
 }
 
 /** How many bytes `encoder.encode(text)` would be, counted without encoding it: a lone surrogate counts as the U+FFFD it would become. */
@@ -61,59 +62,47 @@ export function utf8Length(text: string): number {
   return bytes;
 }
 
-function write(value: unknown, out: string[], stack: object[], path: string): void {
+// Everything the serializer would quietly repair is refused first: it drops an
+// undefined member, writes an undefined element as null and calls `toJSON`, and
+// each of those would let two different values share one canonical form.
+function admit(value: unknown, stack: object[], path: string): void {
   switch (typeof value) {
     case "boolean":
-      out.push(value ? "true" : "false");
       return;
     case "number":
       if (!Number.isFinite(value)) throw new InvalidJson(`${path}: ${String(value)} is not a finite number`);
-      out.push(String(value));
       return;
     case "string":
-      out.push(quote(value, path));
+      admitText(value, path);
       return;
     case "object":
       break;
     default:
       throw new InvalidJson(`${path}: ${typeof value} is not JSON`);
   }
-  if (value === null) {
-    out.push("null");
-    return;
-  }
+  if (value === null) return;
   if (stack.includes(value)) throw new InvalidJson(`${path}: cycle`);
   if (stack.length >= MAX_DEPTH) throw new InvalidJson(`${path}: nested deeper than ${MAX_DEPTH}`);
   stack.push(value);
   if (Array.isArray(value)) {
-    out.push("[");
-    for (let i = 0; i < value.length; i++) {
-      if (i > 0) out.push(",");
-      write(value[i], out, stack, `${path}[${i}]`);
-    }
-    out.push("]");
+    if ("toJSON" in value) throw new InvalidJson(`${path}: an array with toJSON is not JSON`);
+    for (let i = 0; i < value.length; i++) admit(value[i], stack, `${path}[${i}]`);
   } else {
     if (!isJsonObject(value)) throw new InvalidJson(`${path}: a ${describe(value)} is not JSON`);
-    const keys = Object.keys(value).sort(compareCodeUnits);
-    out.push("{");
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i] as string;
-      const member = (value as Record<string, unknown>)[key];
+    for (const key of Object.keys(value)) {
       const at = `${path}.${key}`;
+      admitText(key, at);
+      const member = (value as Record<string, unknown>)[key];
       if (member === undefined) throw new InvalidJson(`${at}: undefined is not JSON`);
-      if (i > 0) out.push(",");
-      out.push(quote(key, at), ":");
-      write(member, out, stack, at);
+      admit(member, stack, at);
     }
-    out.push("}");
   }
   stack.pop();
 }
 
-function quote(text: string, path: string): string {
+function admitText(text: string, path: string): void {
   const fault = forbiddenIn(text);
   if (fault !== null) throw new InvalidJson(`${path}: ${fault}`);
-  return JSON.stringify(text);
 }
 
 const SURROGATE = /\p{Cs}/u;

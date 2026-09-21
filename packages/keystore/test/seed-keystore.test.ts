@@ -47,7 +47,6 @@ describe("seed derivation", () => {
     const message = new TextEncoder().encode("estoc");
     const sig = await identity.signer.sign(message);
     expect(ed25519.verify(sig, message, publicKeyFromDidKey(identity.did))).toBe(true);
-    // Verify the JWK escape hatch agrees with the signer.
     const jwks = identity.privateJwks();
     expect(base64url.decode(jwks.ed25519.x!)).toEqual(identity.signer.publicKey());
     expect(base64url.decode(jwks.x25519.x!)).toEqual(identity.signer.x25519PublicKey());
