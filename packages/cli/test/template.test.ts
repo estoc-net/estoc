@@ -12,8 +12,15 @@ describe("fill", () => {
     expect(fill("{{#tags}}<{{.}}>{{/tags}} {{card.did}} {{#s}}[{{s}}]{{/s}}", { tags: ["x", "y"], card: { did: "d" }, s: "v" })).toBe("<x><y> d [v]");
     expect(fill("{{#a}}{{#a}}{{b}}{{/a}}{{/a}}", { a: { b: 1 } })).toBe("1");
   });
+  it("keeps a value inside the attribute it was laid into, whichever quote the template used", () => {
+    const title = `a' onmouseover='x" onfocus="y`;
+    const html = fill(`<p title='{{title}}' lang="{{title}}">{{title}}</p>`, { title });
+    expect(html).not.toMatch(/['"] on(mouseover|focus)=/);
+    expect(html.match(/&#39;/g)).toHaveLength(6);
+    expect(html.match(/&quot;/g)).toHaveLength(6);
+  });
   it("rejects a stray or unclosed tag", () => {
-    expect(() => fill("{{/x}}", {})).toThrow(/unexpected/);
-    expect(() => fill("{{#x}}", {})).toThrow(/unclosed/);
+    expect(() => fill("{{/x}}", {})).toThrow(/Unopened section/);
+    expect(() => fill("{{#x}}", {})).toThrow(/Unclosed section/);
   });
 });

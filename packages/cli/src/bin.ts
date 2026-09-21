@@ -43,8 +43,8 @@ const USAGE = `usage: estoc <command>
                                  project a post/1.0 object: its vocabulary,
                                  body as an HTML fragment, assets, files,
                                  root and signer — as JSON, or laid into a
-                                 Mustache-style template ({{title}},
-                                 {{{body}}}, {{#files}}{{path}}{{/files}},
+                                 Mustache template ({{title}},
+                                 {{{bodyHtml}}}, {{#files}}{{path}}{{/files}},
                                  {{#card}}{{did}}{{/card}}, …). In-tree
                                  references are prefixed with --asset-base
                                  (default: object for a signed layout)

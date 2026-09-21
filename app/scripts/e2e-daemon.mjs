@@ -12,7 +12,8 @@
  *   npm run preview                      # the build on :4173
  *   node scripts/e2e-daemon.mjs [app-url]   (default http://localhost:4173)
  *
- * The mediator is the rail's localhost entry unless E2E_MEDIATOR=estoc.
+ * The mediator is mediator.estoc.dev: the daemon `estoc serve` runs reaches
+ * public addresses only, so a mediator on this machine is not one it can use.
  */
 import { execFileSync, spawn } from "node:child_process";
 import { mkdtemp, rm, stat } from "node:fs/promises";
@@ -22,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const APP_URL = process.argv[2] ?? "http://localhost:4173";
-const MEDIATOR_LABEL = process.env.E2E_MEDIATOR === "estoc" ? "mediator.estoc.dev" : "localhost:8080";
+const MEDIATOR_LABEL = "mediator.estoc.dev";
 const executablePath = "/usr/bin/chromium";
 const PASS = { Alice: "alice-passes-the-salt", Bob: "bob-builds-boats-2026" };
 const BIN = fileURLToPath(new URL("../../packages/cli/dist/bin.js", import.meta.url));
@@ -213,7 +214,7 @@ try {
   await alice.waitForSelector('.contact-chip:has-text("Bob")', { timeout: 15000 });
   ok("lock and unlock go through the daemon");
 
-  // the daemon gone: the page says so, and finds it again when it is back
+  // the daemon gone: the page says so
   daemon.child.kill("SIGTERM");
   await alice.waitForSelector("text=is not answering", { timeout: 10000 });
   ok("Alice's page reports the daemon gone");

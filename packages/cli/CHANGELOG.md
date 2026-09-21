@@ -20,6 +20,15 @@
   name as before. `readConfig`, `readKeystore`, `createVaultKey`,
   `VaultConfig` and `KeyRef` leave the library with them; `vaultStatus`
   is what `status` reads.
+- **A `.estoc` that stood open to others is closed to 0700** by every
+  command that takes the folder, before anything is written into it.
+- **`object render --template` is rendered by `mustache`.** An escaped
+  tag now also escapes `'`, so a value stays inside an attribute quoted
+  either way; `/`, `` ` `` and `=` come out as entities too, and an
+  array under `{{key}}` joins with `,`. The help names the body's key as
+  it is, `{{{bodyHtml}}}`.
+- Node 22.13 is the oldest that runs it, which is what `node:sqlite`
+  needs.
 
 ## 0.5.0 — 2026-09-01
 

@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { DaemonHost } from "../host.js";
 import { ESTOC_DIR, nodeHost, type NodeHostOptions } from "./host.js";
 import { serveDaemon, type Served } from "./serve.js";
 
@@ -34,16 +35,39 @@ export interface RunOptions extends NodeHostOptions {
  * The daemon as a command: take the folder, mint or read its token, serve,
  * print where, boot. Resolves once the daemon is up; `close()` is the
  * caller's (a signal handler in the bins). A folder that holds a vault
- * this version does not read is refused before anything is written to it.
+ * this version does not read is refused before anything is written to it,
+ * and a start that fails past listening closes what it opened before it
+ * rejects.
  */
 export async function runDaemon(options: RunOptions): Promise<Served> {
   const root = path.resolve(options.root);
-  const dir = path.join(root, ESTOC_DIR);
   const log = options.log ?? ((line) => process.stderr.write(line + "\n"));
-  const host = nodeHost(root, { fetch: options.fetch, WebSocket: options.WebSocket });
-  const refusal = await host.unreadable?.();
+  const files = nodeHost(root, { fetch: options.fetch, WebSocket: options.WebSocket });
+  const refusal = await files.unreadable?.();
   if (refusal != null) throw new Error(refusal);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const dir = await vaultDir(root);
+  const socketFile = path.join(dir, SOCKET_FILE);
+  let folderTaken = false;
+  let published = false;
+  // Word of where this daemon listens is written and removed only while the folder is held: past
+  // the release another daemon may have left its own, which is not this one's to remove.
+  const host: DaemonHost = {
+    ...files,
+    async storage() {
+      const taken = await files.storage();
+      folderTaken = true;
+      return {
+        ...taken,
+        async close() {
+          try {
+            if (published) await rm(socketFile, { force: true });
+          } finally {
+            await taken.close();
+          }
+        },
+      };
+    },
+  };
   const token = options.token ?? (await storedToken(dir));
   const served = await serveDaemon({
     host,
@@ -53,30 +77,45 @@ export async function runDaemon(options: RunOptions): Promise<Served> {
     token,
     appDir: options.appDir ?? undefined,
   });
-  log(`vault:  ${dir}`);
-  log(`socket: ${served.url}`);
-  if (served.appUrl !== null) {
-    log(`open:   ${served.appUrl}`);
+  try {
+    log(`vault:  ${dir}`);
+    log(`socket: ${served.url}`);
+    if (served.appUrl !== null) {
+      log(`open:   ${served.appUrl}`);
+    }
+    const elsewhere = options.app ?? (served.appUrl === null ? "https://app.estoc.dev" : undefined);
+    if (elsewhere !== undefined) {
+      const app = new URL(elsewhere);
+      app.searchParams.set("_daemon", served.url);
+      log(`${served.appUrl === null ? "open:  " : "or:    "} ${app.href}`);
+    }
+    // the daemon comes up on its own so a UI that connects finds it booted;
+    // a UI's own boot() is then a replay
+    await served.daemon.boot();
+    // A boot that could not take the folder leaves the daemon up to say so, with no claim on the folder to publish.
+    if (folderTaken) {
+      await writeFile(socketFile, served.url, { mode: 0o600 });
+      published = true;
+    }
+  } catch (err) {
+    // Nobody was handed the server yet, so nobody else can close it.
+    await served.close();
+    throw err;
   }
-  const elsewhere = options.app ?? (served.appUrl === null ? "https://app.estoc.dev" : undefined);
-  if (elsewhere !== undefined) {
-    const app = new URL(elsewhere);
-    app.searchParams.set("_daemon", served.url);
-    log(`${served.appUrl === null ? "open:  " : "or:    "} ${app.href}`);
-  }
-  // the daemon comes up on its own so a UI that connects finds it booted;
-  // a UI's own boot() is then a replay
-  await served.daemon.boot();
-  // Past the boot the folder is this daemon's: one still waiting for it has nothing to say where it listens.
-  const socketFile = path.join(dir, SOCKET_FILE);
-  await writeFile(socketFile, served.url, { mode: 0o600 });
-  return {
-    ...served,
-    async close() {
-      await served.close();
-      await rm(socketFile, { force: true });
-    },
-  };
+  return served;
+}
+
+/**
+ * `root`/.estoc, made if it is not there and the owner's alone either
+ * way. The files inside are created with default modes, so the
+ * directory is what keeps them from everybody else on the machine, and
+ * one that stood there already may have been made open.
+ */
+export async function vaultDir(root: string): Promise<string> {
+  const dir = path.join(root, ESTOC_DIR);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+  return dir;
 }
 
 /** The built app, if `@estoc/app` is installed next to this package. */
@@ -93,7 +132,6 @@ export async function installedApp(): Promise<string | null> {
   }
 }
 
-/** Wire SIGINT/SIGTERM to closing the daemon and exiting. */
 export function exitOnSignal(served: Served): void {
   const stop = () => {
     void served.close().then(() => process.exit(0));

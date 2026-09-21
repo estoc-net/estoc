@@ -24,7 +24,7 @@
     "src"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "tsc",
@@ -41,9 +41,11 @@
     "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@estoc/post": "workspace:^",
-    "@estoc/vault": "workspace:^"
+    "@estoc/vault": "workspace:^",
+    "mustache": "^4.2.0"
   },
   "devDependencies": {
+    "@types/mustache": "^4.2.6",
     "@types/node": "^22.13.5",
     "typescript": "~5.8.0",
     "vitest": "^3.0.0"

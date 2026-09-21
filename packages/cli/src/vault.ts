@@ -2,7 +2,7 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createVault, inspectRuntime } from "@estoc/agent-core/v3";
 import { RESTORE_EXPLAINED, VAULT_FILE, connect, decode, encode, type Daemon, type DaemonStorage, type Phase, type Port, type Snapshot } from "@estoc/daemon/v3";
-import { ESTOC_DIR, SOCKET_FILE, nodeHost } from "@estoc/daemon/v3/node";
+import { ESTOC_DIR, SOCKET_FILE, nodeHost, vaultDir } from "@estoc/daemon/v3/node";
 import { DatabaseBusy } from "@estoc/event-store/v3";
 import { createSeedKeystore, deriveIdentity, unlockSeedKeystore, type DerivedIdentity } from "@estoc/keystore";
 import { ANCHOR_KEY_NAME, Keys } from "@estoc/vault/v3";
@@ -133,6 +133,7 @@ async function daemonOf(vault: Vault): Promise<Remote> {
 
 /** The folder's files in this process, or the daemon that has them. */
 async function reach(vault: Vault): Promise<Reached> {
+  await vaultDir(vault.root);
   try {
     return { storage: await nodeHost(vault.root).storage() };
   } catch (err) {
@@ -164,7 +165,6 @@ export async function initVault(root: string, label: string, passphrase: string)
   const vault = vaultAt(root);
   await refuseForeign(vault);
   await mkdir(vault.root, { recursive: true });
-  await mkdir(vault.dir, { recursive: true, mode: 0o700 });
   const reached = await reach(vault);
   if ("remote" in reached) {
     const { remote } = reached;
@@ -209,7 +209,6 @@ export interface VaultStatus {
   daemon: { at: string; phase: Phase; detail: string | null } | null;
 }
 
-/** The vault looked at without its passphrase. */
 export async function vaultStatus(vault: Vault): Promise<VaultStatus> {
   await refuseForeign(vault);
   const reached = await reach(vault);

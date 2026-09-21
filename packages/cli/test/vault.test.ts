@@ -1,9 +1,9 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SOCKET_FILE, runDaemon, type Served } from "@estoc/daemon/v3/node";
+import { SOCKET_FILE, nodeHost, runDaemon, type Served } from "@estoc/daemon/v3/node";
 import { hashObject, readObject, signObject, verifyObjectCard } from "@estoc/folder-object";
 import { readTree } from "@estoc/folder-object/fs";
 import { ANCHOR_KEY_NAME, ESTOC_DIR, findVault, initVault, openVault, openVaultKey, vaultStatus } from "../src/vault.js";
@@ -53,6 +53,21 @@ describe("initVault", () => {
   it("keeps .estoc to its owner", async () => {
     const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
     expect((await stat(vault.dir)).mode & 0o777).toBe(0o700);
+  });
+
+  it("closes a .estoc that stood open to others before anything is written into it", async () => {
+    for (const held of [false, true]) {
+      const root = path.join(base, held ? "held" : "free");
+      await mkdir(path.join(root, ESTOC_DIR), { recursive: true });
+      await chmod(path.join(root, ESTOC_DIR), 0o755);
+      if (held) {
+        await daemonOn(root);
+        expect((await stat(path.join(root, ESTOC_DIR))).mode & 0o777).toBe(0o700);
+        await chmod(path.join(root, ESTOC_DIR), 0o755);
+      }
+      const { vault } = await initVault(root, "v", PASSPHRASE);
+      expect((await stat(vault.dir)).mode & 0o777).toBe(0o700);
+    }
   });
 
   it("refuses a folder that holds a vault already, and leaves it as it is", async () => {
@@ -166,5 +181,39 @@ describe("a folder a daemon holds", () => {
     await daemonOn(root);
     await rm(path.join(vault.dir, SOCKET_FILE));
     await expect(vaultStatus(vault)).rejects.toThrow(/held by another process/);
+  });
+
+  it("leaves the word of the daemon that took the folder over alone", async () => {
+    const root = path.join(base, "v");
+    const { vault } = await initVault(root, "v", PASSPHRASE);
+    const first = await daemonOn(root);
+    const waiting = runDaemon({ root, port: 0, appDir: null, log: () => undefined });
+
+    await first.close();
+    const second = await waiting;
+    daemons = [second];
+    expect(await readFile(path.join(vault.dir, SOCKET_FILE), "utf8")).toBe(second.url);
+
+    await first.close();
+    expect(await readFile(path.join(vault.dir, SOCKET_FILE), "utf8")).toBe(second.url);
+    expect(await vaultStatus(vault)).toMatchObject({ daemon: { phase: "locked" } });
+  });
+
+  it("gives back the port and the folder when it cannot come up", async () => {
+    const root = path.join(base, "v");
+    const { vault } = await initVault(root, "v", PASSPHRASE);
+    const failures: { options: Partial<Parameters<typeof runDaemon>[0]>; error: RegExp }[] = [
+      { options: { app: "not a url" }, error: /Invalid URL/ },
+      { options: {}, error: /EISDIR/ },
+    ];
+    await mkdir(path.join(vault.dir, SOCKET_FILE));
+    for (const { options, error } of failures) {
+      const lines: string[] = [];
+      await expect(runDaemon({ root, port: 0, appDir: null, log: (line) => lines.push(line), ...options })).rejects.toThrow(error);
+
+      const socket = new URL(lines.find((line) => line.startsWith("socket:"))!.split(/\s+/)[1]!);
+      await expect(fetch(`http://${socket.host}/`)).rejects.toThrow();
+      await (await nodeHost(root).storage()).close();
+    }
   });
 });
