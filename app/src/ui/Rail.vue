@@ -23,7 +23,6 @@ async function moveMediator(did: string) {
 }
 
 const unknownRegistrations = computed(() => (state.lines?.connections ?? []).flatMap((c) => c.unknownRegistrations));
-const unknownStillHeld = computed(() => (state.lines?.connections ?? []).flatMap((c) => c.unknownRegistrations.filter((did) => c.reconciled?.refused.includes(did) === true)));
 // the line to the selected mediator, which only the running agent knows
 const line = computed(() => state.lines?.connections.find((c) => c.mediationId === mediation.value?.mediationId) ?? null);
 
@@ -241,9 +240,6 @@ function forget() {
         vault has no record of creating ({{ unknownRegistrations.map(shortDid).join(", ") }}). This vault registers only its own addresses, so
         it asked the mediator to take them off and created nothing for them. This vault and the mediator disagree about what was registered; a vault restored from a backup older
         than those addresses is one way that happens.
-      </p>
-      <p v-if="unknownStillHeld.length" class="status-line error" data-unknown-still-held>
-        The mediator would not take off {{ unknownStillHeld.map(shortDid).join(", ") }}: what is sent there still reaches this account, and this vault has no key to read it.
       </p>
     </div>
 

@@ -13,7 +13,8 @@
   whichever reconciliation over the line found them — a connection, a
   grant, a disclosure, a send (`watchUnknownRegistrations`) — since a
   reconciliation asks for their removal and the next reports nothing of
-  one the mediator took off; one it would not is in `refused`.
+  one the mediator took off. The list is what was found, not what still
+  stands at the mediator.
 - `openVault` takes `resetIdentity` (`OpenVaultOptions`): a fresh replica
   ID and store generation as the runtime opens, its history untouched.
 

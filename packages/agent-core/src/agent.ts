@@ -83,8 +83,8 @@ export interface Connection {
    * `UNKNOWN_REGISTRATIONS_KEPT` of them, whatever the reconciliation
    * was for: a connection, a grant, a disclosure, a send. Each was
    * asked to be removed, and one the mediator took off is not reported
-   * by the next reconciliation; whether one still stands is in
-   * `reconciled.refused`.
+   * by the next reconciliation. This is what was found, not what
+   * stands: nothing here says whether the mediator took one off.
    */
   unknownRegistrations: Did[];
   drained: Drained | null;
