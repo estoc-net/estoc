@@ -118,11 +118,32 @@ Before storing a Routing 2.0 `forward`, the mediator MUST require:
 2. a valid `body.next` that maps to the mediation account itself or a recipient
    currently registered to that account;
 3. exactly one attachment;
-4. attachment `media_type == "application/didcomm-encrypted+json"`;
+4. an attachment whose `media_type`, when present and non-null, equals
+   `"application/didcomm-encrypted+json"`; an absent or null `media_type` is
+   unspecified and does not bypass the checks below;
 5. exactly one of `data.json` or `data.base64`, and no `data.links`;
-6. after decoding, one DIDComm encrypted-message JSON serialization with
-   non-empty `protected`, `recipients`, `iv`, `ciphertext`, and `tag`; and
+6. after decoding, one DIDComm encrypted-message JSON serialization (General
+   JWE JSON): base64url `protected`, `iv`, `ciphertext` and `tag`, and a
+   non-empty `recipients` array whose entries each carry `header.kid` and a
+   base64url `encrypted_key`. For every recipient, the decoded protected
+   header, the shared unprotected header and the per-recipient header MUST
+   have pairwise-disjoint member names, and their union MUST give `alg` and
+   `enc` as non-empty strings; and
 7. normalized bytes within the advertised account and message limits.
+
+Senders SHOULD set the attachment `media_type`; stock Routing 2.0 wrappers
+leave it out, so receivers apply the same checks either way and reject only a
+declared different type.
+
+No JSON object in the forward plaintext or in the decoded envelope may repeat
+a member name. The rule is the same for `data.json` and `data.base64`, and it
+is judged on the sender's JSON text: a parsed message that has already folded
+repeated names or converted numbers is not a basis for it. `data.base64` MUST
+decode as base64url without ignoring invalid characters and then as
+well-formed UTF-8. Unknown members, numbers included, are kept and take part
+in canonicalization, so both carriers of one envelope normalize to the same
+bytes. The mediator MUST NOT limit the inner `alg` or `enc` to algorithms it
+implements, and MUST NOT re-encode `protected`.
 
 Validation is syntactic. The mediator MUST NOT decrypt the inner application
 envelope or possess an application content-decryption key. It RFC-8785-
@@ -160,7 +181,10 @@ The mediator MUST bound normalized envelope size, retained ciphertext bytes,
 retained message count, registered recipients, recipient-update rate, pickup
 batch size and retention time. A quota or validation failure MUST NOT leave a
 partially stored package. Anonymous routing responses SHOULD avoid becoming a
-precise account- or recipient-existence oracle.
+precise account- or recipient-existence oracle: an unknown `body.next`, a full
+queue and a package conflict share one refusal. An acceptance still discloses
+that `body.next` takes mail at this mediator at that moment; that is the cost
+of acceptance meaning `submitted`.
 
 <a id="4-vault-first-sending-and-commit-boundaries"></a>
 
