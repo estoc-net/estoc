@@ -141,6 +141,14 @@ async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; fo
     fresh: () => `vault-${n++}`,
     open: (target, mode) => pool.open(target, mode),
     importFile: (target, bytes) => pool.importFile(target, bytes),
+    writeSchema: async (target, sql) => {
+      const db = await pool.open(target, "readwrite");
+      try {
+        db.exec(`PRAGMA writable_schema = ON; ${sql}; PRAGMA writable_schema = OFF`);
+      } finally {
+        db.close();
+      }
+    },
     fileBytes: (target) => pool.exportFile(target),
     remove: (target) => pool.remove(target),
     utf16,

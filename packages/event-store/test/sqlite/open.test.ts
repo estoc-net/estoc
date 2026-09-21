@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { createSeedKeystore } from "@estoc/keystore";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -113,6 +114,14 @@ describe("the open cases on node:sqlite files", () => {
     fresh,
     open: async (target, mode) => open(target, mode, mode === "create" ? "delete" : undefined),
     importFile: (target, bytes) => writeFile(target, bytes),
+    writeSchema: async (target, sql) => {
+      const db = new DatabaseSync(target, { defensive: false });
+      try {
+        db.exec(`PRAGMA writable_schema = ON; ${sql}; PRAGMA writable_schema = OFF`);
+      } finally {
+        db.close();
+      }
+    },
     get utf16() {
       return utf16;
     },
