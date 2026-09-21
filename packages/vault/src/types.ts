@@ -1,603 +1,197 @@
 /**
- * The vault's event types: what `data` holds under each
- * `type`, and a reader that tells a line of one of these types from a
- * line that only claims to be. The store knows none of these names;
- * this is the first layer that does.
- *
- * Every type here is a `type` alias and not an interface, so that it is
- * a `JsonObject` to the store's `Event<D>`.
+ * The identifier vocabulary of the version-3 vault and the payload of
+ * each event type. Every kind of value a payload or a runtime interface
+ * names is a distinct nominal type over the validated string it
+ * serializes as, with no wrapper and no prefix. Nothing here checks a
+ * value: the parser or the derivation that produces one is the check,
+ * and a cast is not. Event identity comes from `@estoc/event-store`,
+ * content identity from `@estoc/dasl` through it.
  */
 
-import type { Cid, Event, JsonObject, JsonValue } from "@estoc/event-store";
-import { isCid, isDeviceId, isUuidv7 } from "@estoc/event-store";
+import type { AuthorId, Cid, EventId, JsonObject } from "@estoc/event-store";
 
-// ---- channels ---------------------------------------------------------------
+export type { AuthorId, Cid, EventId };
 
-/** One key of ours and one key of theirs: every observation carries both, `null` a value. */
-export type ChannelKey = {
-  /** the name of a key of ours; null: no key of ours was involved */
-  myKey: string | null;
-  /** the fingerprint of a public key of theirs (`peerKeyOf`); null: the sender is anonymous */
-  peerKey: string | null;
-};
+export type EntityId<Kind extends string> = string & { readonly __entity: Kind };
 
-export type EnvelopeKind = "authcrypt" | "anoncrypt" | "signed";
+/** A vault message entity, or an inbound observation group. */
+export type MessageId = EntityId<"message">;
+export type ContactId = EntityId<"contact">;
+/** A local communication-DID entity, not the DID string. */
+export type DidId = EntityId<"did">;
+export type RouteId = EntityId<"route">;
+export type MediationId = EntityId<"mediation">;
+export type PackageId = EntityId<"package">;
+/** A channel-scoped automatic execution. */
+export type ExecutionId = EntityId<"execution">;
+/** Deferred configuration events only. */
+export type SyncId = EntityId<"sync">;
+export type ReplicaId = AuthorId;
 
-export type ChannelFirstSeen = ChannelKey & {
-  /** the peer's full public key, as a did:key or multibase; absent when `peerKey` is null */
-  peerPublicKey?: string;
-  kind: EnvelopeKind;
-  /** the DID the key wore when first seen; absent when there was none */
-  firstDid?: string;
-};
+/** A received DIDComm plaintext `id`, in the sender's scope. */
+export type WireMessageId = string & { readonly __wireMessageId: unique symbol };
+/** A scoped mediator delivery. */
+export type DeliveryId = string & { readonly __deliveryId: unique symbol };
+export type KeyName = string & { readonly __keyName: unique symbol };
+/** A complete canonical public-key value. */
+export type PublicKey = string & { readonly __publicKey: unique symbol };
+export type Did = string & { readonly __did: unique symbol };
+/** A verification-method DID URL. */
+export type DidUrl = string & { readonly __didUrl: unique symbol };
+/** The derived idempotency key of one automatic effect. */
+export type EffectKey = string & { readonly __effectKey: unique symbol };
+/** An inbound observation's receipt ordinal as it is stored: canonical positive decimal. */
+export type ReceiptOrdinal = string & { readonly __receiptOrdinal: unique symbol };
+/** Unpadded base64url SHA-256 of a canonical projection or plaintext. */
+export type MessageHash = string & { readonly __messageHash: unique symbol };
 
-/** The skeleton of a message: what a thread view needs and nothing a person said. */
-export type Skeleton = ChannelKey & {
-  mid: string;
-  wireId: string;
+/** One of our DIDs and a peer's, both canonical short forms, as an ordered pair: the unit every receipt, intent and continuity fact is scoped to. */
+export type Channel = { localDid: Did; peerDid: Did };
+
+/**
+ * A reference to one event whose type the referencing schema fixes. It
+ * records what the target must be; it is no proof the target is
+ * available or valid.
+ */
+export type EventReference<T extends string> = EventId & { readonly __eventType: T };
+
+// ---- payloads -----------------------------------------------------------
+
+/** An integer count of seconds since the Unix epoch, as DIDComm timing headers carry it. */
+export type EpochSeconds = number;
+
+export type RouteKind = "mediated" | "direct";
+export type DisclosureAs = "oob" | "direct";
+export type DisclosureUses = "one" | "many";
+export type ContactOrigin = "user" | "automatic";
+/** Why an unsubmitted outbound ended: its expiry was reached, or the user cancelled it. */
+export type DeliveryFailureCode = "expired" | "cancelled";
+
+/** The headers of a message that no dedicated field models; none of them a reserved DIDComm name. */
+export type AdditionalHeaders = JsonObject;
+
+/**
+ * The intent an outbound event freezes: what the plaintext will carry,
+ * and the channel it is fixed to. The three effect fields are all null
+ * for a locally initiated send and all non-null for an automatic
+ * effect, where they are the producing tuple and its key; the source
+ * is the exact observation an effect derives from, the rotation the
+ * decision a notification announces.
+ */
+export type MessageOut = {
+  messageId: MessageId;
+  senderDidId: DidId;
+  recipientDid: Did;
   msgType: string;
-  thid?: string;
-  pthid?: string;
-  /** the size of the plaintext */
+  thid: string | null;
+  pthid: string | null;
+  createdTime: EpochSeconds | null;
+  expiresTime: EpochSeconds | null;
+  pleaseAck: string[] | null;
+  ack: string[];
+  headers: AdditionalHeaders;
+  bodyCid: Cid;
+  attachmentCids: Cid[];
+  intentHash: MessageHash;
+  executionId: ExecutionId | null;
+  effectType: string | null;
+  effectKey: EffectKey | null;
+  sourceEventId: EventReference<"message.in"> | null;
+  rotationEventId: EventReference<"did.rotationSelected"> | null;
+};
+
+/** Where an inbound observation arrived: both null for direct transport without them. */
+export type ReceivedVia = { mediationId: MediationId | null; deliveryId: DeliveryId | null };
+
+/**
+ * One durable inbound observation. An anonymous observation has null
+ * `peerResolutionEventId`, `did` and `presentedDid` together; every
+ * other observation names its resolution evidence. `fromPrior` is the
+ * original string off the wire, whatever it turns out to be.
+ */
+export type MessageIn = {
+  messageId: MessageId;
+  wireMessageId: WireMessageId;
+  receiptOrdinal: ReceiptOrdinal;
+  intentHash: MessageHash;
+  plaintextHash: MessageHash;
+  localKeyName: KeyName;
+  msgType: string;
+  peerResolutionEventId: EventReference<"peer.resolved"> | null;
+  presentedDid: Did | null;
+  did: Did | null;
+  thid: string | null;
+  pthid: string | null;
+  createdTime: EpochSeconds | null;
+  expiresTime: EpochSeconds | null;
+  pleaseAck: string[] | null;
+  ack: string[];
+  headers: AdditionalHeaders;
+  fromPrior: string | null;
+  bodyCid: Cid;
+  attachmentCids: Cid[];
   bytes: number;
-  /** the root of the blob holding the plaintext */
-  body: Cid;
-  /** the roots of every blob lifted out of it */
-  attachments: Cid[];
+  receivedVia: ReceivedVia;
 };
 
-/**
- * `did` is present exactly when `peerKey` is: a key is known by its kid,
- * and a kid carries its DID; anonymous, neither. The reader holds the
- * line to it; the union holds a writer's literal to it.
- */
-export type MessageIn = Skeleton &
-  (
-    | {
-        peerKey: string;
-        /** the DID the envelope's sender key was resolved under (`encrypted_from_kid`'s): which DID the key wore at this message */
-        did: string;
-      }
-    | { peerKey: null }
-  ) & {
-    /** a signature that rode inside the encryption */
-    signedBy?: string;
-  };
-
-export type MessageOut = Skeleton;
-
-export type DeliveryOutcome = "sent" | "failed";
-
-export type DeliveryAttempted = ChannelKey & {
-  mid: string;
-  attempt: number;
-  outcome: DeliveryOutcome;
-  error?: string;
-};
-
-export type DeliveryHeld = ChannelKey & { mid: string; because: "user" | "imported" };
-
-export type ProfileNameClaimed = ChannelKey & { mid: string; name: string };
-
-export type ProfileShared = ChannelKey & { mid: string };
-
-export type PeerResolved = ChannelKey & {
-  did: string;
-  /** every key the document listed, as did:key or multibase: context, never an edge */
-  keys: string[];
-  service?: string | null;
-};
-
-export type PeerRotated = ChannelKey & {
-  from: string;
-  to: string;
-  fromPrior: string;
-  mid: string;
-};
-
-export type EraseCause = "user" | "contact-deleted";
-
-export type MessageErased = ChannelKey & {
-  mid: string;
-  /** roots: the body, some or all attachments */
-  drop: Cid[];
-  because: EraseCause;
-};
-
-// ---- identity and devices ---------------------------------------------------
-
-export type DeviceMinted = Record<string, never>;
-
-export type DidMinted = {
-  key: string;
-  did: string;
-  /** the routing DID in its service; null for a DID only ever picked up from */
-  routingDid: string | null;
-  /** which device's mediation the routing DID came from; null with a null `routingDid` */
-  mediation: string | null;
-};
-
-export type DidRegistered = { key: string };
-
-export type PublishedAs = "oob" | "profile";
-export type Uses = "one" | "many";
-
-export type DidPublished = {
-  key: string;
-  as: PublishedAs;
-  uses: Uses;
-  oobId?: string;
-  goal?: string;
-};
-
-export type DidRetired = { key: string; because: string };
-
-export type MediationCreated = {
-  id: string;
-  mediatorDid: string;
-  me: { key: string; did: string };
-};
-
-export type MediationGranted = { id: string; routingDid: string };
-
-export type MediationRetired = { id: string; because: string };
-
-export type IdentityLabel = { name: string };
-
-export type DeviceLabel = { dev: string; name: string };
-
-export type DeviceRetired = { dev: string; because: string };
-
-export type ExtensionInstalled = {
-  ext: string;
-  name: string;
-  /** provisional: the root of a signed object — a name, never a reference */
-  object?: string;
-};
-
-export type ExtensionRemoved = { ext: string };
-
-export type ExtensionPurged = { ext: string };
-
-// ---- contacts ---------------------------------------------------------------
-
-export type ContactCreated = { cid: string };
-
-export type ContactPetname = { cid: string; name: string };
-
-/** `cid` and any number of boolean flags, each latest-wins on its own. */
-export type ContactFlag = { cid: string; [flag: string]: string | boolean };
-
-export type ContactUseKey = { cid: string; key: string; because: string };
-
-export type AttachCause = "invitation" | "accepted" | "manual";
-
-export type ContactAttached = ChannelKey & { cid: string; because: AttachCause; oobId?: string };
-
-export type ContactDetached = ChannelKey & { cid: string };
-
-export type ContactMerged = { cid: string; from: string };
-
-export type ContactDeleted = { cid: string };
-
-// ---- the types, by name -----------------------------------------------------
-
-/** `data` by `type`: the vault's own types, and what each line of them carries. */
+/** The payload of each version-3 event type, by type name. */
 export type VaultData = {
-  "channel.firstSeen": ChannelFirstSeen;
-  "message.in": MessageIn;
-  "message.out": MessageOut;
-  "delivery.attempted": DeliveryAttempted;
-  "delivery.held": DeliveryHeld;
-  "profile.nameClaimed": ProfileNameClaimed;
-  "profile.shared": ProfileShared;
-  "peer.resolved": PeerResolved;
-  "peer.rotated": PeerRotated;
-  "message.erased": MessageErased;
-  "device.minted": DeviceMinted;
-  "did.minted": DidMinted;
-  "did.registered": DidRegistered;
-  "did.published": DidPublished;
-  "did.retired": DidRetired;
-  "mediation.created": MediationCreated;
-  "mediation.granted": MediationGranted;
-  "mediation.retired": MediationRetired;
-  "identity.label": IdentityLabel;
-  "device.label": DeviceLabel;
-  "device.retired": DeviceRetired;
-  "extension.installed": ExtensionInstalled;
-  "extension.removed": ExtensionRemoved;
-  "extension.purged": ExtensionPurged;
-  "contact.created": ContactCreated;
-  "contact.petname": ContactPetname;
-  "contact.flag": ContactFlag;
-  "contact.useKey": ContactUseKey;
-  "contact.attached": ContactAttached;
-  "contact.detached": ContactDetached;
-  "contact.merged": ContactMerged;
-  "contact.deleted": ContactDeleted;
-};
-
-export type VaultType = keyof VaultData;
-
-/** An event of one of the vault's types, `data` read. */
-export type VaultEvent<T extends VaultType = VaultType> = T extends VaultType ? Event<VaultData[T]> & { type: T } : never;
-
-/** The observations: every one carries a `ChannelKey`. */
-export const OBSERVATIONS = [
-  "channel.firstSeen",
-  "message.in",
-  "message.out",
-  "delivery.attempted",
-  "profile.nameClaimed",
-  "profile.shared",
-  "peer.resolved",
-  "peer.rotated",
-] as const satisfies readonly VaultType[];
-
-/** The two decisions that carry a pair, because they are about one message in it. */
-export const CHANNEL_DECISIONS = ["delivery.held", "message.erased"] as const satisfies readonly VaultType[];
-
-export function isVaultType(type: string): type is VaultType {
-  return Object.hasOwn(READERS, type);
-}
-
-/** The key names: `anchor`, `mediation/<id>/me`, `did/<id>`. */
-export const KEY_ANCHOR = "anchor";
-export const DID_KEY_PREFIX = "did/";
-export const MEDIATION_KEY_PREFIX = "mediation/";
-
-export function didKeyName(id: string): string {
-  return `${DID_KEY_PREFIX}${id}`;
-}
-
-export function mediationKeyName(id: string): string {
-  return `${MEDIATION_KEY_PREFIX}${id}/me`;
-}
-
-/** A `mediation/<id>/me` key: the mediator's channels, not any contact's. */
-export function isMediationKey(name: string | null): boolean {
-  return name !== null && name.startsWith(MEDIATION_KEY_PREFIX);
-}
-
-/** Two pairs name one channel. */
-export function sameChannel(a: ChannelKey, b: ChannelKey): boolean {
-  return a.myKey === b.myKey && a.peerKey === b.peerKey;
-}
-
-/** A pair as a map key; not a format, not written anywhere: a channel has no id. */
-export function channelId(pair: ChannelKey): string {
-  return JSON.stringify([pair.myKey, pair.peerKey]);
-}
-
-// ---- reading ----------------------------------------------------------------
-
-/** A line of one of the vault's types whose `data` is not what the type says. */
-export class Malformed extends Error {
-  constructor(
-    readonly event: Event,
-    readonly why: string
-  ) {
-    super(`${event.type} ${event.eid}: ${why}`);
-    this.name = "Malformed";
-  }
-}
-
-type Reader<T extends VaultType> = (data: JsonObject) => VaultData[T];
-
-class Check {
-  constructor(private readonly data: JsonObject) {}
-
-  private get(field: string): JsonValue | undefined {
-    return Object.hasOwn(this.data, field) ? this.data[field] : undefined;
-  }
-
-  str(field: string): string {
-    const value = this.get(field);
-    if (typeof value !== "string" || value === "") {
-      throw `${field} is not a non-empty string`;
-    }
-    return value;
-  }
-
-  optStr(field: string): string | undefined {
-    const value = this.get(field);
-    if (value === undefined) {
-      return undefined;
-    }
-    if (typeof value !== "string") {
-      throw `${field} is not a string`;
-    }
-    return value;
-  }
-
-  nullableStr(field: string): string | null {
-    const value = this.get(field);
-    if (value === null) {
-      return null;
-    }
-    if (typeof value !== "string" || value === "") {
-      throw `${field} is not a non-empty string or null`;
-    }
-    return value;
-  }
-
-  oneOf<V extends string>(field: string, values: readonly V[]): V {
-    const value = this.str(field);
-    if (!(values as readonly string[]).includes(value)) {
-      throw `${field} is not one of ${values.join(", ")}`;
-    }
-    return value as V;
-  }
-
-  int(field: string, min: number): number {
-    const value = this.get(field);
-    if (typeof value !== "number" || !Number.isInteger(value) || value < min) {
-      throw `${field} is not an integer ≥ ${min}`;
-    }
-    return value;
-  }
-
-  strings(field: string): string[] {
-    const value = this.get(field);
-    if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
-      throw `${field} is not a list of strings`;
-    }
-    return value as string[];
-  }
-
-  cid(field: string): Cid {
-    const value = this.str(field);
-    if (!isCid(value)) {
-      throw `${field} is not a profile CID`;
-    }
-    return value;
-  }
-
-  cids(field: string): Cid[] {
-    const value = this.strings(field);
-    if (!value.every(isCid)) {
-      throw `${field} holds a name that is not a profile CID`;
-    }
-    return value;
-  }
-
-  uuid(field: string): string {
-    const value = this.str(field);
-    if (!isUuidv7(value)) {
-      throw `${field} is not a uuidv7`;
-    }
-    return value;
-  }
-
-  dev(field: string): string {
-    const value = this.str(field);
-    if (!isDeviceId(value)) {
-      throw `${field} is not a device id`;
-    }
-    return value;
-  }
-
-  key(field: string): string {
-    const value = this.str(field);
-    if (!KEY_NAME.test(value)) {
-      throw `${field} is not a key name`;
-    }
-    return value;
-  }
-
-  channel(): ChannelKey {
-    const myKey = this.nullableStr("myKey");
-    if (myKey !== null && !KEY_NAME.test(myKey)) {
-      throw "myKey is not a key name";
-    }
-    const peerKey = this.nullableStr("peerKey");
-    if (peerKey !== null && !PEER_KEY.test(peerKey)) {
-      throw "peerKey is not a fingerprint";
-    }
-    return { myKey, peerKey };
-  }
-
-  /** every boolean field but `cid`: a flag each */
-  flags(): Record<string, boolean> {
-    const flags: Record<string, boolean> = {};
-    for (const [field, value] of Object.entries(this.data)) {
-      if (field === "cid") {
-        continue;
-      }
-      if (typeof value !== "boolean") {
-        throw `${field} is not a boolean flag`;
-      }
-      flags[field] = value;
-    }
-    return flags;
-  }
-}
-
-/** A key name as `@estoc/keystore` v3 has it. */
-export const KEY_NAME = /^[A-Za-z0-9._/-]+$/;
-/** A peer key: 26 characters of base32 lower. */
-export const PEER_KEY = /^[a-z2-7]{26}$/;
-
-function optional<T extends object>(fields: { [K in keyof T]: T[K] | undefined }): T {
-  const out: Partial<T> = {};
-  for (const [field, value] of Object.entries(fields)) {
-    if (value !== undefined) {
-      (out as Record<string, unknown>)[field] = value;
-    }
-  }
-  return out as T;
-}
-
-function skeleton(c: Check): Skeleton {
-  return {
-    ...c.channel(),
-    mid: c.uuid("mid"),
-    wireId: c.str("wireId"),
-    msgType: c.str("msgType"),
-    ...optional({ thid: c.optStr("thid"), pthid: c.optStr("pthid") }),
-    bytes: c.int("bytes", 0),
-    body: c.cid("body"),
-    attachments: c.cids("attachments"),
+  "identity.label": { name: string };
+  "peer.resolved": {
+    localKeyName: KeyName;
+    peerPublicKey: PublicKey;
+    presentedDid: Did;
+    did: Did;
+    documentCid: Cid;
+    authenticationMethodIds: DidUrl[];
+    keyAgreementMethodIds: DidUrl[];
+    service: string | null;
   };
-}
-
-const READERS: { [T in VaultType]: Reader<T> } = {
-  "channel.firstSeen": (data) => {
-    const c = new Check(data);
-    const pair = c.channel();
-    const peerPublicKey = c.optStr("peerPublicKey");
-    if ((peerPublicKey === undefined) !== (pair.peerKey === null)) {
-      throw "peerPublicKey is present exactly when peerKey is";
-    }
-    return { ...pair, ...optional({ peerPublicKey, firstDid: c.optStr("firstDid") }), kind: c.oneOf("kind", ["authcrypt", "anoncrypt", "signed"]) };
-  },
-  "message.in": (data) => {
-    const c = new Check(data);
-    const base = skeleton(c);
-    const did = c.optStr("did");
-    if ((did === undefined) !== (base.peerKey === null)) {
-      throw "did is present exactly when peerKey is";
-    }
-    const signed = optional({ signedBy: c.optStr("signedBy") });
-    return base.peerKey === null ? { ...base, peerKey: null, ...signed } : { ...base, peerKey: base.peerKey, did: did as string, ...signed };
-  },
-  "message.out": (data) => skeleton(new Check(data)),
-  "delivery.attempted": (data) => {
-    const c = new Check(data);
-    return { ...c.channel(), mid: c.uuid("mid"), attempt: c.int("attempt", 1), outcome: c.oneOf("outcome", ["sent", "failed"]), ...optional({ error: c.optStr("error") }) };
-  },
-  "delivery.held": (data) => {
-    const c = new Check(data);
-    return { ...c.channel(), mid: c.uuid("mid"), because: c.oneOf("because", ["user", "imported"]) };
-  },
-  "profile.nameClaimed": (data) => {
-    const c = new Check(data);
-    return { ...c.channel(), mid: c.uuid("mid"), name: c.str("name") };
-  },
-  "profile.shared": (data) => {
-    const c = new Check(data);
-    return { ...c.channel(), mid: c.uuid("mid") };
-  },
-  "peer.resolved": (data) => {
-    const c = new Check(data);
-    const service = Object.hasOwn(data, "service") ? c.nullableStr("service") : undefined;
-    return { ...c.channel(), did: c.str("did"), keys: c.strings("keys"), ...optional({ service }) };
-  },
-  "peer.rotated": (data) => {
-    const c = new Check(data);
-    return { ...c.channel(), from: c.str("from"), to: c.str("to"), fromPrior: c.str("fromPrior"), mid: c.uuid("mid") };
-  },
-  "message.erased": (data) => {
-    const c = new Check(data);
-    return { ...c.channel(), mid: c.uuid("mid"), drop: c.cids("drop"), because: c.oneOf("because", ["user", "contact-deleted"]) };
-  },
-  "device.minted": (data) => {
-    if (Object.keys(data).length !== 0) {
-      throw "data is not empty";
-    }
-    return {};
-  },
-  "did.minted": (data) => {
-    const c = new Check(data);
-    const routingDid = c.nullableStr("routingDid");
-    const mediation = c.nullableStr("mediation");
-    if (routingDid === null && mediation !== null) {
-      throw "mediation names a mediation but routingDid is null";
-    }
-    return { key: c.key("key"), did: c.str("did"), routingDid, mediation };
-  },
-  "did.registered": (data) => ({ key: new Check(data).key("key") }),
-  "did.published": (data) => {
-    const c = new Check(data);
-    return { key: c.key("key"), as: c.oneOf("as", ["oob", "profile"]), uses: c.oneOf("uses", ["one", "many"]), ...optional({ oobId: c.optStr("oobId"), goal: c.optStr("goal") }) };
-  },
-  "did.retired": (data) => {
-    const c = new Check(data);
-    return { key: c.key("key"), because: c.str("because") };
-  },
-  "mediation.created": (data) => {
-    const c = new Check(data);
-    const me = data["me"];
-    if (typeof me !== "object" || me === null || Array.isArray(me)) {
-      throw "me is not an object";
-    }
-    const m = new Check(me);
-    return { id: c.uuid("id"), mediatorDid: c.str("mediatorDid"), me: { key: m.key("key"), did: m.str("did") } };
-  },
-  "mediation.granted": (data) => {
-    const c = new Check(data);
-    return { id: c.uuid("id"), routingDid: c.str("routingDid") };
-  },
-  "mediation.retired": (data) => {
-    const c = new Check(data);
-    return { id: c.uuid("id"), because: c.str("because") };
-  },
-  "identity.label": (data) => ({ name: new Check(data).str("name") }),
-  "device.label": (data) => {
-    const c = new Check(data);
-    return { dev: c.dev("dev"), name: c.str("name") };
-  },
-  "device.retired": (data) => {
-    const c = new Check(data);
-    return { dev: c.dev("dev"), because: c.str("because") };
-  },
-  "extension.installed": (data) => {
-    const c = new Check(data);
-    return { ext: c.uuid("ext"), name: c.str("name"), ...optional({ object: c.optStr("object") }) };
-  },
-  "extension.removed": (data) => ({ ext: new Check(data).uuid("ext") }),
-  "extension.purged": (data) => ({ ext: new Check(data).uuid("ext") }),
-  "contact.created": (data) => ({ cid: new Check(data).uuid("cid") }),
-  "contact.petname": (data) => {
-    const c = new Check(data);
-    return { cid: c.uuid("cid"), name: c.str("name") };
-  },
-  "contact.flag": (data) => {
-    const c = new Check(data);
-    return { cid: c.uuid("cid"), ...c.flags() };
-  },
-  "contact.useKey": (data) => {
-    const c = new Check(data);
-    return { cid: c.uuid("cid"), key: c.key("key"), because: c.str("because") };
-  },
-  "contact.attached": (data) => {
-    const c = new Check(data);
-    return { ...c.channel(), cid: c.uuid("cid"), because: c.oneOf("because", ["invitation", "accepted", "manual"]), ...optional({ oobId: c.optStr("oobId") }) };
-  },
-  "contact.detached": (data) => {
-    const c = new Check(data);
-    return { ...c.channel(), cid: c.uuid("cid") };
-  },
-  "contact.merged": (data) => {
-    const c = new Check(data);
-    const cid = c.uuid("cid");
-    const from = c.uuid("from");
-    if (from === cid) {
-      throw "from is the contact itself";
-    }
-    return { cid, from };
-  },
-  "contact.deleted": (data) => ({ cid: new Check(data).uuid("cid") }),
+  "mediation.created": { mediationId: MediationId; mediatorDid: Did; me: { keyName: KeyName; did: Did } };
+  "mediation.granted": { mediationId: MediationId; routingDid: Did };
+  "mediation.selected": { mediationId: MediationId };
+  "mediation.retired": { mediationId: MediationId; because: string };
+  "did.created": { didId: DidId; did: Did; longFormDid: Did; boundRouteId: RouteId };
+  "route.configured":
+    | { routeId: RouteId; kind: "mediated"; mediationId: MediationId; endpoint: null }
+    | { routeId: RouteId; kind: "direct"; mediationId: null; endpoint: string };
+  "route.retired": { routeId: RouteId; because: string };
+  "did.disclosed": { didId: DidId; as: DisclosureAs; uses: DisclosureUses; oobId: string | null; goal: string | null };
+  "did.retired": { didId: DidId; because: string };
+  "invitation.consumed": { disclosureEventId: EventReference<"did.disclosed">; sourceEventId: EventReference<"message.in"> };
+  "did.rotationSelected": { fromDidId: DidId; peerDid: Did; toDidId: DidId; sourceEventId: EventReference<"message.in"> | null; fromPrior: string };
+  "channel.blocked": { localDid: Did; peerDid: Did; includeSuccessors: boolean };
+  "contact.created": { contactId: ContactId; because: ContactOrigin };
+  "contact.petname": { contactId: ContactId; name: string };
+  "contact.flag": { contactId: ContactId; flag: string; value: boolean };
+  "contact.useDid": { contactId: ContactId; didId: DidId; because: string };
+  "contact.channelsSet": { contactId: ContactId; channels: Channel[] };
+  "contact.merged": { contactId: ContactId; fromContactId: ContactId };
+  "contact.deleted": { contactId: ContactId };
+  "message.out": MessageOut;
+  "message.prepared": {
+    messageId: MessageId;
+    packageId: PackageId;
+    senderDidId: DidId;
+    localKeyName: KeyName;
+    recipientDid: Did;
+    peerResolutionEventId: EventReference<"peer.resolved">;
+    fromPrior: string | null;
+    intentHash: MessageHash;
+    plaintextHash: MessageHash;
+    envelopeCid: Cid;
+  };
+  "delivery.submitted": { messageId: MessageId; packageId: PackageId };
+  "delivery.failed": { messageId: MessageId; code: DeliveryFailureCode };
+  "delivery.acknowledged": {
+    messageId: MessageId;
+    localKeyName: KeyName;
+    peerPublicKey: PublicKey;
+    ackMessageId: MessageId;
+    ackWireMessageId: WireMessageId;
+  };
+  "message.in": MessageIn;
+  "message.erased": { messageId: MessageId; dropCids: Cid[]; because: string };
 };
 
-/** Every type this document names, in the order above. */
-export const VAULT_TYPES = Object.keys(READERS) as VaultType[];
-
-/**
- * The event as one of the vault's types, its `data` read; `null` for a
- * type this document does not name (an extension's, a later version's:
- * not this fold's to read). Throws `Malformed` on a type it names whose
- * `data` is not what the type says.
- */
-export function readVaultEvent(event: Event): VaultEvent | null {
-  if (!isVaultType(event.type)) {
-    return null;
-  }
-  const read = READERS[event.type] as (data: JsonObject) => JsonObject;
-  try {
-    return { ...event, data: read(event.data) } as VaultEvent;
-  } catch (err) {
-    throw new Malformed(event, typeof err === "string" ? err : err instanceof Error ? err.message : String(err));
-  }
-}
+export type VaultEventType = keyof VaultData;

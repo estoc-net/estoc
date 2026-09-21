@@ -33,28 +33,13 @@ export interface DidKeySigner extends Signer {
 }
 
 /**
- * One derived key in a v3 store. Nothing here is secret, and nothing here
- * is needed to derive the key: the name alone is the derivation path. The
- * entry is a cache so listing needs no unlock.
- */
-export interface DerivedKeyEntry {
-  /** The derivation path — see `isValidKeyName`. Never renamed, never reused. */
-  name: string;
-  /** did:key of the Ed25519 half, cached so listing needs no unlock. */
-  did: string;
-  /** ISO 8601 time this store first derived the key. */
-  createdAt: string;
-}
-
-/**
- * The v3 store — one sealed seed, every key derived from it by name.
- * Unlock once, keep the SeedKey, derive forever; the seed is the only thing
- * that cannot be regenerated. `keys` is a cache: two stores around the
- * same seed can list different keys and still derive each other's.
+ * The store: one sealed seed, every key derived from it by name. Unlock
+ * once, keep the SeedKey, derive forever; the seed is the only thing that
+ * cannot be regenerated, and which names are in use is for whoever holds
+ * the store to record.
  */
 export interface SeedKeystoreDocument {
   version: 3;
   /** The 32-byte seed as a compact JWE (PBES2-HS512+A256KW / A256GCM). */
   seedJwe: string;
-  keys: DerivedKeyEntry[];
 }

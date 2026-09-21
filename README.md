@@ -5,14 +5,14 @@ The Estoc web app and the libraries it is made of, in one pnpm workspace:
 | path | package | what |
 |---|---|---|
 | `app/` | `@estoc/app` | the offline-first DIDComm v2 messenger you install as a web app — [app.estoc.dev](https://app.estoc.dev); published as its built files, for `estoc serve` |
-| `packages/agent-core/` | [`@estoc/agent-core`](https://www.npmjs.com/package/@estoc/agent-core) | the agent: mediation, pickup, live delivery, pairwise DIDs, invitations, over an `.estoc` vault |
-| `packages/vault/` | [`@estoc/vault`](https://www.npmjs.com/package/@estoc/vault) | what the vault's events mean ([`docs/vault-events.md`](docs/vault-events.md)): the event types, the folds that turn them into contacts, channels, messages, keys, invitations and deliveries, the procedures (erase, delete, merge), keys minted by name from the seed |
-| `packages/event-store/` | `@estoc/event-store` | the vault as an event store ([`docs/event-store.md`](docs/event-store.md)): envelope and canonical order, the `EventStore` / `BlobStore` / `FileStore` interfaces, the folder store, interchange (snapshot, import, restore, zip) |
+| `packages/agent-core/` | [`@estoc/agent-core`](https://www.npmjs.com/package/@estoc/agent-core) | the agent: mediation, pickup, live delivery, channels of did:peer:4 pairs, rotation, invitations, over an `.estoc` vault |
+| `packages/vault/` | [`@estoc/vault`](https://www.npmjs.com/package/@estoc/vault) | what the vault's events mean ([vault events](docs/replica-model/vault-events.md), [channels](docs/replica-model/channels.md)): the event schemas, the folds that turn them into channels, contacts, invitations, inbound and outbound messages, the procedures, keys derived by name from the seed |
+| `packages/event-store/` | `@estoc/event-store` | the vault as an event store ([event store](docs/replica-model/event-store.md), [SQLite vault](docs/replica-model/vault-sqlite.md)): envelope and canonical order, the `EventStore` / `ObjectStore` / `Vault` interfaces, the SQLite vault on Node and in a browser Worker, the portable snapshot (export, restore, import) |
 | `packages/keystore/` | [`@estoc/keystore`](https://www.npmjs.com/package/@estoc/keystore) | encrypted keystore — one sealed seed, HKDF-derived identities, non-extractable Signer handles |
 | `packages/did-peer/` | [`@estoc/did-peer`](https://www.npmjs.com/package/@estoc/did-peer) | did:peer:2 / did:peer:4 codec + didcomm-rust DIDDoc conversion |
 | `packages/folder-object/` | [`@estoc/folder-object`](https://www.npmjs.com/package/@estoc/folder-object) | an object is a folder — UnixFS merkle hashing, the folder-object format, did:key cards, signed objects |
 | `packages/post/` | [`@estoc/post`](https://www.npmjs.com/package/@estoc/post) | the post/1.0 format for folder-objects: recognise, validate, read, and the reference renderer |
-| `packages/daemon/` | `@estoc/daemon` | the daemon: agent + vault behind one RPC interface; a browser-worker host (the app) and a Node host (`estoc-daemon`, a folder on disk, the app served on the same origin) |
+| `packages/daemon/` | `@estoc/daemon` | the daemon: agent + vault behind one RPC interface; a browser-worker host (the app) and a Node host (`estoc-daemon`, a SQLite vault in a folder on disk, the app served on the same origin) |
 | `packages/cli/` | [`@estoc/cli`](https://www.npmjs.com/package/@estoc/cli) | `estoc` — vaults on disk, `estoc object hash\|sign\|verify`, `estoc serve` |
 
 Inside the workspace every `@estoc/*` dependency is `workspace:^`: the app
@@ -22,10 +22,10 @@ The libraries are still published to npm for everyone else — `pnpm publish`
 rewrites `workspace:^` to the real semver range on the way out — but that
 now happens at milestones, not per commit.
 
-The proposed [version-3 vault specification](docs/replica-model/README.md)
-has a separate reading guide covering storage, events, delivery and relationship
-policy. It is a draft; the vault and event-store documentation linked above
-describes the existing version-2 implementation.
+The [version-3 vault specification](docs/replica-model/README.md) has a
+reading guide covering storage, events, delivery and relationship policy;
+it is what the packages above implement. The version-2 documents under
+`docs/` are retired and kept as a record.
 
 The mediator ([didcomm-mediator]) stays its own repository: it is a thing
 anyone runs, with its own one-click deploy, and depends only on the

@@ -1,126 +1,178 @@
-import type { FolderObject } from "@estoc/folder-object";
-import type { Imported } from "@estoc/event-store";
-import type { Delivery } from "@estoc/vault";
+import type { Channel, ContactId, Did, DidId, DisclosureUses, EventReference, ExecutionId, MediationId, MessageId } from "@estoc/vault";
 import type {
-  AgentStatus,
+  ChannelRecord,
+  Connection,
   ContactRecord,
+  Content,
+  Discarded,
   Invitation,
   InvitationRecord,
-  MessageRecord,
-  SendOptions,
-  TraceEvent,
+  PendingWork,
   TraceLevel,
-  VerifiedShare,
+  Unplaced,
+  WaitingDelivery,
 } from "@estoc/agent-core";
 
 /**
- * The daemon: the agent and its vault, behind one interface the UI talks
- * to and never reaches around. Today it runs in a dedicated worker of the
- * same page (`worker.ts`, reached through `client.ts`); the same
- * interface is what a shared worker, a service worker woken by a push, or
- * a Node process on a laptop would offer — the UI does not know which.
- *
- * Everything that crosses is a plain record or bytes: no vault, no
- * CryptoKey, no agent. The seed is unlocked inside the daemon and stays
- * there; the UI hands a passphrase over and gets screens back.
+ * The daemon: the agent and its vault, behind one interface the UI
+ * talks to and never reaches around. Everything that crosses is a
+ * plain record or bytes: no runtime, no key, no agent. The seed is
+ * unlocked inside the daemon and stays there; the UI hands a
+ * passphrase over and gets screens back.
  */
 
 /**
- * Which screen the vault dictates, in the order a fresh install meets
- * them: booting → (elsewhere: another tab has the vault) → onboarding
- * (no vault) | locked (a vault, no cached seed) → open. `unreachable` is
- * the one phase no daemon says: a client over a socket says it when
- * nothing answers before anything was heard (no daemon there, or no
- * token to show it).
+ * Which screen the vault dictates: booting → (elsewhere: another
+ * daemon has the files) → onboarding (no vault) | unreadable | locked
+ * (a vault, no cached seed) → open. `unreachable` is the one phase no
+ * daemon says: a client over a socket says it when nothing answers.
  */
 export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open" | "unreachable";
 
-/** A message with the fold's word on whose it is: the app homes it by `contactCid`, never by guessing from DIDs. */
-export interface SnapshotMessage {
-  record: MessageRecord;
-  /** the contact the channel is attributed to (a contested channel: the first of them); null while unattributed */
-  contactCid: string | null;
+/** An arrangement with a mediator, as the fold has it. */
+export interface MediationSummary {
+  mediationId: MediationId;
+  mediatorDid: Did | null;
+  selected: boolean;
+  usable: boolean;
+  retired: string | null;
+  faults: string[];
 }
 
-/** The vault as records, read whole when it opens; the UI projects from here and keeps up by events. */
+/** A communication DID of this vault. */
+export interface LocalDidSummary {
+  didId: DidId;
+  did: Did | null;
+  live: boolean;
+  retired: string | null;
+  disclosed: boolean;
+  faults: string[];
+}
+
+/** A contact with its channels by pair: the channel records are the snapshot's, each once. */
+export interface ContactSummary extends Omit<ContactRecord, "channels"> {
+  channels: { channel: Channel; selected: boolean }[];
+}
+
+/** The vault as records, read off one fold. The UI projects from here, and takes the next snapshot whole. */
 export interface Snapshot {
+  /** the did:key the vault's seed derives: the identity every replica of this vault shares */
+  anchor: Did;
   label: string;
-  mediatorDid: string | null;
-  did: string | null;
-  contacts: ContactRecord[];
+  /**
+   * The vault was restored from a snapshot and the person has not yet
+   * been told what a restore cannot bring back. Until `explainedRestore`,
+   * no send of the user's and no manual dispatch is made; receiving,
+   * reconciling and what the vault owes on its own go on.
+   */
+  restoreUnexplained: boolean;
+  mediations: MediationSummary[];
+  dids: LocalDidSummary[];
+  contacts: ContactSummary[];
+  /** every pair a message or an observation is shown in, and every pair a contact shows */
+  channels: ChannelRecord[];
+  unplaced: Unplaced;
   invitations: InvitationRecord[];
-  /** every message of every channel still attributed to someone (or to nobody yet) — a deleted contact's are not read */
-  messages: SnapshotMessage[];
-  /** the fold's word on every outbound message: sent, pending, failed, held */
-  deliveries: Delivery[];
-  /** damaged log lines skipped while reading, plus message bodies that could not be read back */
-  damaged: number;
+  pending: PendingWork;
+}
+
+/** What only the running agent knows: nothing of it is in the vault. */
+export interface Lines {
+  connections: Connection[];
+  waiting: WaitingDelivery[];
+  discarded: Discarded[];
 }
 
 export interface DaemonEvents {
   /** which screen the vault dictates; `open` comes as `opened`, with the records */
-  phase(phase: Phase): void;
+  phase(phase: Phase, detail: string | null): void;
   opened(snapshot: Snapshot): void;
-  /** the agent's state, and its public DID as of then */
-  status(status: AgentStatus, did: string | null): void;
-  message(record: MessageRecord, contact: ContactRecord | null): void;
-  /** a try at delivering a message of ours ended; the fold's word on it, and the record it is about */
-  delivery(delivery: Delivery, record: MessageRecord): void;
-  /** added or changed: the record; removed: the record, `gone` */
-  contact(record: ContactRecord, gone: boolean): void;
-  /** issued or taken: the record; revoked or withdrawn: the record, `gone` */
-  invitation(record: InvitationRecord, gone: boolean): void;
+  /** the vault after something was committed to it */
+  changed(snapshot: Snapshot): void;
+  lines(lines: Lines): void;
   log(line: string): void;
 }
 
+/** What a merge brought, counted: `conflicts` are events under an ID this vault holds with other content, which keeps its own. */
+export interface Merged {
+  added: number;
+  duplicates: number;
+  conflicts: number;
+  objects: number;
+  repaired: number;
+}
+
+export interface CreatedInvitation {
+  didId: DidId;
+  invitation: Invitation;
+}
+
+/**
+ * What a call came to, in the word of the procedure that made it — a
+ * dispatch's `submitted`, `pending`, `failed`, `uncertain`, a
+ * completion's `none` — with its reason where it gave one. The vault's
+ * own account of the message is in the next snapshot.
+ */
+export interface Outcome {
+  outcome: string;
+  because: string | null;
+}
+
+export interface SendResult extends Outcome {
+  messageId: MessageId;
+  channel: Channel;
+}
+
 export interface Daemon {
-  /** Take the vault lock and land on the screen the disk dictates (by events). */
+  /** Take the files and land on the screen they dictate (by events). */
   boot(): Promise<void>;
+  /**
+   * This and the six calls after it, `explainedRestore` apart, work on
+   * the daemon's files: they run one at a time in the order asked, and
+   * are refused while the phase is `elsewhere`, where the files are
+   * another daemon's. One vault is made where none stands; the call
+   * that finds one there is refused and removes nothing.
+   */
   createIdentity(name: string, passphrase: string): Promise<void>;
-  restoreIdentity(zip: Uint8Array, passphrase: string): Promise<void>;
+  /** A portable snapshot's file restored as this daemon's vault, under the passphrase that opens the snapshot's own wrapped seed. */
+  restoreIdentity(snapshot: Uint8Array, passphrase: string): Promise<void>;
+  /** The person was shown what a restore cannot bring back: sends and manual dispatch are open from here on. */
+  explainedRestore(): Promise<void>;
   unlock(passphrase: string): Promise<void>;
+  /** The agent stopped and the seed forgotten, the vault kept hold of; nothing changes for a vault locked already. */
   lock(): Promise<void>;
+  /** The vault this daemon holds, removed for good. */
   forgetIdentity(): Promise<void>;
   exportBackup(): Promise<{ name: string; bytes: Uint8Array }>;
-  mergeBackup(zip: Uint8Array): Promise<Imported>;
+  mergeBackup(snapshot: Uint8Array): Promise<Merged>;
 
-  /** Name (or change) the mediator; resolves to the public DID after. */
-  setMediator(mediatorDid: string): Promise<string | null>;
-  addContact(did: string, label: string): Promise<ContactRecord>;
-  removeContact(cid: string): Promise<void>;
-  acceptInvitation(invitation: Invitation, label: string): Promise<ContactRecord>;
-  createInvitation(): Promise<InvitationRecord>;
-  revokeInvitation(id: string): Promise<void>;
-  send(contactDid: string, type: string, body: Record<string, unknown>, options?: SendOptions): Promise<MessageRecord>;
-  shareObject(contactDid: string, object: FolderObject, options: { sign?: boolean; card?: string }): Promise<MessageRecord>;
-  fetchPackage(record: MessageRecord): Promise<VerifiedShare>;
-  /**
-   * A block held in the vault's `blobs/`, by CID — what a renderer hands
-   * `verifyShare` as `held`, so a share's tree is read over the blocks
-   * the vault holds, its own and those that came by any road. Null for
-   * one not held.
-   */
-  block(cid: string): Promise<Uint8Array | null>;
-  /**
-   * A file held in the vault's `blobs/`, by root — an attachment lifted
-   * out of a message (`lift.ts`), its chunks rejoined. Null when the
-   * root or a chunk is absent; throws on a root that names a directory,
-   * which is a block to read, not a file.
-   */
-  blob(root: string): Promise<Uint8Array | null>;
-  retry(mid: string): Promise<void>;
+  /** An arrangement with `mediatorDid` created, selected and granted, and a route over it configured. */
+  setMediator(mediatorDid: string): Promise<MediationId>;
+  /** A fresh DID on the selected arrangement's route, disclosed as an out-of-band invitation. */
+  createInvitation(uses: DisclosureUses, goal?: string): Promise<CreatedInvitation>;
+  /** A fresh DID of ours toward the inviter, a contact that selects the pair, and a Ping under the invitation's ID. */
+  acceptInvitation(invitation: Invitation, petname: string): Promise<SendResult & { contactId: ContactId }>;
+  createContact(petname: string, channels: Channel[]): Promise<ContactId>;
+  renameContact(contactId: ContactId, petname: string): Promise<void>;
+  setContactChannels(contactId: ContactId, channels: Channel[]): Promise<void>;
+  deleteContact(contactId: ContactId, options?: { block?: { includeSuccessors: boolean }; erase?: string }): Promise<void>;
+  blockChannels(channels: Channel[], includeSuccessors: boolean): Promise<void>;
+  eraseMessage(messageId: MessageId): Promise<void>;
 
-  /**
-   * One message's onion: every observation this device's trace
-   * (`local/agent/trace/`) holds around the record
-   * `mid` — the frame it rode, each envelope inside, the rituals with
-   * mediators — outermost first. Empty when the trace is off, or that
-   * part of it is pruned. Read from the vault, not the agent, so it
-   * answers the moment the vault is open.
-   */
-  traceOf(mid: string): Promise<TraceEvent[]>;
-  /** what this device keeps of what it observes: `off`, `normal`, `verbose` — the vault's `local/agent/options.json` */
+  send(target: { channel: Channel; preRotation?: boolean } | { contactId: ContactId }, content: Content): Promise<SendResult>;
+  retry(messageId: MessageId): Promise<Outcome>;
+  cancel(messageId: MessageId): Promise<Outcome>;
+  completeResponse(executionId: ExecutionId, effectType: string): Promise<Outcome>;
+  completeNotification(rotationEventId: EventReference<"did.rotationSelected">): Promise<Outcome>;
+  /** The user's own rotation of `localDidId` toward `peerDid`: a fresh successor, and its notification called. */
+  rotate(localDidId: DidId, peerDid: Did): Promise<Outcome & { successor: DidId; existed: boolean }>;
+
+  pending(): Promise<PendingWork>;
+  /** The snapshot as of now, to every listener: for what changed with no call of the UI's and no delivery, a retry the dispatcher made on its own. */
+  refresh(): Promise<void>;
+  /** Every arrangement connected again: reconciled, picked up, live. */
+  reconnect(): Promise<void>;
+
   traceLevel(): Promise<TraceLevel>;
-  /** Change it for this device, now and for later runs; what a stricter level no longer keeps is pruned at once. */
   setTraceLevel(level: TraceLevel): Promise<TraceLevel>;
 }

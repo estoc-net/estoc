@@ -1,108 +1,62 @@
 /**
- * The agent's trace: what this device *observed* while the vault's
- * events record what was *said*. An envelope opened, a frame sent, a
- * pickup round-trip with the mediator — none of it is a fact of the
- * vault, all of it is what an audit or a debugger wants, and it is bulky
- * and perishable. So it lives in the agent's local state
- * (`local/agent/trace/<stream>/`), one stream per kind of observation,
- * each with a retention of its
- * own, pruned whole segments at a time and never a line.
- *
- * Streams:
+ * The agent's trace: what this runtime observed, beside the vault's
+ * events, which record what was said. An envelope opened, a frame
+ * sent, a ritual round trip with the mediator — none of it is a fact
+ * of the vault, all of it is what an audit or a debugger wants. It
+ * lives in the runtime's local trace, which no snapshot carries, as
+ * entries typed by stream and observation:
  *
  *   - `envelope`   every seal and open: kind, keys, algorithm — no bytes.
- *                  The most valuable and the smallest; kept longest.
  *   - `wire`       every frame and request, headers only: where, how,
  *                  status, size, time.
- *   - `wire.bytes` the ciphertext itself, for peeling an envelope open on
- *                  screen; worthless after a day. A leaf: nothing hangs
- *                  on it — what was opened hangs on the frame.
- *   - `mediation`  the plaintext of the mediation rituals (status,
- *                  delivery, grant, update) — the one place these live.
+ *   - `bytes`      the ciphertext itself, for peeling an envelope open
+ *                  on screen. A leaf: nothing hangs on it.
+ *   - `mediation`  the plaintext of the mediation rituals.
  *   - `diag`       one-line diagnostics.
  *
- * A line is a local event: `eid` and `at` minted here, `type` the
- * observation (`envelope.open`, `wire.in`, `prune`, …), `data` the
- * stream's own fields and two that link: `parent`, the `eid` of the
- * observation this happened inside (the envelope an inner envelope was
- * found in, the frame an envelope came off), and `mid`, the message
- * record it ended in, when it ended in one. `traceOf(mid)` follows both.
- *
- * Retention is a device option, not a vault fact — the same vault keeps
- * everything on a workstation and a day on a phone — so the level lives
- * in the owner's `options.json`, and a wipe takes it with the rest.
+ * An entry's `data` carries the stream's own fields and two that link:
+ * `parent`, the sequence number of the observation this happened
+ * inside (the frame an envelope came off), and `messageId`, the
+ * message it ended in, when it ended in one. `traceOf(messageId)`
+ * follows both. Retention is a runtime option, not a vault fact: the
+ * level lives in the local options, and a level is one prune policy
+ * over the whole trace plus the streams it writes at all.
  */
 
-import {
-  compareLocalEvents,
-  EidMinter,
-  jsonClean,
-  type DamagedLine,
-  type JsonObject,
-  type JsonValue,
-  type LocalEvent,
-  type LocalFilter,
-  type LocalOwner,
-  type PruneReport,
-  type RetentionPolicy,
-} from "@estoc/event-store";
+import type { JsonObject, JsonValue, LocalState, TraceEntry, TracePolicy as PrunePolicy } from "@estoc/event-store";
 
-export const TRACE_STREAMS = ["envelope", "wire", "wire.bytes", "mediation", "diag"] as const;
+import { bounded } from "./link.js";
+
+export const TRACE_STREAMS = ["envelope", "wire", "bytes", "mediation", "diag"] as const;
 export type TraceStream = (typeof TRACE_STREAMS)[number];
 
 export function isTraceStream(name: string): name is TraceStream {
   return (TRACE_STREAMS as readonly string[]).includes(name);
 }
 
-/** The streams nothing hangs on: a line there is never a `parent`. */
-const LEAVES: ReadonlySet<TraceStream> = new Set<TraceStream>(["wire.bytes"]);
-
-/** One line of the trace, and the stream it was read from: the directory's name, not a field of the line. */
-export type TraceEvent = LocalEvent & { stream: TraceStream };
-
-/** What `append` takes as `data`: the stream's own fields, `parent` and `mid` among them; a field left `undefined` is left out. */
-export type TraceData = { [field: string]: JsonValue | undefined };
-
-export interface TracePolicy {
-  streams: Record<TraceStream, RetentionPolicy>;
+/** The stream an entry type belongs to: the part before the first dot. */
+export function streamOf(type: string): TraceStream | null {
+  const name = type.slice(0, type.indexOf("."));
+  return isTraceStream(name) ? name : null;
 }
 
-const HOUR = 60 * 60 * 1000;
-const DAY = 24 * HOUR;
-const MIB = 1024 * 1024;
+/** What `append` takes as `data`: the stream's own fields, `parent` and `messageId` among them; a field left `undefined` is left out. */
+export type TraceData = { [field: string]: JsonValue | undefined };
 
-/** Nothing kept; what is there goes at the next prune. */
-export const TRACE_OFF: TracePolicy = {
-  streams: {
-    envelope: { keepMs: 0, capBytes: 0 },
-    wire: { keepMs: 0, capBytes: 0 },
-    "wire.bytes": { keepMs: 0, capBytes: 0 },
-    mediation: { keepMs: 0, capBytes: 0 },
-    diag: { keepMs: 0, capBytes: 0 },
-  },
-};
+export interface TracePolicy extends PrunePolicy {
+  /** the streams written at all; an entry of any other stream is dropped before it is written */
+  streams: ReadonlySet<TraceStream>;
+}
 
-/** Everything on, pruned briskly: the default. `wire.bytes` is kept a day so what just arrived can be peeled open. */
-export const TRACE_NORMAL: TracePolicy = {
-  streams: {
-    envelope: { keepMs: 90 * DAY, capBytes: 20 * MIB },
-    wire: { keepMs: 30 * DAY, capBytes: 10 * MIB },
-    "wire.bytes": { keepMs: DAY, capBytes: 50 * MIB },
-    mediation: { keepMs: 7 * DAY, capBytes: 10 * MIB },
-    diag: { keepMs: 7 * DAY, capBytes: 5 * MIB },
-  },
-};
+const DAY = 24 * 60 * 60 * 1000;
+const EVERY: ReadonlySet<TraceStream> = new Set(TRACE_STREAMS);
 
-/** Normal times four, and the bytes for a week. */
-export const TRACE_VERBOSE: TracePolicy = {
-  streams: {
-    envelope: { keepMs: 360 * DAY, capBytes: 80 * MIB },
-    wire: { keepMs: 120 * DAY, capBytes: 40 * MIB },
-    "wire.bytes": { keepMs: 7 * DAY, capBytes: 200 * MIB },
-    mediation: { keepMs: 28 * DAY, capBytes: 40 * MIB },
-    diag: { keepMs: 28 * DAY, capBytes: 20 * MIB },
-  },
-};
+/** Nothing written; what is there goes at the next prune. */
+export const TRACE_OFF: TracePolicy = { keepMs: 0, capRows: 0, streams: new Set() };
+/** Every stream but the bytes, a month or twenty thousand entries: the default. */
+export const TRACE_NORMAL: TracePolicy = { keepMs: 30 * DAY, capRows: 20_000, streams: new Set(TRACE_STREAMS.filter((stream) => stream !== "bytes")) };
+/** Everything, four months or a hundred thousand entries. */
+export const TRACE_VERBOSE: TracePolicy = { keepMs: 120 * DAY, capRows: 100_000, streams: EVERY };
 
 export const TRACE_LEVELS = ["off", "normal", "verbose"] as const;
 export type TraceLevel = (typeof TRACE_LEVELS)[number];
@@ -111,67 +65,51 @@ export function isTraceLevel(value: unknown): value is TraceLevel {
   return typeof value === "string" && (TRACE_LEVELS as readonly string[]).includes(value);
 }
 
-/** The policy a user-facing level stands for. */
 export function tracePolicy(level: TraceLevel): TracePolicy {
   return level === "off" ? TRACE_OFF : level === "verbose" ? TRACE_VERBOSE : TRACE_NORMAL;
 }
 
-/** The level `options.json` names under `trace`; `normal` when it names none. */
-export function traceLevelOf(options: JsonObject | null): TraceLevel {
-  const level = options?.["trace"];
-  return isTraceLevel(level) ? level : "normal";
-}
-
-/** What one prune did to one stream. */
-export type TracePruneReport = PruneReport & { stream: TraceStream };
+/** The local option the level is kept under. */
+export const TRACE_OPTION = "trace";
 
 export interface AgentTraceOptions {
-  /** pins time (tests); left out, the wall clock */
-  clock?: () => Date;
-  /** the level, when known already; `open` reads it from `options.json` */
+  /** the level, when known already; `open` reads it from the local options */
   level?: TraceLevel;
   /** keep by this rather than the level's policy: a test's knob, or a caller's own retention */
   policy?: TracePolicy;
 }
 
-/** The `parent` a line cites: a string in `data`, or nothing. */
-function parentOf(event: LocalEvent): string | undefined {
-  const parent = event.data["parent"];
-  return typeof parent === "string" ? parent : undefined;
+export type TraceFilter = { stream?: TraceStream; type?: string; after?: number };
+
+function parentOf(entry: TraceEntry): number | undefined {
+  const parent = entry.data["parent"];
+  return typeof parent === "number" ? parent : undefined;
 }
 
-/** `data` with its `undefined` fields left out, checked to be JSON. */
 function cleanData(data: TraceData): JsonObject {
   const defined: Record<string, JsonValue> = {};
   for (const [field, value] of Object.entries(data)) {
-    if (value !== undefined) {
-      defined[field] = value;
-    }
+    if (value !== undefined) defined[field] = value;
   }
-  return jsonClean<JsonObject>(defined);
+  return defined;
 }
 
 export class AgentTrace {
-  private readonly eids = new EidMinter();
-  private readonly clock: () => Date;
   private current: { level: TraceLevel; policy: TracePolicy };
 
-  /**
-   * Over the agent's local state, `vault.local("agent")`. `open` reads
-   * the level from `options.json`; this takes it as given.
-   */
+  /** Over the runtime's local state. `open` reads the level from the options; this takes it as given. */
   constructor(
-    private readonly owner: LocalOwner,
+    private readonly local: LocalState,
     options: AgentTraceOptions = {}
   ) {
-    this.clock = options.clock ?? (() => new Date());
     const level = options.level ?? "normal";
     this.current = { level, policy: options.policy ?? tracePolicy(level) };
   }
 
-  /** The trace at the level `options.json` names — `normal` when it names none. */
-  static async open(owner: LocalOwner, options: Omit<AgentTraceOptions, "level"> = {}): Promise<AgentTrace> {
-    return new AgentTrace(owner, { ...options, level: traceLevelOf(await owner.readOptions()) });
+  /** The trace at the level the local options name — `normal` when they name none. */
+  static async open(local: LocalState, options: Omit<AgentTraceOptions, "level"> = {}): Promise<AgentTrace> {
+    const level = await local.options.get(TRACE_OPTION);
+    return new AgentTrace(local, { ...options, level: isTraceLevel(level) ? level : "normal" });
   }
 
   get level(): TraceLevel {
@@ -182,178 +120,101 @@ export class AgentTrace {
     return this.current.policy;
   }
 
-  /**
-   * Keep at another level from now on and on every open after: the
-   * level written to `options.json` (beside whatever else is there), a
-   * stream turned off no longer written, and what the new policy does
-   * not keep pruned at once.
-   */
-  async setLevel(level: TraceLevel): Promise<TracePruneReport[]> {
-    await this.owner.writeOptions({ ...(await this.owner.readOptions()), trace: level });
+  /** Keep at another level from now on and on every open after: the level written to the options, and what the new policy does not keep pruned at once. */
+  async setLevel(level: TraceLevel): Promise<{ pruned: number }> {
+    await this.local.options.set(TRACE_OPTION, level);
     this.current = { level, policy: tracePolicy(level) };
     return this.prune();
   }
 
-  /** Is this stream being written? */
   enabled(stream: TraceStream): boolean {
-    return this.policy.streams[stream].keepMs > 0;
+    return this.policy.streams.has(stream);
   }
 
   /**
-   * Record one observation. Returns its `eid` — minted here even when
-   * the stream is off, so a caller can still name it as the `parent` of
-   * what it finds inside; a line whose parent was never written is a
-   * line whose parent was not kept, and reads as such.
+   * Record one observation as `<stream>.<what>`. Returns its sequence
+   * number, or `undefined` when the stream is off and nothing was
+   * written: what would have hung on it hangs on nothing, and reads as
+   * an entry whose parent was not kept.
    */
-  async append(stream: TraceStream, type: string, data: TraceData = {}): Promise<string> {
-    const now = this.clock();
-    const eid = this.eids.mint(now.getTime());
-    if (!this.enabled(stream)) {
-      return eid;
-    }
-    const event: LocalEvent = { eid, at: now.toISOString(), type, data: cleanData(data) };
-    await this.owner.trace(stream).append(event);
-    return eid;
+  async append(stream: TraceStream, what: string, data: TraceData = {}): Promise<number | undefined> {
+    if (!this.enabled(stream)) return undefined;
+    const entry = await this.local.trace.append(`${stream}.${what}`, cleanData(data));
+    return entry.seq;
   }
 
-  /** One stream's lines, those the filter admits, in canonical order; what was not a line, `damaged` says. */
-  async read(stream: TraceStream, filter?: LocalFilter): Promise<TraceEvent[]> {
-    const events: TraceEvent[] = [];
-    for await (const event of this.owner.trace(stream).scan(filter)) {
-      events.push({ ...event, stream });
+  /** The entries `filter` admits, in the order written. */
+  async read(filter: TraceFilter = {}): Promise<TraceEntry[]> {
+    const { stream, ...rest } = filter;
+    const entries: TraceEntry[] = [];
+    for await (const entry of this.local.trace.scan(rest)) {
+      if (stream === undefined || streamOf(entry.type) === stream) entries.push(entry);
     }
-    return events;
-  }
-
-  /** What the last `read` of this stream met that was not a line. */
-  damaged(stream: TraceStream): DamagedLine[] {
-    return this.owner.trace(stream).damaged();
+    return entries;
   }
 
   /**
-   * Everything observed about one message record, across every stream:
-   * the envelopes that name `mid`, everything they happened inside
-   * (`parent`, up to the outermost frame), and what happened inside
-   * those — the frame's bytes, the answer to it, the mediator's ritual on
-   * it — but not the other envelopes that shared the frame: a delivery
-   * that carried two messages is two onions, each its own. The whole
-   * onion in canonical order, the outer layers first; empty when nothing
-   * was kept: the record still stands, its trace has expired.
-   *
-   * Outward is read the way a local chain is meant to be read: a `parent`
-   * is a lookup by `eid`, one filtered `scan` per link. Inward is a
-   * fixed point — what hung on the chain, what hung on that, as deep as
-   * the onion goes: each round scans the streams, keeping what hangs on
-   * something found, until a round finds nothing. A stream is consumed
-   * as the store yields it and only the onion is kept, so what is held
-   * at once is one stream's worth (the store's own floor) and the onion.
-   * Nothing rests on a child following its parent in the order: a child
-   * scanned first is taken the round after. The rounds are few because
-   * the streams go in the order things hang on each other — a frame,
-   * the envelopes on it, the ritual in those — with the bytes, the
-   * largest and a leaf, last; and a stream is scanned again only if
-   * something was found since it was last scanned — for the leaf, found
-   * elsewhere, since nothing hangs on its own — so the bytes are usually
-   * decoded once.
+   * Everything observed about one message, across every stream: the
+   * envelopes and the requests that name `messageId`, everything they
+   * happened inside (`parent`, up to the outermost frame), and what
+   * happened inside those — the frame's bytes, the answer to it, the
+   * mediator's ritual on it — but not the other envelopes that shared
+   * the frame: a delivery that carried two messages is two onions, each
+   * its own. The whole onion in the order written; empty when nothing
+   * was kept.
    */
-  async traceOf(mid: string): Promise<TraceEvent[]> {
-    const found = new Map<string, TraceEvent>();
-    const take = (events: TraceEvent[]): TraceEvent[] => {
-      const fresh = events.filter((event) => !found.has(event.eid));
-      for (const event of fresh) {
-        found.set(event.eid, event);
-      }
-      return fresh;
-    };
-    // the envelopes that ended in (or began as) the record
-    const ends = take(await this.read("envelope", { data: { mid } }));
-    if (ends.length === 0) {
-      return [];
-    }
-    // outward: the envelopes and the frame they happened inside — a chain
-    // of parents, one lookup per link (an onion has two or three layers)
-    let wanted = this.parentsOf(ends, found);
+  async traceOf(messageId: string): Promise<TraceEntry[]> {
+    const all = await this.read();
+    const bySeq = new Map(all.map((entry) => [entry.seq, entry]));
+    const found = new Map<number, TraceEntry>();
+    const ends = all.filter((entry) => (streamOf(entry.type) === "envelope" || streamOf(entry.type) === "wire") && entry.data["messageId"] === messageId);
+    if (ends.length === 0) return [];
+    for (const end of ends) found.set(end.seq, end);
+    // outward: the chain of parents
+    const wanted = ends.map(parentOf).filter((seq): seq is number => seq !== undefined);
     while (wanted.length > 0) {
-      const hit: TraceEvent[] = [];
-      for (const eid of wanted) {
-        for (const stream of ["envelope", "wire"] as const) {
-          hit.push(...(await this.read(stream, { eid })));
-        }
-      }
-      wanted = this.parentsOf(take(hit), found);
+      const seq = wanted.pop() as number;
+      const parent = bySeq.get(seq);
+      if (parent === undefined || found.has(seq)) continue;
+      found.set(seq, parent);
+      const next = parentOf(parent);
+      if (next !== undefined) wanted.push(next);
     }
-    // inward: everything under the chain, and under what is found there,
-    // and so on — except the other envelopes that hung on the chain above
-    // the ends: those are the other messages the frame carried, each its
-    // own onion. An envelope is taken under an end, or under what was
-    // found inward (the frame's answer, what was opened out of it); the
-    // bytes, the wire's answer and the mediator's part are taken anywhere.
-    // The chain is what outward found and does not grow with the onion.
+    // inward: what hangs on the chain and on what was found, except the other envelopes on the chain above the ends
     const chain = new Set(found.keys());
-    const isEnd = new Set(ends.map((event) => event.eid));
-    // per stream, how many were found when it was last scanned: no more since, nothing new hangs there.
-    // Marked before the scan, so that what the scan itself found — a parent a line before it cites — is
-    // scanned for again; for a leaf, after, since nothing cites its lines.
-    const scannedAt = new Map<TraceStream, number>();
+    const isEnd = new Set(ends.map((entry) => entry.seq));
     for (let grew = true; grew; ) {
       grew = false;
-      for (const stream of ["wire", "envelope", "mediation", "wire.bytes"] as const) {
-        if (scannedAt.get(stream) === found.size) {
-          continue;
-        }
-        const leaf = LEAVES.has(stream);
-        if (!leaf) {
-          scannedAt.set(stream, found.size);
-        }
-        for await (const event of this.owner.trace(stream).scan()) {
-          const parent = parentOf(event);
-          if (parent === undefined || !found.has(parent) || found.has(event.eid)) {
-            continue;
-          }
-          if (stream === "envelope" && chain.has(parent) && !isEnd.has(parent)) {
-            continue;
-          }
-          found.set(event.eid, { ...event, stream });
-          grew = true;
-        }
-        if (leaf) {
-          scannedAt.set(stream, found.size);
-        }
+      for (const entry of all) {
+        const parent = parentOf(entry);
+        if (parent === undefined || !found.has(parent) || found.has(entry.seq)) continue;
+        if (streamOf(entry.type) === "envelope" && chain.has(parent) && !isEnd.has(parent)) continue;
+        found.set(entry.seq, entry);
+        grew = true;
       }
     }
-    return [...found.values()].sort(compareLocalEvents);
+    return [...found.values()].sort((a, b) => a.seq - b.seq);
   }
 
-  /** The parents these lines cite that are not found yet, each once. */
-  private parentsOf(events: TraceEvent[], found: Map<string, TraceEvent>): string[] {
-    const parents = new Set<string>();
-    for (const event of events) {
-      const parent = parentOf(event);
-      if (parent !== undefined && !found.has(parent)) {
-        parents.add(parent);
-      }
-    }
-    return [...parents];
+  /** Apply the policy: entries older than `keepMs` and beyond the newest `capRows` go. Meant for start and then every hour. */
+  prune(): Promise<{ pruned: number }> {
+    const { keepMs, capRows } = this.policy;
+    return this.local.trace.prune({ keepMs, capRows });
   }
+}
 
-  /**
-   * Apply the policy: every stream pruned by its retention — the segments
-   * whose every line is older than `keepMs`, then the oldest until the
-   * stream fits `capBytes`; a stream at `keepMs` 0 emptied. Deleting for
-   * cap is out of the ordinary, so it leaves a `prune` line in `diag`
-   * naming the stream and what went; a gap in a trace is then a fact on
-   * record, not a mystery. Meant for start and then every hour.
-   */
-  async prune(): Promise<TracePruneReport[]> {
-    const reports: TracePruneReport[] = [];
-    for (const stream of TRACE_STREAMS) {
-      reports.push({ stream, ...(await this.owner.trace(stream).prune(this.policy.streams[stream])) });
-    }
-    for (const report of reports) {
-      if (report.byCap > 0) {
-        await this.append("diag", "prune", { reason: "cap", of: report.stream, segments: report.byCap, bytes: report.bytesFreed });
-      }
-    }
-    return reports;
-  }
+/** How long an entry is waited for once what it records has happened; past it the work goes on without waiting, whether or not the entry lands. */
+const NOTE_WAIT_MS = 10_000;
+
+/** One trace entry owed by work the trace only observes. */
+export type Note = { stream: TraceStream; what: string; data: TraceData };
+
+/** Write one entry with a deadline and without a throw: what it observed already stands. Its sequence number, or `undefined` when nothing was written in time. */
+export async function note(trace: AgentTrace | null, { stream, what, data }: Note): Promise<number | undefined> {
+  if (trace === null) return undefined;
+  return bounded(AbortSignal.timeout(NOTE_WAIT_MS), () => trace.append(stream, what, data)).catch(() => undefined);
+}
+
+export async function noteAll(trace: AgentTrace | null, notes: readonly Note[]): Promise<void> {
+  for (const entry of notes) await note(trace, entry);
 }

@@ -1,6 +1,10 @@
 # The vault as an event store — draft
 
-Status: **implemented** as of 2026-09-01 (`@estoc/event-store`); drafted 2026-08-30.
+Status: **retired** 2026-09-20. Version 2 was the vault of `@estoc/event-store`
+0.1 and `@estoc/vault` 0.2; nothing reads or writes it any more, and a
+version-3 reader refuses a version-2 folder without touching it.
+Version 3 is the [replica model](replica-model/README.md): one SQLite
+vault, DASL objects, channels. Kept as the record of what version 2 was.
 
 The first of three documents that together define a version-2 vault:
 

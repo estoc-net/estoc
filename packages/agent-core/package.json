@@ -1,7 +1,7 @@
 {
   "name": "@estoc/agent-core",
-  "version": "0.18.0",
-  "description": "The DIDComm v2 agent behind Estoc's clients: mediation, pickup, live delivery, pairwise DIDs, invitations and object sharing over an .estoc vault (@estoc/event-store + @estoc/vault: an append-only event log folded into contacts, channels and messages, through a pluggable VaultBackend). Runs wherever didcomm-rust's WASM does.",
+  "version": "0.19.0",
+  "description": "The DIDComm v2 agent behind Estoc's clients, over an .estoc vault (@estoc/event-store + @estoc/vault): mediation, pickup and live delivery, channels of did:peer:4 pairs, invitations, rotation, and messages committed as intents and packages before their one transport call. Runs wherever didcomm-rust's WASM does.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -14,10 +14,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./v3": {
-      "types": "./dist/v3/index.d.ts",
-      "default": "./dist/v3/index.js"
     }
   },
   "files": [
@@ -44,15 +40,12 @@
     "@estoc/did-peer": "workspace:^",
     "@noble/curves": "^1.9.7",
     "@estoc/event-store": "workspace:^",
-    "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@estoc/vault": "workspace:^",
     "bs58": "^6.0.0",
-    "did-resolver": "^4.1.0",
     "ipaddr.js": "^2.5.0",
     "multiformats": "^14.0.5",
-    "uuid": "^11.1.1",
-    "web-did-resolver": "^2.0.32"
+    "uuid": "^11.1.1"
   },
   "peerDependencies": {
     "@estoc/didcomm": "^0.4.1-estoc.3"

@@ -1,7 +1,7 @@
 {
   "name": "@estoc/daemon",
-  "version": "0.2.0",
-  "description": "The Estoc daemon: an agent and its vault behind one RPC interface the UI talks to. The same core runs in a browser worker (OPFS) and as a Node process (`estoc-daemon`, a folder on disk, a WebSocket the app connects to).",
+  "version": "0.3.0",
+  "description": "The Estoc daemon: an agent and its vault behind one RPC interface the UI talks to. The same core runs in a browser worker (OPFS) and as a Node process (`estoc-daemon`, a SQLite vault in a folder on disk, a WebSocket the app connects to).",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -11,7 +11,7 @@
   },
   "type": "module",
   "bin": {
-    "estoc-daemon": "./dist/v3/node/bin.js"
+    "estoc-daemon": "./dist/node/bin.js"
   },
   "exports": {
     ".": {
@@ -21,14 +21,6 @@
     "./node": {
       "types": "./dist/node/index.d.ts",
       "default": "./dist/node/index.js"
-    },
-    "./v3": {
-      "types": "./dist/v3/index.d.ts",
-      "default": "./dist/v3/index.js"
-    },
-    "./v3/node": {
-      "types": "./dist/v3/node/index.d.ts",
-      "default": "./dist/v3/node/index.js"
     }
   },
   "files": [
@@ -49,10 +41,8 @@
     "@estoc/agent-core": "workspace:^",
     "@estoc/didcomm-node": "^0.4.1-estoc.3",
     "@estoc/event-store": "workspace:^",
-    "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@estoc/vault": "workspace:^",
-    "didcomm-node": "^0.4.1",
     "ipaddr.js": "^2.2.0",
     "undici": "^7.29.0",
     "uuid": "^11.1.1",

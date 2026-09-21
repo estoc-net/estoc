@@ -1,6 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.19.0 — 2026-09-20
+
+The agent over the version-3 vault, in place of the version-2 one.
+
+- **Version 3 is the package.** What was `@estoc/agent-core/v3` is now
+  the root export, and the `./v3` entry is gone; every entry below that
+  names `@estoc/agent-core/v3` describes what `@estoc/agent-core`
+  exports now. The protocol vocabulary the root exported stays there:
+  the specification and mediation message types, `BASIC_MESSAGE`,
+  `PROFILE`, `REQUEST_PROFILE`, `announcedName`, `PLAIN_TYP`,
+  `ENCRYPTED_MIME`, `plainMessage`, `secretsResolverFor`, `endpointOf`,
+  `serviceUris`, `GOAL_CONNECT`, `invitationUrl`, `parseInvitation`,
+  `didHost`, `resolveMediatorInput`. `didOf` is now the local DID entity
+  of a fold; the DID of a key ID is no longer exported.
+- **The version-2 agent is removed**: `Agent` over the folder vault with
+  `createVault` / `openVault` / `inspectVault` and `mintPeerDid`,
+  `Inbound`, `Outbound`, `Outbox`, the v2 records, channel proofs,
+  handlers and trace, `resolveDid`, and object sharing whole —
+  object-share/1.0, the package road, streaming AEAD and the blob-store
+  client — with the `@estoc/folder-object`, `did-resolver` and
+  `web-did-resolver` dependencies. `isSpecType` and `packFromPrior` went
+  with it.
+- **`DidcommApi` is `{ Message }`.** The agent never packs a
+  `from_prior` through the binding — a rotation proof is signed by the
+  vault's own key — so a host no longer hands in `FromPrior`.
 
 - **Version 3 begins**, under `@estoc/agent-core/v3`: the agent's
   skeleton and identity over the version-3 vault. `openVault`,

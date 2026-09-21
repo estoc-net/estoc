@@ -1,6 +1,5 @@
 import type {
   DIDResolver,
-  FromPrior as FromPriorClass,
   IMessage,
   Message as MessageClass,
   SecretsResolver,
@@ -14,15 +13,12 @@ import type { DIDDoc, Secret } from "@estoc/did-peer";
  * rather than imported here: the WASM has to be instantiated differently in
  * every runtime (Vite's `?url`, workerd's module import, the Node build's
  * native loading), and that wiring is the one thing this package refuses to
- * know. `@estoc/didcomm` and `@estoc/didcomm-node` export `Message` and
- * `FromPrior` with these exact shapes; so do the upstream `didcomm` builds,
- * but only the Estoc builds can leave a `from_prior` unverified, which
- * `unpack` needs.
+ * know. `@estoc/didcomm` and `@estoc/didcomm-node` export `Message` with
+ * this exact shape; so do the upstream `didcomm` builds, but only the
+ * Estoc builds can leave a `from_prior` unverified, which `unpack` needs.
  */
 export interface DidcommApi {
   Message: typeof MessageClass;
-  /** the DID-rotation header, signed by the DID being left behind */
-  FromPrior: typeof FromPriorClass;
 }
 
 export type { DIDResolver, IMessage, SecretsResolver, UnpackMetadata };
@@ -31,7 +27,7 @@ export const PLAIN_TYP = "application/didcomm-plain+json";
 export const ENCRYPTED_MIME = "application/didcomm-encrypted+json";
 
 /*
- * Every `Message` and `FromPrior` lives in WebAssembly memory for the one
+ * Every `Message` lives in WebAssembly memory for the one
  * call made with it and is freed explicitly once that call settles, so the
  * release does not wait for a finalizer. It is freed only after the call
  * settles, even when its caller has already stopped waiting at a deadline
@@ -115,16 +111,6 @@ export async function unpack(didcomm: DidcommApi, packed: string, resolver: DIDR
     if (metadata.non_repudiation && didOf(metadata.sign_from) !== sender.did) throw new EnvelopeRefused("the plaintext is signed by another than the sealer");
   }
   return { plaintext, sender, fromPrior: plaintext.from_prior ?? null, metadata };
-}
-
-/** `pack` over a `FromPrior` made for this signature alone. */
-export async function packFromPrior(didcomm: DidcommApi, value: ConstructorParameters<DidcommApi["FromPrior"]>[0], ...args: Parameters<FromPriorClass["pack"]>): ReturnType<FromPriorClass["pack"]> {
-  const native = new didcomm.FromPrior(value);
-  try {
-    return await native.pack(...args);
-  } finally {
-    native.free();
-  }
 }
 
 /** A SecretsResolver over a fixed set of secrets. */

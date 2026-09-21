@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { mkdtemp, mkdir, writeFile, symlink, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSeedKeystore, addDerivedKey } from "@estoc/keystore";
+import { deriveIdentity, importSeed } from "@estoc/keystore";
 import { readTree } from "../src/fs.js";
 import {
   readObject,
@@ -22,8 +22,7 @@ const enc = (s: string) => new TextEncoder().encode(s);
 
 const seed = new Uint8Array(32).fill(7);
 async function signer() {
-  const { doc, seedKey } = await createSeedKeystore("pw", { seed });
-  return (await addDerivedKey(doc, seedKey, "org/test")).identity.signer;
+  return (await deriveIdentity(await importSeed(seed), "org/test")).signer;
 }
 
 describe("object", () => {

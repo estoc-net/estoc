@@ -1,191 +1,197 @@
 /**
- * The event store as a map in memory: the reference for the interface's
- * semantics and the store folds are tested on. Nothing persists;
- * `damaged()` and `conflicting()` are empty by construction, as a
- * database's are.
+ * The version-3 event store as a map in memory: the reference for the interface's
+ * semantics, what the vault folds are tested on, and the store `eventStoreSuite` is
+ * first run against. Nothing persists, so the process-durable half of the store's
+ * promise is vacuous here; `damaged()` and `conflicting()` are empty by construction,
+ * as a database's are. Every event held — appended or ingested — is kept in the form
+ * its canonical bytes parse to and frozen, so what is handed out is what was accepted,
+ * the same from every store.
  */
 
-import { BadToken, ForkedSelf } from "./errors.js";
+import { v7 } from "uuid";
+
+import { BadToken, ForkedAuthor } from "./errors.js";
 import {
-  cleanDraft,
   compareEvents,
-  EidMinter,
   matches,
-  mintDeviceId,
-  mintInstance,
+  validateDraft,
   validateEvent,
+  type AuthorId,
   type ChangeToken,
   type Conflict,
-  type DamagedLine,
+  type Damaged,
   type Draft,
   type Event,
+  type EventId,
   type EventStore,
+  type EventTally,
   type Filter,
   type Ingested,
 } from "./event.js";
-import { deepFreeze, jsonClean, sameJson, type JsonObject } from "./json.js";
+import { canonicalText, parseStrict, utf8Length } from "./jcs.js";
+import { deepFreeze, type JsonObject } from "./json.js";
+import { mint } from "./mint.js";
 
 export interface MemoryEventStoreOptions {
-  /** the device this store appends as; minted when left out */
-  self?: string;
-  /** the instance id its tokens name; minted when left out */
-  instance?: string;
-  /** which store of the instance this is (the vault's, an extension's); tokens name it too */
-  store?: string;
-  /** the wall clock; pinned by tests */
-  clock?: () => Date;
+  /** the author this store appends as; a fresh UUIDv7 when left out */
+  author?: AuthorId;
+  /** the wall clock in Unix milliseconds; default `Date.now`, pinned by tests */
+  now?: () => number;
 }
 
-/** What one `ingest` staged before writing: its outcome so far and the events to add. */
-interface Staged {
-  outcome: Ingested;
-  events: Map<string, Event>;
+/** What one `ingest` read before taking the lock: each input either as an accepted event would be held, or rejected. */
+type Read = { held: Held } | { rejected: { value: unknown; error: string } };
+
+/** One accepted event and the canonical text it is equal by. */
+interface Held {
+  event: Event;
+  text: string;
 }
 
 export class MemoryEventStore implements EventStore {
-  readonly self: string;
-  readonly instance: string;
-  readonly store: string;
-  private readonly clock: () => Date;
-  private readonly minter = new EidMinter();
-  /** every event held, by eid */
-  private readonly held = new Map<string, Event>();
-  /** the same events in the order they arrived; an index into it is what a token names */
-  private readonly arrived: Event[] = [];
-  /** writes run one at a time */
+  readonly author: AuthorId;
+  /** the store generation its tokens name: this instance, and no other, so minted here and never given */
+  readonly generation: string;
+  private readonly now: () => number;
+  /** every event held, by `eventId` */
+  private readonly held = new Map<EventId, Held>();
+  /** the same events in the order they were accepted; an index into it is what a token names */
+  private readonly accepted: Event[] = [];
+  /** the UTF-8 length of every held canonical text, summed as each is accepted: what `tally` reports without encoding one */
+  private bytes = 0;
+  /** writes run one at a time: the vault's writer lock, as far as one store in memory needs it */
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(options: MemoryEventStoreOptions = {}) {
-    this.self = options.self ?? mintDeviceId();
-    this.instance = options.instance ?? mintInstance();
-    this.store = options.store ?? "vault";
-    this.clock = options.clock ?? (() => new Date());
+    this.author = options.author ?? (v7() as AuthorId);
+    this.generation = v7();
+    this.now = options.now ?? Date.now;
   }
 
-  private serialise<T>(work: () => Promise<T> | T): Promise<T> {
+  private serialise<T>(work: () => T): Promise<T> {
     const run = this.chain.then(work);
     this.chain = run.catch(() => undefined);
     return run;
   }
 
   async append<D extends JsonObject>(draft: Draft<D>): Promise<Event<D>> {
-    const clean = cleanDraft(draft);
-    return this.serialise(() => {
-      const now = this.clock();
-      const event: Event<D> = {
-        eid: this.minter.mint(now.getTime()),
-        at: now.toISOString(),
-        author: this.self,
-        type: clean.type,
-        blobs: clean.blobs,
-        data: clean.data,
-      };
-      this.add(event);
-      return event;
-    });
+    const [event] = await this.appendAll([draft]);
+    return event as Event<D>;
   }
 
-  async appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]> {
-    const cleans = drafts.map(cleanDraft); // every draft checked before anything lands
+  /**
+   * `drafts` appended as one batch; `publish`, when given, runs in the
+   * same synchronous step, after the batch is minted and before any of
+   * it is accepted: what it lands and the events land together. A throw
+   * from the clock, the generator or `publish` accepts no event, and
+   * undoes nothing `publish` did before throwing — so `publish` must
+   * finish synchronously and leave nothing visible when it throws. How
+   * the vault in memory publishes a commit's objects with its events.
+   */
+  async appendAll<D extends JsonObject>(drafts: Draft<D>[], publish?: () => void): Promise<Event<D>[]> {
+    const clean = Array.from(drafts, (draft) => validateDraft(draft)); // every index visited, a hole refused as a draft that is not an object
+    if (clean.length === 0 && publish === undefined) return [];
     return this.serialise(() => {
-      const now = this.clock();
-      const events = cleans.map(
-        (clean): Event<D> => ({
-          eid: this.minter.mint(now.getTime()),
-          at: now.toISOString(),
-          author: this.self,
-          type: clean.type,
-          blobs: clean.blobs,
-          data: clean.data,
-        })
+      // One clock reading and one `at` for the batch. Every event of
+      // the batch is brought to the form its canonical bytes parse to
+      // before any is accepted, so what append returns is what scan
+      // and another store's ingest hand out.
+      const { at, eventIds } = mint(clean.length, this.now);
+      const held = clean.map((draft, i) =>
+        canonical({ eventId: eventIds[i], at, author: this.author, type: draft.type, roots: draft.roots, data: draft.data })
       );
-      for (const event of events) {
-        this.add(event); // one turn of the chain: all in, in input order
-      }
-      return events;
+      publish?.();
+      return held.map((h) => this.accept(h.event, h.text)) as Event<D>[];
     });
   }
 
-  private add(event: Event): void {
+  /** Add an event this store does not hold: it is frozen and, from here on, what `scan` hands out. */
+  private accept(event: Event, text: string): Event {
     deepFreeze(event);
-    this.held.set(event.eid, event);
-    this.arrived.push(event);
+    this.held.set(event.eventId, { event, text });
+    this.accepted.push(event);
+    this.bytes += utf8Length(text);
+    return event;
   }
 
-  async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    // Read everything first: what is rejected, what is a duplicate
-    // or a conflict against what is held or against the input itself, and
-    // whether any of it is self's — then, and only then, write.
-    const staged: Staged = { outcome: { added: 0, duplicates: 0, conflicts: [], rejected: [] }, events: new Map() };
-    const forked: Event[] = [];
-    for await (const raw of events) {
-      let event: Event;
+  /**
+   * `publish`, when given, runs once the input is classified and the
+   * fork check has passed, in the same synchronous step that accepts
+   * the new events, with how many there are: what it publishes lands
+   * with them, and a throw from it accepts none.
+   */
+  async ingest(events: AsyncIterable<unknown> | Iterable<unknown>, publish?: (adding: number) => void): Promise<Ingested> {
+    // Read everything first: validation and canonical form are
+    // the input's own and need no lock. Then, under the writer lock,
+    // classify each input against what is held — duplicate, conflict,
+    // new — in input order, check for a fork, and only then accept; so the
+    // outcome names what was actually held when the decision was made,
+    // and a write that lands while the input is still being read is seen.
+    const read: Read[] = [];
+    for await (const value of events) {
       try {
-        event = validateEvent(jsonClean(raw));
+        read.push({ held: canonical(value) });
       } catch (err) {
-        staged.outcome.rejected.push({ event: raw, error: err instanceof Error ? err.message : String(err) });
-        continue;
+        read.push({ rejected: { value, error: err instanceof Error ? err.message : String(err) } });
       }
-      const have = this.held.get(event.eid) ?? staged.events.get(event.eid);
-      if (have !== undefined) {
-        if (sameJson(have, event)) {
-          staged.outcome.duplicates += 1;
-        } else {
-          staged.outcome.conflicts.push({ eid: event.eid, kept: have, other: event });
-          if (event.author === this.self) {
-            forked.push(event);
-          }
-        }
-        continue;
-      }
-      if (event.author === this.self) {
-        forked.push(event);
-        continue;
-      }
-      staged.events.set(event.eid, event);
-    }
-    if (forked.length > 0) {
-      throw new ForkedSelf(this.self, forked);
     }
     return this.serialise(() => {
-      // Another ingest may have landed while this one was reading.
-      for (const [eid, event] of staged.events) {
-        const have = this.held.get(eid);
-        if (have === undefined) {
-          this.add(event);
-          staged.outcome.added += 1;
-        } else if (sameJson(have, event)) {
-          staged.outcome.duplicates += 1;
-        } else {
-          staged.outcome.conflicts.push({ eid, kept: have, other: event });
+      const outcome: Ingested = { added: 0, duplicates: 0, conflicts: [], rejected: [] };
+      const staged = new Map<EventId, Held>();
+      const forked: Event[] = [];
+      for (const item of read) {
+        if ("rejected" in item) {
+          outcome.rejected.push(item.rejected);
+          continue;
         }
+        const incoming = item.held;
+        const have = this.held.get(incoming.event.eventId) ?? staged.get(incoming.event.eventId);
+        if (have !== undefined) {
+          if (have.text === incoming.text) {
+            outcome.duplicates += 1;
+          } else {
+            outcome.conflicts.push({ eventId: incoming.event.eventId, kept: have.event, rejected: incoming.event });
+            if (incoming.event.author === this.author) forked.push(incoming.event);
+          }
+          continue;
+        }
+        if (incoming.event.author === this.author) {
+          forked.push(incoming.event);
+          continue;
+        }
+        staged.set(incoming.event.eventId, incoming);
       }
-      return staged.outcome;
+      if (forked.length > 0) throw new ForkedAuthor(this.author, forked);
+      publish?.(staged.size);
+      for (const incoming of staged.values()) {
+        this.accept(incoming.event, incoming.text);
+        outcome.added += 1;
+      }
+      return outcome;
     });
   }
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
-    // The store sorts, over a snapshot: an append during the walk is not yielded.
-    const events = [...this.held.values()].sort(compareEvents);
+    // The store sorts, over a snapshot: a write during the walk is not yielded.
+    const events = [...this.held.values()].map((held) => held.event).sort(compareEvents);
     for (const event of events) {
-      if (matches(event, filter)) {
-        yield event;
-      }
+      if (matches(event, filter)) yield event;
     }
   }
 
   async changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }> {
-    const to = this.arrived.length;
+    const to = this.accepted.length;
     const from = since === undefined ? 0 : this.place(since);
-    const events = this.arrived.slice(from, to).filter((event) => matches(event, filter));
+    const events = this.accepted.slice(from, to).filter((event) => matches(event, filter));
     return { token: this.token(to), events: iterate(events) };
   }
 
+  /** The frontier at `seq`: this generation, the position, and the ID accepted last before it, which names the event set. */
   private token(seq: number): ChangeToken {
-    return JSON.stringify({ instance: this.instance, store: this.store, seq });
+    return JSON.stringify({ generation: this.generation, seq, last: seq === 0 ? null : this.accepted[seq - 1]?.eventId });
   }
 
-  /** The position a token names, or a throw: another instance's, another store's, or past what is held. */
+  /** The position a token names, or a throw: another generation's, malformed, past what is held, or of another event set. */
   private place(token: ChangeToken): number {
     let parsed: unknown;
     try {
@@ -193,33 +199,45 @@ export class MemoryEventStore implements EventStore {
     } catch {
       throw new BadToken("not a token of this store");
     }
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      (parsed as { instance?: unknown }).instance !== this.instance ||
-      (parsed as { store?: unknown }).store !== this.store
-    ) {
-      throw new BadToken("not a token of this store instance");
+    if (typeof parsed !== "object" || parsed === null || (parsed as { generation?: unknown }).generation !== this.generation) {
+      throw new BadToken("not a token of this store generation");
     }
     const seq = (parsed as { seq?: unknown }).seq;
-    if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0 || seq > this.arrived.length) {
+    if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0 || seq > this.accepted.length) {
       throw new BadToken("token names a position this store does not hold");
+    }
+    const last = (parsed as { last?: unknown }).last;
+    if (last !== (seq === 0 ? null : this.accepted[seq - 1]?.eventId)) {
+      throw new BadToken("token names an event set this store does not hold");
     }
     return seq;
   }
 
-  damaged(): DamagedLine[] {
+  async damaged(): Promise<Damaged[]> {
     return [];
   }
 
-  conflicting(): Conflict[] {
+  async tally(): Promise<EventTally> {
+    return { events: this.held.size, bytes: this.bytes };
+  }
+
+  async conflicting(): Promise<Conflict[]> {
     return [];
   }
+}
+
+/**
+ * A value as an accepted event would be held: validated, then the form
+ * its canonical bytes parse to — member order, `-0` and all — with that
+ * canonical text, so two serializations of one event are one and a
+ * local append reads back as its ingest elsewhere would. Throws
+ * `InvalidEvent` or `InvalidJson`.
+ */
+function canonical(value: unknown): Held {
+  const text = canonicalText(validateEvent(value));
+  return { event: parseStrict(text) as Event, text };
 }
 
 async function* iterate<T>(items: T[]): AsyncIterable<T> {
-  for (const item of items) {
-    yield item;
-  }
+  for (const item of items) yield item;
 }
-

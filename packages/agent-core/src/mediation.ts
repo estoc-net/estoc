@@ -1,356 +1,231 @@
 /**
- * The mediation rituals: what this device settles
- * with its mediator over the link, and what it records of it — a grant
- * as `mediation.granted`, a DID the mediator accepted as
- * `did.registered`, a leaving as `did.retired` and `mediation.retired`.
- * Every step is decided over the fold and safe to repeat: a crash
- * between any two is healed by running the ritual again, which skips
- * what the log already says. The rituals decide nothing about contacts
- * or mail; they keep one invariant — every DID of ours that is an
- * address rides the current routing DID, and the mediator has been told
- * of it — and report what they did. "Ours" here is this device's: the
- * keys it minted (`did.minted` by `self`). Another device's keys are
- * seen in the fold and left alone (seen, not adopted) — not
- * registered under this device's `me`, which would take the mediator's
- * mapping from it, and not retired for riding a route that is not
- * ours.
+ * Mediation as the vault records it and the mediator confirms it. An
+ * arrangement is created in the vault before the mediator is asked,
+ * so a network failure leaves a retryable intent and never a half
+ * identity; the grant is recorded when it comes; the desired recipient
+ * set — every live DID bound to a mediated route of the arrangement —
+ * is reconciled with what the mediator holds on every connection,
+ * since registration is runtime state and not the vault's; and the
+ * selection for new routes is the vault's to record. Every step reads
+ * the fold and is safe to repeat: what the events already say is not
+ * asked for again.
  */
 
-import { drafts, record, type Mediation, type MyKey, type VaultFold } from "@estoc/vault";
+import { v7 as uuidv7 } from "uuid";
+
+import type { VaultRuntime } from "@estoc/event-store";
+import { mediationKeyName, mintMediationDid, scanVault, vaultDraft, type Did, type Keys, type Mediation, type MediationId, type VaultEvent, type VaultFold } from "@estoc/vault";
 
 import type { IMessage } from "./protocol/didcomm.js";
-import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE } from "./protocol/mediation.js";
-import type { PeerVault } from "./identity.js";
-import type { Keyring, MyIdentity, Routed } from "./keyring.js";
+import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT, RECIPIENT_QUERY, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE } from "./protocol/mediation.js";
+import { EntityConflict, MediatorRefused, UnknownEntity, Unusable, WrongAccount, WrongMediator } from "./errors.js";
 import type { MediatorLink } from "./link.js";
+import { decide, serially } from "./procedure.js";
+import { sameDid } from "./same-did.js";
 
-/** Why these rituals retire a key: its route is not the mediation's any more. */
-const MEDIATION_CHANGED = "mediation-changed";
-/** Why `leave` retires a mediation: the device moves to another. */
-const CHANGED = "changed";
-
-// ---- what the fold says -----------------------------------------------------
-
-/** This device's current mediation: the last `mediation.created` without a `mediation.retired`, plus its grant if any. */
-export function current(fold: VaultFold, self: string): Mediation | null {
-  return fold.device(self)?.mediation ?? null;
-}
-
-/** A mediation as a mint takes it (`Routed`): null while it has no routing DID. */
-export function routedOf(mediation: Mediation | null): Routed | null {
-  return mediation === null || mediation.routingDid === null ? null : { id: mediation.id, routingDid: mediation.routingDid };
+/** The arrangement as the fold has it; `UnknownEntity` when it has none. */
+export function mediationOf(fold: VaultFold, mediationId: MediationId): Mediation {
+  const mediation = fold.mediations.mediations.get(mediationId);
+  if (mediation === undefined) throw new UnknownEntity("mediation", mediationId);
+  return mediation;
 }
 
 /**
- * The keys this device minted on the current routing DID that its
- * mediator has not been told of (`registered` without this
- * device) — the public DID, every live key toward a contact, every open
- * invitation — a mint that happened while the mediator could not be
- * told, or was told and the answer never recorded. Another device's
- * keys on the same route are its own to register. What `register`
- * takes; empty without a granted mediation.
+ * The link must be the arrangement's own: to its mediator, speaking as
+ * its identity. Two arrangements with one mediator are two accounts
+ * there, and a ritual run as one and recorded against the other would
+ * grant, register and disclose under the wrong one.
  */
-export function registerPending(fold: VaultFold, self: string): string[] {
-  const mediation = current(fold, self);
-  if (mediation === null || mediation.routingDid === null) {
-    return [];
-  }
-  const routingDid = mediation.routingDid;
-  const pending = new Set<string>();
-  const consider = (key: MyKey | null): void => {
-    if (key !== null && live(key) && ownedBy(key, self) && key.minted.routingDid === routingDid && !registeredBy(key, self)) {
-      pending.add(key.key);
-    }
-  };
-  for (const key of fold.myKeys()) {
-    if (isProfile(key)) {
-      consider(key);
-    }
-  }
-  for (const contact of fold.contacts()) {
-    for (const use of contact.keys) {
-      consider(fold.myKey(use.key));
-    }
-  }
-  for (const invitation of fold.invitations()) {
-    if (invitation.open) {
-      consider(fold.myKey(invitation.key));
-    }
-  }
-  return [...pending];
+function toward(link: MediatorLink, mediation: Mediation): void {
+  if (mediation.mediatorDid !== null && !sameDid(mediation.mediatorDid, link.mediatorDid)) throw new WrongMediator(mediation.mediatorDid, link.mediatorDid);
+  if (mediation.me !== null && !sameDid(mediation.me.did, link.me)) throw new WrongAccount(mediation.me.did, link.me);
 }
 
-// ---- establishing -------------------------------------------------------------
+/**
+ * `mediation.created` for a new arrangement with `mediatorDid`: the
+ * vault-controlled identity toward the mediator, minted from the
+ * arrangement's own key name. Committed before any network request.
+ * The same ID again returns the creation already recorded when it
+ * says the same, and refuses one that says otherwise.
+ */
+export async function createMediation(runtime: VaultRuntime, keys: Keys, mediatorDid: Did, mediationId = uuidv7() as MediationId): Promise<VaultEvent<"mediation.created">> {
+  const me = await mintMediationDid(keys, mediationId);
+  const data = { mediationId, mediatorDid, me: { keyName: mediationKeyName(mediationId), did: me.longFormDid } };
+  const { fold, events } = await decide(runtime, keys, (fold) => {
+    const existing = fold.mediations.mediations.get(mediationId);
+    if (existing === undefined) return [vaultDraft("mediation.created", data)];
+    if (existing.mediatorDid !== data.mediatorDid || existing.me?.did !== data.me.did) throw new EntityConflict("mediation", mediationId, existing.faults.join("; ") || "another mediator or identity");
+    return [];
+  });
+  return (events[0] as VaultEvent<"mediation.created"> | undefined) ?? (fold.set.of("mediation.created").find((event) => event.data.mediationId === mediationId) as VaultEvent<"mediation.created">);
+}
 
-export type EstablishStep = "granted" | "published" | "registered";
+export type EstablishStep = "granted" | "reconciled";
 
 export interface Established {
-  mediation: Routed;
-  /** the public DID under it, registered */
-  pub: MyIdentity;
-  /** what this run had to do, in order; empty when the log already said it all */
+  mediation: Mediation;
+  /** what this run had to do, in order */
   steps: EstablishStep[];
+  reconciled: Reconciled;
 }
 
 /**
- * mediate-request → `mediation.granted` → the public DID minted and
- * `did.published` → recipient-update → `did.registered`, each only when
- * the fold lacks it: a grant recorded is not asked for again, a mint
- * that stopped before its publish is picked up (`Keyring.mintPublic`),
- * a publish before its register is registered now. Needs a current
- * mediation (`Keyring.createMediation`) toward the link's mediator.
+ * mediate-request → `mediation.granted` → recipients reconciled, each
+ * only when the fold lacks it: a grant recorded is not asked for
+ * again. Needs the arrangement created toward the link's mediator and
+ * neither retired nor in conflict. Selecting it for new routes is a
+ * separate step, `selectMediation`, since it is policy's.
  */
-export async function establish(link: MediatorLink, keyring: Keyring, opened: PeerVault): Promise<Established> {
-  const mediation = keyring.current();
-  if (mediation === null) {
-    throw new Error("no mediation to establish: create one first");
-  }
+export async function establish(link: MediatorLink, runtime: VaultRuntime, keys: Keys, mediationId: MediationId): Promise<Established> {
+  let fold = await scanVault(runtime.vault, keys);
+  let mediation = mediationOf(fold, mediationId);
   toward(link, mediation);
+  if (mediation.status === "conflict" || mediation.status === "retired" || mediation.me === null) {
+    throw new Unusable("mediation", mediationId, [...mediation.faults, ...(mediation.retired === null ? [] : [`retired: ${mediation.retired}`]), ...(mediation.me === null ? ["no creation"] : [])]);
+  }
   const steps: EstablishStep[] = [];
-  let routed = routedOf(mediation);
-  if (routed === null) {
+  if (mediation.routingDid === null) {
     const grant = await link.roundTrip(MEDIATE_REQUEST, {});
-    if (grant.type !== MEDIATE_GRANT) {
-      throw new Error(`expected mediate-grant, got ${grant.type}`);
-    }
+    if (grant.type !== MEDIATE_GRANT) throw new MediatorRefused(`expected mediate-grant, got ${grant.type}`);
     const routing = grant.body["routing_did"];
     const routingDid = Array.isArray(routing) ? routing[0] : undefined;
-    if (typeof routingDid !== "string") {
-      throw new Error("mediate-grant carries no routing_did");
-    }
-    await record(opened.vault.events, opened.fold, drafts.mediationGranted({ id: mediation.id, routingDid }));
-    routed = { id: mediation.id, routingDid };
-    steps.push("granted");
+    if (typeof routingDid !== "string") throw new MediatorRefused("mediate-grant carries no routing_did");
+    const decided = await decide(runtime, keys, (fold) => {
+      const current = mediationOf(fold, mediationId);
+      return current.routingDid === null && current.status === "pending" ? [vaultDraft("mediation.granted", { mediationId, routingDid: routingDid as Did })] : [];
+    });
+    if (decided.events.length > 0) steps.push("granted");
+    fold = await scanVault(runtime.vault, keys);
+    mediation = mediationOf(fold, mediationId);
   }
-  let pub = keyring.pub();
-  if (pub === null) {
-    pub = await keyring.mintPublic(routed);
-    steps.push("published");
-  }
-  if (!registeredBy(opened.fold.myKey(pub.key), opened.vault.self)) {
-    await register(link, opened, [pub.key]);
-    steps.push("registered");
-  }
-  return { mediation: routed, pub, steps };
+  const reconciled = await reconcile(link, runtime, keys, mediationId);
+  steps.push("reconciled");
+  return { mediation, steps, reconciled };
+}
+
+export interface Reconciled {
+  mediationId: MediationId;
+  /** the live DIDs on the arrangement's mediated routes, by short form: what the mediator is to hold */
+  desired: Did[];
+  /** what the mediator held before this run */
+  held: Did[];
+  added: Did[];
+  removed: Did[];
+  /** what the mediator would not add or remove; a desired DID among them is not registered */
+  refused: Did[];
+}
+
+/** Is `did` registered with the mediator as of this reconciliation? */
+export function registered(reconciled: Reconciled, did: Did): boolean {
+  return reconciled.desired.includes(did) && !reconciled.refused.includes(did);
 }
 
 /**
- * recipient-update `add` for `keys` in one breath, then `did.registered`
- * for each the mediator accepted (`success` or `no_change`). Keys the
- * fold already shows registered by this device are not asked about
- * again; none left, no round trip. One refused fails the call — after
- * the accepted are recorded, so the next run asks about the refused
- * alone. A key another device minted is refused here, before anything
- * is asked: registering it would take its mail. Returns the keys
- * recorded this time.
+ * recipient-query, then one recipient-update for the difference between
+ * what the mediator holds and the desired set: every live DID bound to
+ * a mediated route of this arrangement, by its short form, and nothing
+ * else. Needs a usable arrangement; the diff goes to the `diag` trace.
+ * Runs as the account's one procedure at a time, over the fold as it
+ * stands on entry: a desired set read earlier could be missing a DID
+ * disclosed since, and would have it removed.
  */
-export async function register(link: MediatorLink, opened: PeerVault, keys: readonly string[]): Promise<string[]> {
-  const { fold, vault } = opened;
-  toward(link, current(fold, vault.self));
-  const pending: { key: string; did: string }[] = [];
-  for (const key of new Set(keys)) {
-    const have = fold.myKey(key);
-    if (have === null || !minted(have)) {
-      throw new Error(`${key} was never minted`);
-    }
-    if (!ownedBy(have, vault.self)) {
-      throw new Error(`${key} was minted by another device: its to register`);
-    }
-    if (!registeredBy(have, vault.self)) {
-      pending.push({ key, did: have.minted.did });
-    }
-  }
-  if (pending.length === 0) {
-    return [];
-  }
-  const answer = await link.roundTrip(RECIPIENT_UPDATE, { updates: pending.map(({ did }) => ({ recipient_did: did, action: "add" })) });
-  if (answer.type !== RECIPIENT_UPDATE_RESPONSE) {
-    throw new Error(`expected recipient-update-response, got ${answer.type}`);
-  }
-  const results = resultsOf(answer);
-  const recorded: string[] = [];
-  let refused = 0;
-  for (const { key, did } of pending) {
-    const result = results.get(did);
-    if (result === "success" || result === "no_change") {
-      await record(vault.events, fold, drafts.didRegistered({ key }));
-      recorded.push(key);
-    } else {
-      refused += 1;
-    }
-  }
-  if (refused > 0) {
-    throw new Error(`the mediator did not accept ${refused} of ${pending.length} DID(s) of ours`);
-  }
-  return recorded;
+export function reconcile(link: MediatorLink, runtime: VaultRuntime, keys: Keys, mediationId: MediationId): Promise<Reconciled> {
+  return serially(runtime, mediationId, async () => reconcileNow(link, await scanVault(runtime.vault, keys), mediationId));
 }
 
-// ---- leaving and moving -------------------------------------------------------
-
-export interface Left {
-  id: string;
-  /** the keys retired: the public DID and every open invitation minted under the mediation */
-  retired: string[];
-  /** the DIDs the mediator was asked to drop: every key it may have been told of */
-  dropped: string[];
-  /** why it could not be asked, when it could not; the leaving stands */
-  failed: string | null;
-}
-
-/**
- * Leaving the current mediation: `did.retired { because:
- * "mediation-changed" }` for the public DID and every open invitation
- * minted under it (their routes lead to a mediator that is no longer
- * ours), the mediator asked — best effort, in one breath — to drop
- * every DID it may have been told of: every one this device minted
- * under the arrangement, `did.registered` or not — that record lands
- * only when an add's answer comes back, and an add whose answer was
- * lost was applied all the same; removing what it never knew is a
- * no_change — so mail to a stale DID fails at the sender
- * rather than queueing where nobody looks, then `mediation.retired {
- * because: "changed" }`. Keys toward contacts stay: `rotateStale`
- * replaces them once the next mediation is granted. Null when there is
- * nothing to leave. The socket is the caller's to close.
- */
-export async function leave(link: MediatorLink, opened: PeerVault): Promise<Left | null> {
-  const { fold, vault } = opened;
-  const mediation = current(fold, vault.self);
-  if (mediation === null) {
-    return null;
-  }
+/** `reconcile` for a caller that already holds the account's turn and a fold read under it. */
+export async function reconcileNow(link: MediatorLink, fold: VaultFold, mediationId: MediationId): Promise<Reconciled> {
+  const mediation = mediationOf(fold, mediationId);
   toward(link, mediation);
-  const retired: string[] = [];
-  const open = openInvitations(fold);
-  for (const key of fold.myKeys()) {
-    if (live(key) && key.minted.mediation === mediation.id && (isProfile(key) || open.has(key.key))) {
-      await record(vault.events, fold, drafts.didRetired({ key: key.key, because: MEDIATION_CHANGED }));
-      retired.push(key.key);
-    }
+  if (mediation.status !== "usable") throw new Unusable("mediation", mediationId, mediation.faults.length > 0 ? mediation.faults : [mediation.status]);
+  const desired = fold.routes.desiredRecipients.filter((recipient) => recipient.mediationId === mediationId).map((recipient) => recipient.did);
+  const held = await queryRecipients(link);
+  const added = desired.filter((did) => !held.includes(did));
+  const removed = held.filter((did) => !desired.includes(did));
+  const refused: Did[] = [];
+  if (added.length > 0 || removed.length > 0) {
+    const updates = [...added.map((did) => ({ recipient_did: did, action: "add" })), ...removed.map((did) => ({ recipient_did: did, action: "remove" }))];
+    const answer = await link.roundTrip(RECIPIENT_UPDATE, { updates });
+    if (answer.type !== RECIPIENT_UPDATE_RESPONSE) throw new MediatorRefused(`expected recipient-update-response, got ${answer.type}`);
+    const results = resultsOf(answer);
+    const done = (did: Did, action: string): boolean => {
+      const result = results.get(updateKey(did, action));
+      return result === "success" || result === "no_change";
+    };
+    for (const did of added) if (!done(did, "add")) refused.push(did);
+    for (const did of removed) if (!done(did, "remove")) refused.push(did);
   }
-  const dropped = fold
-    .myKeys()
-    .filter((key): key is Minted => minted(key) && ownedBy(key, vault.self) && key.minted.mediation === mediation.id)
-    .map((key) => key.minted.did);
-  let failed: string | null = null;
-  if (dropped.length > 0) {
-    try {
-      await link.roundTrip(RECIPIENT_UPDATE, { updates: dropped.map((did) => ({ recipient_did: did, action: "remove" })) });
-    } catch (err) {
-      failed = err instanceof Error ? err.message : String(err);
-    }
-  }
-  await record(vault.events, fold, drafts.mediationRetired({ id: mediation.id, because: CHANGED }));
-  return { id: mediation.id, retired, dropped, failed };
+  const reconciled: Reconciled = { mediationId, desired, held, added: added.filter((did) => !refused.includes(did)), removed: removed.filter((did) => !refused.includes(did)), refused };
+  await link.observe("diag", "reconcile", { ...reconciled });
+  return reconciled;
 }
 
-export interface Rotated {
-  /** the contacts given a fresh key */
-  moved: string[];
-  /** the keys retired: toward those contacts, and the public DID and open invitations of the mediation itself when its route moved */
-  retired: string[];
+/** How many recipients one recipient-query page asks for, and how many pages one query reads before it is refused. */
+export const RECIPIENT_PAGE = { limit: 100, mostPages: 100 };
+
+/**
+ * Every recipient DID the mediator holds for this account, page by
+ * page. Each page has to move the listing on — a DID listed already,
+ * or a page naming none, is no progress — and the listing ends within
+ * `RECIPIENT_PAGE.mostPages`; a mediator that pages otherwise is
+ * refused, so that it holds neither the account's turn nor a message
+ * whose call waits on the registration.
+ */
+async function queryRecipients(link: MediatorLink): Promise<Did[]> {
+  const dids = new Set<Did>();
+  for (let offset = 0, pages = 0; ; ) {
+    if (pages >= RECIPIENT_PAGE.mostPages) throw new MediatorRefused(`recipient-query lists more than ${RECIPIENT_PAGE.mostPages} pages`);
+    const answer = await link.roundTrip(RECIPIENT_QUERY, { paginate: { limit: RECIPIENT_PAGE.limit, offset } });
+    pages++;
+    if (answer.type !== RECIPIENT) throw new MediatorRefused(`expected recipient, got ${answer.type}`);
+    const page = answer.body["dids"];
+    const entries = Array.isArray(page) ? page : [];
+    let listed = 0;
+    for (const entry of entries) {
+      const did = (entry as { recipient_did?: unknown })?.recipient_did;
+      if (typeof did !== "string") continue;
+      if (dids.has(did as Did)) throw new MediatorRefused(`recipient-query lists ${did} again at offset ${offset}`);
+      dids.add(did as Did);
+      listed++;
+    }
+    const pagination = answer.body["pagination"] as { remaining?: unknown } | undefined;
+    const remaining = typeof pagination?.remaining === "number" ? pagination.remaining : 0;
+    if (entries.length === 0 || remaining <= 0) return [...dids];
+    if (listed === 0) throw new MediatorRefused(`recipient-query names no recipient at offset ${offset} and says ${remaining} remain`);
+    offset += entries.length;
+  }
+}
+
+function updateKey(did: string, action: string): string {
+  return `${action} ${did}`;
 }
 
 /**
- * The invariant a mediator change (or a grant that moved the route)
- * leaves to the next start: every live key this device minted toward a
- * contact rides the current routing DID. For a contact with one that
- * does not — the mediator was changed, whether or not this process saw
- * it — a fresh key is minted toward it (`Keyring.mintToward`) unless
- * one of ours on the route is there already (a run that stopped before
- * retiring), then every stale one is `did.retired { because:
- * "mediation-changed" }`; the contact learns by `from_prior` on what
- * goes out next. Another device's keys toward the contact ride its
- * route and are neither counted nor retired. The mediation's own public
- * DID and open invitations on an old route are retired the same way;
- * `establish` mints the next public DID. Nothing without a granted
- * mediation.
+ * recipient-update-response: the result of each update, by the DID and
+ * the action together, since a success at removing is no success at
+ * adding. An entry missing its action or its DID says nothing; two
+ * entries for one update that disagree say nothing either.
  */
-export async function rotateStale(opened: PeerVault, keyring: Keyring): Promise<Rotated> {
-  const { fold, vault } = opened;
-  const mediation = keyring.current();
-  const routed = routedOf(mediation);
-  const done: Rotated = { moved: [], retired: [] };
-  if (mediation === null || routed === null) {
-    return done;
-  }
-  const ours = (key: MyKey | null): key is Minted => key !== null && live(key) && ownedBy(key, vault.self);
-  const onRoute = (key: MyKey | null): boolean => ours(key) && key.minted.routingDid === routed.routingDid;
-  const stale = (key: MyKey | null): key is Minted => ours(key) && key.minted.routingDid !== routed.routingDid;
-  const retire = async (key: string): Promise<void> => {
-    await record(vault.events, fold, drafts.didRetired({ key, because: MEDIATION_CHANGED }));
-    done.retired.push(key);
-  };
-  for (const contact of fold.contacts()) {
-    const keys = contact.keys.map((use) => fold.myKey(use.key));
-    const old = keys.filter(stale);
-    if (old.length === 0) {
-      continue;
-    }
-    if (!keys.some(onRoute)) {
-      await keyring.mintToward(contact.cid, routed);
-    }
-    for (const key of old) {
-      await retire(key.key);
-    }
-    done.moved.push(contact.cid);
-  }
-  const open = openInvitations(fold);
-  for (const key of fold.myKeys()) {
-    if (stale(key) && key.minted.mediation === mediation.id && (isProfile(key) || open.has(key.key))) {
-      await retire(key.key);
-    }
-  }
-  return done;
-}
-
-// ---- inside -------------------------------------------------------------------
-
-type Minted = MyKey & { minted: NonNullable<MyKey["minted"]> };
-
-function minted(key: MyKey): key is Minted {
-  return key.minted !== null;
-}
-
-/** Minted and not retired: a key that is still an address. */
-function live(key: MyKey): key is Minted {
-  return minted(key) && key.retired === null;
-}
-
-function isProfile(key: MyKey): boolean {
-  return key.published.some((entry) => entry.as === "profile");
-}
-
-function registeredBy(key: MyKey | null, self: string): boolean {
-  return key !== null && key.registered.includes(self);
-}
-
-/** Minted by this device: the one whose mediator it is registered with, and whose route it rides. */
-function ownedBy(key: Minted, self: string): boolean {
-  return key.minted.by === self;
-}
-
-function openInvitations(fold: VaultFold): Set<string> {
-  return new Set(fold.invitations().filter((invitation) => invitation.open).map((invitation) => invitation.key));
-}
-
-/** The link must be to the mediation's mediator: a ritual recorded against another would be a lie in the log. */
-function toward(link: MediatorLink, mediation: Mediation | null): void {
-  if (mediation !== null && mediation.mediatorDid !== link.mediatorDid) {
-    throw new Error("the link is to another mediator than the current mediation's");
-  }
-}
-
-/** recipient-update-response: `updated[].recipient_did` → `result`. */
 function resultsOf(answer: IMessage): Map<string, string | undefined> {
   const results = new Map<string, string | undefined>();
   const updated = answer.body["updated"];
   for (const entry of Array.isArray(updated) ? updated : []) {
-    if (typeof entry === "object" && entry !== null) {
-      const { recipient_did, result } = entry as { recipient_did?: unknown; result?: unknown };
-      if (typeof recipient_did === "string") {
-        results.set(recipient_did, typeof result === "string" ? result : undefined);
-      }
-    }
+    if (typeof entry !== "object" || entry === null) continue;
+    const { recipient_did, action, result } = entry as { recipient_did?: unknown; action?: unknown; result?: unknown };
+    if (typeof recipient_did !== "string" || typeof action !== "string") continue;
+    const key = updateKey(recipient_did, action);
+    const value = typeof result === "string" ? result : undefined;
+    results.set(key, results.has(key) && results.get(key) !== value ? undefined : value);
   }
   return results;
+}
+
+/** `mediation.selected`: the arrangement policy prefers for new mediated routes. Needs a usable one; already the latest selection, nothing is written. */
+export async function selectMediation(runtime: VaultRuntime, keys: Keys, mediationId: MediationId): Promise<VaultEvent<"mediation.selected"> | null> {
+  const { events } = await decide(runtime, keys, (fold) => {
+    const mediation = mediationOf(fold, mediationId);
+    if (mediation.status !== "usable") throw new Unusable("mediation", mediationId, mediation.faults.length > 0 ? mediation.faults : [mediation.status]);
+    return fold.mediations.selected === mediationId ? [] : [vaultDraft("mediation.selected", { mediationId })];
+  });
+  return (events[0] as VaultEvent<"mediation.selected"> | undefined) ?? null;
 }

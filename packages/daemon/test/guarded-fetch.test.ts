@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 
-import { guardedFetch, isPublicAddress } from "../src/node/index.js";
+import { guardedFetch, isPublicAddress } from "../src/node/guarded-fetch.js";
 
 describe("guarded fetch", () => {
   it("knows a public address from the rest", () => {

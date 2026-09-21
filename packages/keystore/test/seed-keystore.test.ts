@@ -2,18 +2,14 @@ import { describe, expect, it } from "vitest";
 import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { base64url } from "jose";
 import {
-  addDerivedKey,
   changeSeedPassphrase,
   createSeedKeystore,
   deriveIdentity,
   generateSeed,
   importSeed,
   isValidKeyName,
-  listKeys,
-  openDerivedKey,
   parseSeedKeystore,
   publicKeyFromDidKey,
-  removeDerivedKey,
   serializeKeystore,
   unlockSeedKeystore,
 } from "../src/index.js";
@@ -80,72 +76,34 @@ describe("seed derivation", () => {
 });
 
 describe("seed keystore", () => {
-  it("create → add → serialize → parse → unlock → open round-trips", async () => {
-    let { doc, seedKey } = await createSeedKeystore("hunter2", { seed: FIXED_SEED });
-    let identity;
-    ({ doc, identity } = await addDerivedKey(doc, seedKey, "anchor"));
-    ({ doc } = await addDerivedKey(doc, seedKey, "pair/alice/1"));
-    expect(doc.version).toBe(3);
+  it("create → serialize → parse → unlock round-trips to the same keys", async () => {
+    const { doc, seedKey } = await createSeedKeystore("hunter2", { seed: FIXED_SEED });
+    expect(doc).toEqual({ version: 3, seedJwe: expect.any(String) });
+    const identity = await deriveIdentity(seedKey, "anchor");
 
     const reloaded = parseSeedKeystore(serializeKeystore(doc));
-    expect(listKeys(reloaded).map((k) => k.name)).toEqual(["anchor", "pair/alice/1"]);
-    expect(reloaded.keys[0]).toEqual({ name: "anchor", did: identity.did, createdAt: expect.any(String) });
-
     const unlocked = await unlockSeedKeystore(reloaded, "hunter2");
-    const reopened = await openDerivedKey(reloaded, unlocked, "anchor");
+    const reopened = await deriveIdentity(unlocked, "anchor");
     expect(reopened.did).toBe(identity.did);
     expect(reopened.name).toBe("anchor");
   });
 
   it("wrong passphrase fails without leaking jose internals; passphrase change works", async () => {
-    const { doc } = await createSeedKeystore("right");
+    const { doc, seedKey } = await createSeedKeystore("right");
     await expect(unlockSeedKeystore(doc, "wrong")).rejects.toThrow(/wrong passphrase/);
     const changed = await changeSeedPassphrase(doc, "right", "newer");
     await expect(unlockSeedKeystore(changed, "right")).rejects.toThrow(/wrong passphrase/);
-    await unlockSeedKeystore(changed, "newer");
-    expect(changed.keys).toEqual(doc.keys);
+    const unlocked = await unlockSeedKeystore(changed, "newer");
+    expect((await deriveIdentity(unlocked, "anchor")).did).toBe((await deriveIdentity(seedKey, "anchor")).did);
   });
 
-  it("the name is the key: add is idempotent, open needs no cache entry, remove forgets only the listing", async () => {
-    let { doc, seedKey } = await createSeedKeystore("pw", { seed: FIXED_SEED });
-    let a;
-    ({ doc, identity: a } = await addDerivedKey(doc, seedKey, "pair/c/1", { now: new Date(0) }));
-    const again = await addDerivedKey(doc, seedKey, "pair/c/1", { now: new Date(1000) });
-    expect(again.identity.did).toBe(a.did);
-    expect(again.doc).toBe(doc); // unchanged, createdAt kept
-    expect(doc.keys).toHaveLength(1);
-
-    // A name another store minted derives here without being listed.
-    const unlisted = await openDerivedKey(doc, seedKey, "pair/c/2");
-    expect(unlisted.did).not.toBe(a.did);
-    expect(doc.keys.map((k) => k.name)).toEqual(["pair/c/1"]);
-
-    doc = removeDerivedKey(doc, "pair/c/1");
-    expect(doc.keys).toEqual([]);
-    expect((await openDerivedKey(doc, seedKey, "pair/c/1")).did).toBe(a.did);
-    let b;
-    ({ doc, identity: b } = await addDerivedKey(doc, seedKey, "pair/c/1"));
-    expect(b.did).toBe(a.did);
-  });
-
-  it("detects a seed that does not match a recorded DID", async () => {
-    let { doc, seedKey } = await createSeedKeystore("pw", { seed: FIXED_SEED });
-    ({ doc } = await addDerivedKey(doc, seedKey, "anchor"));
+  it("another seed derives another key under the same name", async () => {
+    const { seedKey } = await createSeedKeystore("pw", { seed: FIXED_SEED });
     const other = await importSeed(generateSeed());
-    await expect(openDerivedKey(doc, other, "anchor")).rejects.toThrow(/does not derive/);
-    await expect(addDerivedKey(doc, other, "anchor")).rejects.toThrow(/does not derive/);
+    expect((await deriveIdentity(other, "anchor")).did).not.toBe((await deriveIdentity(seedKey, "anchor")).did);
   });
 
-  it("rejects bad and unknown names", async () => {
-    let { doc, seedKey } = await createSeedKeystore("pw");
-    ({ doc } = await addDerivedKey(doc, seedKey, "anchor"));
-    await expect(addDerivedKey(doc, seedKey, "")).rejects.toThrow(/invalid key name/);
-    await expect(addDerivedKey(doc, seedKey, "no spaces")).rejects.toThrow(/invalid key name/);
-    await expect(openDerivedKey(doc, seedKey, "no spaces")).rejects.toThrow(/invalid key name/);
-    expect(() => removeDerivedKey(doc, "nope")).toThrow(/no key named/);
-  });
-
-  it("parser validates structure, keeps unknown fields, and refuses other versions", async () => {
+  it("parser validates structure, keeps unknown fields, and refuses other versions and listed keys", async () => {
     const { doc } = await createSeedKeystore("pw");
     expect(() => parseSeedKeystore("nope")).toThrow(/valid JSON/);
     expect(() => parseSeedKeystore('"str"')).toThrow(/JSON object/);
@@ -153,20 +111,11 @@ describe("seed keystore", () => {
     expect(() => parseSeedKeystore('{"version":2,"seedJwe":"x","nextIndex":0,"keys":[]}')).toThrow(
       /v2 .* no longer supported/,
     );
-    expect(() => parseSeedKeystore('{"version":4,"seedJwe":"x","keys":[]}')).toThrow(/unsupported seed keystore version/);
-    expect(() => parseSeedKeystore('{"version":3,"keys":[]}')).toThrow(/seedJwe must be a string/);
-    expect(() => parseSeedKeystore('{"version":3,"seedJwe":"x"}')).toThrow(/must be an array/);
-    expect(() => parseSeedKeystore('{"version":3,"seedJwe":"x","keys":[{"name":"x"}]}')).toThrow(/missing string field/);
-    const bad = { ...doc, keys: [{ name: "bad name", did: "did:key:z", createdAt: "" }] };
-    expect(() => parseSeedKeystore(JSON.stringify(bad))).toThrow(/invalid name/);
-    const dup = { ...doc, keys: [
-      { name: "x", did: "did:key:z", createdAt: "" },
-      { name: "x", did: "did:key:z", createdAt: "" },
-    ] };
-    expect(() => parseSeedKeystore(JSON.stringify(dup))).toThrow(/duplicate key name/);
-    const extra = { ...doc, future: { any: 1 }, keys: [{ name: "x", did: "did:key:z", createdAt: "", note: "kept" }] };
+    expect(() => parseSeedKeystore('{"version":4,"seedJwe":"x"}')).toThrow(/unsupported seed keystore version/);
+    expect(() => parseSeedKeystore('{"version":3}')).toThrow(/seedJwe must be a string/);
+    expect(() => parseSeedKeystore('{"version":3,"seedJwe":"x","keys":[]}')).toThrow(/list their keys/);
+    const extra = { ...doc, future: { any: 1 } };
     const parsed = parseSeedKeystore(JSON.stringify(extra)) as unknown as Record<string, unknown>;
     expect(parsed.future).toEqual({ any: 1 });
-    expect((parsed.keys as unknown[])[0]).toMatchObject({ note: "kept" });
   });
 });

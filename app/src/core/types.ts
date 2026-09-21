@@ -1,9 +1,9 @@
-import type { Channel, ContactId } from "@estoc/vault/v3";
-import type { ChannelRecord, MessageRecord, UnplacedInput } from "@estoc/agent-core/v3";
+import type { Channel, ContactId } from "@estoc/vault";
+import type { ChannelRecord, MessageRecord, UnplacedInput } from "@estoc/agent-core";
 
-export type { Channel, ContactId, Did, DidId, MessageId } from "@estoc/vault/v3";
-export type { ChannelRecord, MessageRecord, PendingWork, UnplacedInput } from "@estoc/agent-core/v3";
-export type { Lines, Merged, Phase, Snapshot } from "@estoc/daemon/v3";
+export type { Channel, ContactId, Did, DidId, MessageId } from "@estoc/vault";
+export type { ChannelRecord, MessageRecord, PendingWork, UnplacedInput } from "@estoc/agent-core";
+export type { Lines, Merged, Phase, Snapshot } from "@estoc/daemon";
 
 /** A channel as a conversation shows it: whether the contact selects it, or it is history reached from one it selects. */
 export interface ConversationChannel extends ChannelRecord {

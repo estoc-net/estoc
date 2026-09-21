@@ -1,4 +1,4 @@
-import { connect, decode, encode, type Daemon, type DaemonEvents, type Port } from "@estoc/daemon/v3";
+import { connect, decode, encode, type Daemon, type DaemonEvents, type Port } from "@estoc/daemon";
 
 /**
  * The daemon as this page reaches it. By default a dedicated worker,

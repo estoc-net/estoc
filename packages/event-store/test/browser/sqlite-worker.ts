@@ -2,7 +2,7 @@
  * What runs in the Worker: every case and suite the platform-neutral
  * test files define, over the wasm pool, and holding a directory
  * against another Worker. Driven by messages from the page script,
- * which `../v3/sqlite/browser-driver.test.ts` bundles and serves. What
+ * which `../sqlite/browser-driver.test.ts` bundles and serves. What
  * JavaScript holds here the Worker cannot measure for itself and asks
  * the page for; what SQLite's allocator holds it reads from the wasm
  * runtime.
@@ -11,18 +11,18 @@
 import type { Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 
 import { openSqlitePool, type SqlitePool } from "../../src/browser.js";
-import { assert, type DriverHarness, driverCases, type MemoryHeld } from "../v3/sqlite/driver-cases.js";
-import { eventCases } from "../v3/sqlite/event-cases.js";
-import { continued, inspectPortable, type Inspection } from "../v3/sqlite/exchange.js";
-import { destination, exportCases, type ExportHarness, opened } from "../v3/sqlite/export-cases.js";
-import { importCases, type ImportHarness } from "../v3/sqlite/import-cases.js";
-import { objectCases, type ObjectHarness } from "../v3/sqlite/object-cases.js";
-import { type OpenHarness, openCases } from "../v3/sqlite/open-cases.js";
-import { eventStoreOpener, objectStoreOpener, type SuiteHarness, vaultOpener } from "../v3/sqlite/suite-openers.js";
-import { clock, vaultCases } from "../v3/sqlite/vault-cases.js";
-import { eventStoreSuite } from "../v3/suite/event-store-suite.js";
-import { objectStoreSuite } from "../v3/suite/object-store-suite.js";
-import { vaultSuite } from "../v3/suite/vault-suite.js";
+import { assert, type DriverHarness, driverCases, type MemoryHeld } from "../sqlite/driver-cases.js";
+import { eventCases } from "../sqlite/event-cases.js";
+import { continued, inspectPortable, type Inspection } from "../sqlite/exchange.js";
+import { destination, exportCases, type ExportHarness, opened } from "../sqlite/export-cases.js";
+import { importCases, type ImportHarness } from "../sqlite/import-cases.js";
+import { objectCases, type ObjectHarness } from "../sqlite/object-cases.js";
+import { type OpenHarness, openCases } from "../sqlite/open-cases.js";
+import { eventStoreOpener, objectStoreOpener, type SuiteHarness, vaultOpener } from "../sqlite/suite-openers.js";
+import { clock, vaultCases } from "../sqlite/vault-cases.js";
+import { eventStoreSuite } from "../suite/event-store-suite.js";
+import { objectStoreSuite } from "../suite/object-store-suite.js";
+import { vaultSuite } from "../suite/vault-suite.js";
 import { poolCases } from "./pool-cases.js";
 import { collected } from "./vitest-stand-in.js";
 

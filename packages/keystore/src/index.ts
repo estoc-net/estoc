@@ -1,4 +1,4 @@
-export type { Signer, DidKeySigner, DerivedKeyEntry, SeedKeystoreDocument } from "./types.js";
+export type { Signer, DidKeySigner, SeedKeystoreDocument } from "./types.js";
 export { didKeyFromPublicKey, publicKeyFromDidKey } from "./did-key.js";
 export {
   generateSeed,
@@ -14,12 +14,7 @@ export {
   createSeedKeystore,
   unlockSeedKeystore,
   changeSeedPassphrase,
-  addDerivedKey,
-  openDerivedKey,
-  removeDerivedKey,
-  listKeys,
   serializeKeystore,
   parseSeedKeystore,
   type CreateSeedKeystoreOptions,
-  type AddDerivedKeyOptions,
 } from "./seed-keystore.js";

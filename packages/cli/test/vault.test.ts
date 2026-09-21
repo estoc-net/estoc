@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SOCKET_FILE, nodeHost, runDaemon, type Served } from "@estoc/daemon/v3/node";
+import { SOCKET_FILE, nodeHost, runDaemon, type Served } from "@estoc/daemon/node";
 import { hashObject, readObject, signObject, verifyObjectCard } from "@estoc/folder-object";
 import { readTree } from "@estoc/folder-object/fs";
 import { ANCHOR_KEY_NAME, ESTOC_DIR, findVault, initVault, openVault, openVaultKey, vaultStatus } from "../src/vault.js";
