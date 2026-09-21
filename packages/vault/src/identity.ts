@@ -1,183 +1,229 @@
 /**
- * The identity operations against
- * `@estoc/keystore` v3: one seed, keys derived by name, the log the
- * truth about which names exist and `keystore.json`'s `keys[]` a cache
- * of it. Every mint appends the event that names
- * the key first and writes the cache second — a crash between the two
- * leaves a name the log derives on demand, never a key nobody references.
- *
- * What a key is minted *as* is the caller's: a `MintDid` turns a derived
- * key and a routing DID into a did:peer:4 (the agent) or anything with a
- * `did` (a test).
+ * The vault's own keys and communication DIDs. One seed derives every
+ * key by name: the anchor that is the vault's identity, the two keys of
+ * each communication-DID entity and the one key name of each mediation
+ * arrangement. Each name derives an Ed25519 key and, separately under
+ * the keystore's own domain, an X25519 key; a key-agreement use takes
+ * the latter, never a conversion of the former. Nothing derived
+ * is stored: a recorded `did.created` is checked by reading its own
+ * document back and holding the keys and route it authorizes against
+ * what the seed and the bound route give.
  */
 
-import type { EventStore, FileStore } from "@estoc/event-store";
-import { KEYSTORE_FILE, NotAVault } from "@estoc/event-store";
-import { addDerivedKey, deriveIdentity, parseSeedKeystore, serializeKeystore, type DerivedIdentity, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
-import { v7 as uuidv7 } from "uuid";
+import type { JsonObject, WrappedSeed } from "@estoc/event-store";
+import { encodeLongForm, longToShort } from "@estoc/did-peer";
+import { deriveIdentity, unlockSeedKeystore, type SeedKey } from "@estoc/keystore";
+import { base64urlnopad } from "@scure/base";
 
-import { drafts } from "./drafts.js";
-import type { VaultFold } from "./fold.js";
-import { KEY_ANCHOR, didKeyName, mediationKeyName, type VaultEvent } from "./types.js";
+import { IdentityMismatch, Locked } from "./errors.js";
+import { ANCHOR_KEY_NAME, didKeyName, mediationKeyName } from "./ids.js";
+import { authorizedMethodIds, didcommServiceUris, methodPublicKey, peerResolution, splitDidUrl, type PeerResolution } from "./peer-document.js";
+import { canonicalPublicKey } from "./public-key.js";
+import type { Did, DidId, KeyName, MediationId, PublicKey, VaultData } from "./types.js";
 
-/** A DID minted from a key: whatever the minter returns, as long as it names the DID. */
-export interface MintedDid {
-  did: string;
+/** An OKP private key as RFC 8037 spells it. */
+export type OkpPrivateJwk = { kty: "OKP"; crv: "Ed25519" | "X25519"; x: string; d: string };
+
+/** One derived key in one of its two uses, with the private half closed over. */
+export interface LocalKey {
+  readonly name: KeyName;
+  readonly type: "Ed25519" | "X25519";
+  /** The canonical public-key value, as a document lists it and as evidence names it. */
+  readonly publicKey: PublicKey;
+  publicKeyBytes(): Uint8Array;
+  /** A fresh copy each call, for a library that runs its own crypto. */
+  privateJwk(): OkpPrivateJwk;
+}
+
+/** The two keys of a communication-DID entity, or the two keys a mediation arrangement's one name derives. */
+export type DidKeys = { authentication: LocalKey; keyAgreement: LocalKey };
+
+function localKey(name: KeyName, type: "Ed25519" | "X25519", publicKey: Uint8Array, privateKey: Uint8Array): LocalKey {
+  return {
+    name,
+    type,
+    publicKey: canonicalPublicKey({ kty: "OKP", crv: type, x: base64urlnopad.encode(publicKey) }),
+    publicKeyBytes: () => publicKey.slice(),
+    privateJwk: () => ({ kty: "OKP", crv: type, x: base64urlnopad.encode(publicKey), d: base64urlnopad.encode(privateKey) }),
+  };
+}
+
+export class Keys {
+  private seedKey: SeedKey | null;
+
+  private constructor(seedKey: SeedKey) {
+    this.seedKey = seedKey;
+  }
+
+  /** The anchor DID a seed derives: the vault identity that seed belongs to. */
+  static async anchorOf(seedKey: SeedKey): Promise<Did> {
+    return (await deriveIdentity(seedKey, ANCHOR_KEY_NAME)).did as Did;
+  }
+
+  /** Keys over a seed, once it has derived the anchor the vault records. */
+  static async open(seedKey: SeedKey, anchor: string): Promise<Keys> {
+    const derived = await Keys.anchorOf(seedKey);
+    if (derived !== anchor) throw new IdentityMismatch(`the seed derives the anchor ${derived}, not this vault's ${anchor}`);
+    return new Keys(seedKey);
+  }
+
+  static async unlock(wrapped: WrappedSeed, passphrase: string, anchor: string): Promise<Keys> {
+    return Keys.open(await unlockSeedKeystore({ version: 3, seedJwe: wrapped.seedJwe }, passphrase), anchor);
+  }
+
+  get locked(): boolean {
+    return this.seedKey === null;
+  }
+
+  /** Drop the seed; every later derivation throws. Keys already handed out keep their material. */
+  lock(): void {
+    this.seedKey = null;
+  }
+
+  private async derive(name: KeyName, type: "Ed25519" | "X25519"): Promise<LocalKey> {
+    if (this.seedKey === null) throw new Locked();
+    const identity = await deriveIdentity(this.seedKey, name);
+    const jwk = type === "Ed25519" ? identity.privateJwks().ed25519 : identity.privateJwks().x25519;
+    return localKey(name, type, base64urlnopad.decode(jwk.x as string), base64urlnopad.decode(jwk.d as string));
+  }
+
+  /** The Ed25519 key a name derives. */
+  async signing(name: KeyName): Promise<LocalKey> {
+    return this.derive(name, "Ed25519");
+  }
+
+  /** The X25519 key a name derives. */
+  async agreement(name: KeyName): Promise<LocalKey> {
+    return this.derive(name, "X25519");
+  }
+
+  /** The fixed keys of a communication-DID entity: one name for authentication, another for key agreement. */
+  async didKeys(didId: DidId): Promise<DidKeys> {
+    return { authentication: await this.signing(didKeyName(didId, "authentication")), keyAgreement: await this.agreement(didKeyName(didId, "key-agreement")) };
+  }
+
+  /** The DIDComm identity of a mediation arrangement: the two keys its one name derives. */
+  async mediationKeys(mediationId: MediationId): Promise<DidKeys> {
+    const name = mediationKeyName(mediationId);
+    return { authentication: await this.signing(name), keyAgreement: await this.agreement(name) };
+  }
+}
+
+/** Where a communication DID's document sends its traffic: a mediator's routing DID, or a direct HTTPS or WSS endpoint. */
+export type RouteTarget = { kind: "mediated"; routingDid: Did } | { kind: "direct"; endpoint: string };
+
+/** A did:peer:4 the vault controls: both spellings and the input document the long form encodes. */
+export type LocalDid = { did: Did; longFormDid: Did; inputDocument: JsonObject };
+
+/** A communication DID with the entity ID it belongs to: what `did.created` records, short of the route ID. */
+export type MintedDid = LocalDid & { didId: DidId };
+
+export const AUTHENTICATION_METHOD = "#key-1";
+export const KEY_AGREEMENT_METHOD = "#key-2";
+export const DIDCOMM_SERVICE = "#service";
+
+/**
+ * The numalgo-4 input document of a local DID: one Multikey per use
+ * and, when the DID is written to, one DIDComm v2 service at the
+ * route's target. Member order is fixed because the long form hashes
+ * the document's own serialization.
+ */
+export function inputDocumentOf(keys: DidKeys, service: string | null): JsonObject {
+  return {
+    "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
+    verificationMethod: [
+      { id: AUTHENTICATION_METHOD, type: "Multikey", publicKeyMultibase: keys.authentication.publicKey },
+      { id: KEY_AGREEMENT_METHOD, type: "Multikey", publicKeyMultibase: keys.keyAgreement.publicKey },
+    ],
+    authentication: [AUTHENTICATION_METHOD],
+    keyAgreement: [KEY_AGREEMENT_METHOD],
+    ...(service === null ? {} : { service: [{ id: DIDCOMM_SERVICE, type: "DIDCommMessaging", serviceEndpoint: { uri: service, accept: ["didcomm/v2"] } }] }),
+  };
+}
+
+function localDidOf(inputDocument: JsonObject): LocalDid {
+  const longFormDid = encodeLongForm(inputDocument) as Did;
+  return { did: longToShort(longFormDid) as Did, longFormDid, inputDocument };
+}
+
+/** The communication DID an entity ID and a route give: the same DID every time, from the seed alone. */
+export async function mintDid(keys: Keys, didId: DidId, route: RouteTarget): Promise<MintedDid> {
+  return { didId, ...localDidOf(inputDocumentOf(await keys.didKeys(didId), routeServiceUri(route))) };
+}
+
+/** The DID a mediation arrangement is known to its mediator by: no service, its mail is picked up. */
+export async function mintMediationDid(keys: Keys, mediationId: MediationId): Promise<LocalDid> {
+  return localDidOf(inputDocumentOf(await keys.mediationKeys(mediationId), null));
+}
+
+export function routeServiceUri(route: RouteTarget): string {
+  return route.kind === "mediated" ? route.routingDid : route.endpoint;
 }
 
 /**
- * How a derived key and a DIDComm service become a DID. Deterministic:
- * the same identity and service give the same DID, which is how recorded
- * DIDs are checked against the seed.
+ * The document's methods for a relationship must all be its own and
+ * all carry the one key the seed derives for that use: another
+ * implementation may serialize the same keys and route differently,
+ * so the recorded document is read, never rebuilt from a template.
  */
-export type MintDid<M extends MintedDid = MintedDid> = (identity: DerivedIdentity, serviceUri: string | null) => M;
-
-export interface KeysOptions<M extends MintedDid = MintedDid> {
-  mint: MintDid<M>;
-  clock?: () => Date;
+function holdsKey(resolution: PeerResolution, relationship: "authentication" | "keyAgreement", key: LocalKey, entity: string): void {
+  const ids = authorizedMethodIds(resolution.document, relationship);
+  if (ids.length === 0) throw new IdentityMismatch(`${entity} authorizes no ${relationship} method`);
+  for (const id of ids) {
+    if (splitDidUrl(id)[0] !== resolution.presentedDid || methodPublicKey(resolution.document, id) !== key.publicKey) {
+      throw new IdentityMismatch(`${entity} authorizes ${id} for ${relationship}, not the key the seed derives`);
+    }
+  }
 }
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+/**
+ * The document a recorded DID entity encodes, read for what does not
+ * need the seed: the long form must resolve and `did` must be its
+ * short form. A long form that does not resolve throws
+ * `InvalidDidDocument`.
+ */
+export function didDocumentOf(created: Pick<VaultData["did.created"], "didId" | "did" | "longFormDid">): PeerResolution {
+  const resolution = peerResolution(created.longFormDid);
+  if (resolution.did !== created.did) throw new IdentityMismatch(`DID entity ${created.didId} records ${created.did}, not the short form of its long form`);
+  return resolution;
+}
 
-export class Keys<M extends MintedDid = MintedDid> {
-  private constructor(
-    private readonly events: EventStore,
-    private readonly files: FileStore,
-    public keystore: SeedKeystoreDocument,
-    private readonly seedKey: SeedKey,
-    private readonly options: KeysOptions<M>
-  ) {}
+/** Does the document send to exactly one DIDComm endpoint, the route's target? */
+export function documentSendsTo(document: JsonObject, route: RouteTarget): boolean {
+  const uris = didcommServiceUris(document);
+  return uris.length === 1 && uris[0] === routeServiceUri(route);
+}
 
-  private now(): Date {
-    return this.options.clock === undefined ? new Date() : this.options.clock();
+/** A DID entity's document against the seed: its authentication and key-agreement methods must carry the entity's two keys. */
+export async function checkDidKeys(keys: Keys, didId: DidId, resolution: PeerResolution): Promise<void> {
+  const entity = `DID entity ${didId}`;
+  const { authentication, keyAgreement } = await keys.didKeys(didId);
+  holdsKey(resolution, "authentication", authentication, entity);
+  holdsKey(resolution, "keyAgreement", keyAgreement, entity);
+}
+
+/** A mediation arrangement's own document against the seed: its methods must carry the two keys the arrangement's name derives. */
+export async function checkMediationKeys(keys: Keys, mediationId: MediationId, resolution: PeerResolution): Promise<void> {
+  const entity = `mediation ${mediationId}`;
+  const { authentication, keyAgreement } = await keys.mediationKeys(mediationId);
+  holdsKey(resolution, "authentication", authentication, entity);
+  holdsKey(resolution, "keyAgreement", keyAgreement, entity);
+}
+
+/**
+ * A recorded DID entity against the seed and its bound route: the
+ * document must read, carry the entity's two keys and send to the
+ * route. A long form that does not resolve throws `InvalidDidDocument`.
+ */
+export async function checkDidCreated(keys: Keys, created: Pick<VaultData["did.created"], "didId" | "did" | "longFormDid">, route: RouteTarget): Promise<void> {
+  const resolution = didDocumentOf(created);
+  await checkDidKeys(keys, created.didId, resolution);
+  if (!documentSendsTo(resolution.document, route)) {
+    throw new IdentityMismatch(`DID entity ${created.didId} sends to ${JSON.stringify(didcommServiceUris(resolution.document))}, not its bound route`);
   }
+}
 
-  /** Open over a vault that has a `keystore.json`. */
-  static async open<M extends MintedDid = MintedDid>(vault: { events: EventStore; files: FileStore }, seedKey: SeedKey, options: KeysOptions<M>): Promise<Keys<M>> {
-    const bytes = await vault.files.read(KEYSTORE_FILE);
-    if (bytes === null) {
-      throw new NotAVault(`no ${KEYSTORE_FILE}`);
-    }
-    return new Keys(vault.events, vault.files, parseSeedKeystore(decoder.decode(bytes)), seedKey, options);
-  }
-
-  /**
-   * First open of a fresh vault: take a fresh keystore document (no keys),
-   * cache the anchor in it, write `keystore.json`. The anchor `KeyRef`
-   * for `config.json` is the caller's to have fixed first (`anchorOf`).
-   */
-  static async init<M extends MintedDid = MintedDid>(
-    vault: { events: EventStore; files: FileStore },
-    doc: SeedKeystoreDocument,
-    seedKey: SeedKey,
-    options: KeysOptions<M>
-  ): Promise<Keys<M>> {
-    if (doc.keys.length !== 0) {
-      throw new Error("init wants a fresh keystore with no keys");
-    }
-    const keys = new Keys(vault.events, vault.files, doc, seedKey, options);
-    await keys.remember(KEY_ANCHOR);
-    return keys;
-  }
-
-  /** The identity's anchor: the did:key the key named `anchor` derives. */
-  static async anchorOf(seedKey: SeedKey): Promise<{ key: string; did: string }> {
-    const identity = await deriveIdentity(seedKey, KEY_ANCHOR);
-    return { key: KEY_ANCHOR, did: identity.did };
-  }
-
-  /**
-   * The seed in hand must be the seed this vault was made from: the key
-   * named `anchor` must derive the anchor DID `config.json` records —
-   * checked before anything is derived or sent, because it is what "the
-   * same identity" means.
-   */
-  async verifyAnchor(did: string): Promise<void> {
-    const anchor = await Keys.anchorOf(this.seedKey);
-    if (anchor.did !== did) {
-      throw new Error(`the seed does not derive this vault's anchor DID (${did}): wrong seed for this vault`);
-    }
-  }
-
-  /** The identity a name derives; the cache entry, when there is one, must agree. */
-  async derive(name: string): Promise<DerivedIdentity> {
-    const { identity } = await addDerivedKey(this.keystore, this.seedKey, name, { now: this.now() });
-    return identity;
-  }
-
-  /** Re-mint the DID a key derives with `serviceUri`: what unlocks and signs as it. */
-  async identity(name: string, serviceUri: string | null): Promise<M> {
-    return this.options.mint(await this.derive(name), serviceUri);
-  }
-
-  /** Derive and list in the cache, then write `keystore.json`; idempotent. */
-  private async remember(name: string): Promise<DerivedIdentity> {
-    const { doc, identity } = await addDerivedKey(this.keystore, this.seedKey, name, { now: this.now() });
-    if (doc !== this.keystore) {
-      this.keystore = doc;
-      await this.files.write(KEYSTORE_FILE, encoder.encode(serializeKeystore(doc)));
-    }
-    return identity;
-  }
-
-  /**
-   * Mint a DID of ours to hand to people: the key `did/<id>`,
-   * `did.minted` appended (the record), the cache written after.
-   * `mediation` is the arrangement whose routing DID goes in its service,
-   * or null for a DID only ever picked up from.
-   */
-  async mintDid(fold: VaultFold, mediation: { id: string; routingDid: string } | null): Promise<{ event: VaultEvent<"did.minted">; key: string; identity: M }> {
-    const key = didKeyName(uuidv7({ msecs: this.now().getTime() }));
-    const identity = this.options.mint(await this.derive(key), mediation?.routingDid ?? null);
-    const event = (await this.events.append(
-      drafts.didMinted({ key, did: identity.did, routingDid: mediation?.routingDid ?? null, mediation: mediation?.id ?? null })
-    )) as VaultEvent<"did.minted">;
-    fold.apply(event);
-    await this.remember(key);
-    return { event, key, identity };
-  }
-
-  /**
-   * This device's arrangement with one mediator: mint the mediation
-   * id and the `me` key (no service — its mail is picked up, never
-   * pushed), append `mediation.created`, cache after. `granted` and
-   * `retired` are plain observations and decisions: `drafts` and the wire.
-   */
-  async createMediation(fold: VaultFold, mediatorDid: string): Promise<{ event: VaultEvent<"mediation.created">; id: string; key: string; identity: M }> {
-    const id = uuidv7({ msecs: this.now().getTime() });
-    const key = mediationKeyName(id);
-    const identity = this.options.mint(await this.derive(key), null);
-    const event = (await this.events.append(drafts.mediationCreated({ id, mediatorDid, me: { key, did: identity.did } }))) as VaultEvent<"mediation.created">;
-    fold.apply(event);
-    await this.remember(key);
-    return { event, id, key, identity };
-  }
-
-  /**
-   * Rebuild the key cache from the log: every `did.minted` and
-   * `mediation.created` name, and the anchor, derived and listed.
-   * Returns the names that were missing.
-   */
-  async rebuildCache(fold: VaultFold): Promise<string[]> {
-    const names = new Set<string>([KEY_ANCHOR]);
-    for (const key of fold.myKeys()) {
-      if (key.minted !== null) {
-        names.add(key.key);
-      }
-    }
-    for (const device of fold.devices()) {
-      for (const mediation of device.mediations) {
-        names.add(mediation.me.key);
-      }
-    }
-    const added: string[] = [];
-    for (const name of [...names].sort()) {
-      if (!this.keystore.keys.some((entry) => entry.name === name)) {
-        added.push(name);
-      }
-      await this.remember(name);
-    }
-    return added;
-  }
+/** A recorded mediation arrangement against the seed: `me.did` must resolve to the two keys the arrangement's name derives. */
+export async function checkMediationCreated(keys: Keys, created: Pick<VaultData["mediation.created"], "mediationId" | "me">): Promise<void> {
+  await checkMediationKeys(keys, created.mediationId, peerResolution(created.me.did));
 }

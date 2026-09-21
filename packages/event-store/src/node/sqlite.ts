@@ -8,7 +8,7 @@
 import { closeSync, openSync, statSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
-import { DatabaseBusy, DatabaseExists, DatabaseMissing, InvalidSqlValue, SqliteError } from "../v3/errors.js";
+import { DatabaseBusy, DatabaseExists, DatabaseMissing, InvalidSqlValue, SqliteError } from "../errors.js";
 import {
   Connection,
   exactInteger,
@@ -19,7 +19,7 @@ import {
   type SqlRow,
   type SqliteDriver,
   type SqlValue,
-} from "../v3/sqlite/driver.js";
+} from "../sqlite/driver.js";
 
 export interface NodeSqliteOptions {
   mode: OpenMode;

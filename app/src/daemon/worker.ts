@@ -1,8 +1,8 @@
 import { openSqlitePool } from "@estoc/event-store/browser";
 import type { DidcommApi } from "@estoc/agent-core";
-import { createDaemon, serve, type DaemonHost, type DaemonStorage, type Emit } from "@estoc/daemon/v3";
+import { createDaemon, serve, type DaemonHost, type DaemonStorage, type Emit } from "@estoc/daemon";
 
-import { FromPrior, Message, initDidcomm } from "../didcomm/wasm.js";
+import { Message, initDidcomm } from "../didcomm/wasm.js";
 import { cacheSeedKey, cachedSeedKey, forgetSeedKey } from "./keycache.js";
 import { FOLDER_VAULT, POOL_DIRECTORY } from "./places.js";
 
@@ -45,7 +45,7 @@ const host: DaemonHost = {
   forgetSeedKey,
   async didcomm(): Promise<DidcommApi> {
     await initDidcomm();
-    return { Message, FromPrior };
+    return { Message };
   },
   onOnline: (callback) => self.addEventListener("online", callback),
 };

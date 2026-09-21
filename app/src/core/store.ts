@@ -1,8 +1,7 @@
 import { shallowReactive, toRaw } from "vue";
-import { BASIC_MESSAGE, GOAL_CONNECT, PROFILE, invitationUrl, parseInvitation, type Invitation } from "@estoc/agent-core";
-import type { InvitationRecord, TraceLevel } from "@estoc/agent-core/v3";
-import type { EventReference, ExecutionId } from "@estoc/vault/v3";
-import type { Daemon, Outcome } from "@estoc/daemon/v3";
+import { BASIC_MESSAGE, GOAL_CONNECT, PROFILE, invitationUrl, parseInvitation, type Invitation, type InvitationRecord, type TraceLevel } from "@estoc/agent-core";
+import type { EventReference, ExecutionId } from "@estoc/vault";
+import type { Daemon, Outcome } from "@estoc/daemon";
 
 import { startDaemon } from "../daemon/client.js";
 import { forgetSeedKey } from "../daemon/keycache.js";

@@ -143,19 +143,19 @@ serving, a message written with the network off that is still there after
 an offline reload and goes out by hand once the network is back.
 
 `scripts/e2e-daemon.mjs` drives the app against `estoc serve`, using
-`@estoc/daemon/v3` and the public mediator at `mediator.estoc.dev`.
+`@estoc/daemon` and the public mediator at `mediator.estoc.dev`.
 Run `node scripts/e2e-daemon.mjs` with the built app available as described
 at the top of the script; an optional first argument sets the app URL.
 
 ## How it hangs together
 
-- **The agent is [@estoc/agent-core]** (`/v3`): mediation
+- **The agent is [@estoc/agent-core]**: mediation
   (coordinate-mediation 3.0), pickup and live delivery (messagepickup 3.0
   over HTTP and WebSocket), routing 2.0 forwards, trust-ping, receipts,
   rotation by `from_prior`, user-profile/1.0 introductions, over the
   SQLite vault (`@estoc/event-store`, `@estoc/vault`).
 - **The daemon is a worker, or a process**: the agent and its vault run
-  behind the `Daemon` interface of `@estoc/daemon/v3` (`packages/daemon`),
+  behind the `Daemon` interface of `@estoc/daemon` (`packages/daemon`),
   and the UI reaches it only through that interface over an RPC: records
   and bytes cross, no vault, key or agent does. By default
   `src/daemon/worker.ts` hosts it in a dedicated worker of the page: the

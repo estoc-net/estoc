@@ -16,7 +16,7 @@ import { readTree, writeTree } from "@estoc/folder-object/fs";
 import { isPost, renderPost, validatePost } from "@estoc/post";
 import { unzipTree, zipTree } from "@estoc/folder-object/zip";
 import { appDir } from "@estoc/app";
-import { exitOnSignal, runDaemon } from "@estoc/daemon/v3/node";
+import { exitOnSignal, runDaemon } from "@estoc/daemon/node";
 import { promptNewPassphrase, promptPassphrase } from "./prompt.js";
 import { fill } from "./template.js";
 import { ANCHOR_KEY_NAME, findVault, initVault, openVault, openVaultKey, vaultStatus, type Vault } from "./vault.js";

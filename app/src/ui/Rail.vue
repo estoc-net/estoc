@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import qrcode from "qrcode-generator";
-import type { TraceLevel } from "@estoc/agent-core/v3";
+import type { TraceLevel } from "@estoc/agent-core";
 
 import { mediatorLabel } from "../core/mediators.js";
 import { chooseMediator, createInvitation, downloadBackup, forgetIdentity, invitationLink, lock, mergeBackup, reconnect, setTraceLevel, state } from "../core/store.js";

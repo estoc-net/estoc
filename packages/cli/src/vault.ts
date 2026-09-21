@@ -1,11 +1,11 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { createVault, inspectRuntime } from "@estoc/agent-core/v3";
-import { RESTORE_EXPLAINED, VAULT_FILE, connect, decode, encode, type Daemon, type DaemonStorage, type Phase, type Port, type Snapshot } from "@estoc/daemon/v3";
-import { ESTOC_DIR, SOCKET_FILE, nodeHost, vaultDir } from "@estoc/daemon/v3/node";
-import { DatabaseBusy } from "@estoc/event-store/v3";
+import { createVault, inspectRuntime } from "@estoc/agent-core";
+import { RESTORE_EXPLAINED, VAULT_FILE, connect, decode, encode, type Daemon, type DaemonStorage, type Phase, type Port, type Snapshot } from "@estoc/daemon";
+import { ESTOC_DIR, SOCKET_FILE, nodeHost, vaultDir } from "@estoc/daemon/node";
+import { DatabaseBusy } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, unlockSeedKeystore, type DerivedIdentity } from "@estoc/keystore";
-import { ANCHOR_KEY_NAME, Keys } from "@estoc/vault/v3";
+import { ANCHOR_KEY_NAME, Keys } from "@estoc/vault";
 
 export { ANCHOR_KEY_NAME, ESTOC_DIR };
 
@@ -250,7 +250,7 @@ export async function openVaultKey(vault: Vault, name: string, passphrase: strin
     throw new Error(`the daemon at ${reached.remote.at} holds this vault, and its keys stay with it: stop it to sign here`);
   }
   return looked(vault, reached.storage, async ({ runtime, wrapped }) => {
-    const seedKey = await unlockSeedKeystore({ version: 3, seedJwe: wrapped.seedJwe, keys: [] }, passphrase);
+    const seedKey = await unlockSeedKeystore({ version: 3, seedJwe: wrapped.seedJwe }, passphrase);
     await Keys.open(seedKey, runtime.metadata.anchor);
     return deriveIdentity(seedKey, name);
   });

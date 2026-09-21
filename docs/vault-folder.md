@@ -1,6 +1,8 @@
 # The `.estoc` folder, version 2 — draft
 
-Status: **implemented** as of 2026-09-01 (`@estoc/event-store`'s folder store); drafted 2026-08-30.
+Status: **retired** 2026-09-20 with [`event-store.md`](event-store.md): nothing
+reads or writes this folder any more. Version 3 is the [replica model](replica-model/README.md): one SQLite vault, DASL objects, channels.
+Kept as the record of what version 2 was.
 
 The second of three documents. `event-store.md` says what a vault is
 to a program — the event, the store, interchange. This document is

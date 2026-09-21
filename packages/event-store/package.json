@@ -1,7 +1,7 @@
 {
   "name": "@estoc/event-store",
-  "version": "0.1.0",
-  "description": "The vault as an event store (docs/event-store.md): the event envelope, canonical order and filter; the EventStore, BlobStore and FileStore interfaces every Estoc vault store implements; in-memory stores for tests and folds; the interchange (snapshot, export, import, restore, zip). Knows no event type: what an event means is @estoc/vault's.",
+  "version": "0.2.0",
+  "description": "The vault as an event store (docs/replica-model): canonical JSON, the event envelope, canonical order and filter; the EventStore, ObjectStore and Vault interfaces and their in-memory reference; the SQLite vault on Node and in a browser Worker; the portable snapshot's export, validation, restore and import. Knows no event type: what an event means is @estoc/vault's.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -14,10 +14,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./v3": {
-      "types": "./dist/v3/index.d.ts",
-      "default": "./dist/v3/index.js"
     },
     "./node": {
       "types": "./dist/node.d.ts",
@@ -46,24 +42,20 @@
     "vault",
     "event-store",
     "event-sourcing",
-    "unixfs",
     "opfs",
-    "decentralized-identity"
+    "decentralized-identity",
+    "sqlite",
+    "dasl"
   ],
   "dependencies": {
     "@estoc/dasl": "workspace:^",
-    "@ipld/dag-pb": "^4.1.7",
     "@noble/hashes": "^1.8.0",
     "@sqlite.org/sqlite-wasm": "3.53.4-build1",
-    "fflate": "^0.8.2",
-    "ipfs-unixfs": "^13.0.0",
-    "ipfs-unixfs-importer": "^17.0.1",
+    "canonicalize": "^5.1.0",
     "jsonc-parser": "^3.3.1",
-    "multiformats": "^14.0.5",
     "uuid": "^11.1.1"
   },
   "devDependencies": {
-    "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@types/chai": "^5.2.2",
     "@types/node": "^22.20.1",

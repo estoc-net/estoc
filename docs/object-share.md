@@ -3,7 +3,9 @@
 Status: implemented — §1–6 in `@estoc/agent-core` 0.15.0
 (`@estoc/folder-object` 0.5.0), §7–8 in 0.16.0 (folder-object 0.6.0),
 2026-08-26. The store a package lives in is `blob-store/1.0`
-(`docs/blob-store.md`).
+(`docs/blob-store.md`). **Retired** 2026-09-20: the implementation left
+`@estoc/agent-core` with the version-2 agent (0.19.0), being built on
+UnixFS objects the version-3 vault does not hold.
 Design history: `research/notes/2026-08-24-object-share-over-didcomm.md`,
 `research/notes/2026-08-26-want-and-blob-road.md`.
 

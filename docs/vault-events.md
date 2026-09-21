@@ -1,7 +1,9 @@
 # The vault's events, version 2 — draft
 
-Status: **implemented** as of 2026-09-01 (`@estoc/vault`); drafted 2026-08-30.
-Sections marked *provisional* are leanings, not decisions.
+Status: **retired** 2026-09-20 with [`event-store.md`](event-store.md): nothing
+reads or writes these events any more. Version 3's are
+[`replica-model/vault-events.md`](replica-model/vault-events.md). Kept as the
+record of what version 2 was.
 
 The third of three documents. Every line below is an event of
 `event-store.md` §2 — an envelope of `eid`, `at`, `author`, `type`,

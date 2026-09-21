@@ -6,9 +6,9 @@
  */
 
 import type { SqlitePool, SqlitePoolOptions } from "../../src/browser.js";
-import { SqliteObjectStore, createRuntime } from "../../src/v3/index.js";
-import { META, WRAPPED } from "../v3/fixtures.js";
-import { type Case, assertEqual, assertRejects, assertThrows, assertBytes, pattern } from "../v3/sqlite/driver-cases.js";
+import { SqliteObjectStore, createRuntime } from "../../src/index.js";
+import { META, WRAPPED } from "../fixtures.js";
+import { type Case, assertEqual, assertRejects, assertThrows, assertBytes, pattern } from "../sqlite/driver-cases.js";
 
 export type OpenPool = (options: SqlitePoolOptions) => Promise<SqlitePool>;
 

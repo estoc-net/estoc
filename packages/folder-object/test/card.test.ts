@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createSeedKeystore, addDerivedKey } from "@estoc/keystore";
+import { deriveIdentity, importSeed } from "@estoc/keystore";
 import { CARD_TYP, didKeyKid, signRoot, verifyCard } from "../src/index.js";
 
 async function signer(seedByte = 7) {
-  const { doc, seedKey } = await createSeedKeystore("pw", { seed: new Uint8Array(32).fill(seedByte) });
-  return (await addDerivedKey(doc, seedKey, "org/test")).identity.signer;
+  return (await deriveIdentity(await importSeed(new Uint8Array(32).fill(seedByte)), "org/test")).signer;
 }
 
 const b64 = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

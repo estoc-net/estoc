@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-09-20
+
+The version-3 vault, in place of the version-2 one.
+
+- **Version 3 is the package.** What was `@estoc/event-store/v3` is now
+  the root export, and the `./v3` entry is gone; every entry below that
+  names `@estoc/event-store/v3` describes what `@estoc/event-store`
+  exports now. `@estoc/event-store/node` has `openNodeSqlite` and
+  `@estoc/event-store/browser` has `openSqlitePool`, as before.
+- **The version-2 store is removed**: the six-field `eid` envelope and
+  its `EventStore`, `BlobStore` and `FileStore` with their in-memory
+  forms, the UnixFS block functions, `LocalEvent`, the folder
+  (`VaultBackend`, `MemoryBackend`, `OpfsBackend`, `FsBackend`,
+  `FolderVault` and its stores), and the interchange over it
+  (`snapshot`, `exportVault`, `importVault`, `restoreFolder`, `zipFiles`,
+  `filesFromZip`), with the `@ipld/dag-pb`, `ipfs-unixfs`,
+  `ipfs-unixfs-importer`, `multiformats` and `fflate` dependencies.
+  Nothing here reads or converts a version-2 folder.
 
 - **An import folds its union over the objects the target will hold.**
   The prospective union was folded over its events alone, so a

@@ -1,21 +1,18 @@
 # @estoc/event-store
 
-The vault as an event store: the code form of
-[`docs/event-store.md`](../../docs/event-store.md).
-
-**Version 3 is being built beside this**, under `@estoc/event-store/v3`,
-as the code form of the
-[replica model](../../docs/replica-model/README.md): the
-[event store](../../docs/replica-model/event-store.md), the
-[DASL object profile](../../docs/replica-model/dasl-objects.md) and the
-[SQLite vault](../../docs/replica-model/vault-sqlite.md). What is there
-so far is the model, its reference in memory, the SQLite driver the
+The vault as an event store: the code form of the
+[replica model](../../docs/replica-model/README.md)'s
+[event store](../../docs/replica-model/event-store.md),
+[DASL object profile](../../docs/replica-model/dasl-objects.md) and
+[SQLite vault](../../docs/replica-model/vault-sqlite.md). What is here
+is the model, its reference in memory, the SQLite driver the
 persistent stores are written against, the vault's schema and opening
 over it, the event store and the object store over that, the SQLite
 vault over both, and the portable snapshot: export, its validation
 and its inspection, restore and import — the whole of it run in a
 Chromium Worker as it is on Node, one snapshot exchanged between the
-two.
+two. No event type is known here: what an event means, and the folds
+that read it, are `@estoc/vault`'s.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
@@ -23,7 +20,7 @@ validation, `roots` being raw DASL CIDs from `@estoc/dasl`; canonical
 order; the `EventStore` interface; and minting — `at` from the clock,
 `eventId` from `uuid`'s standard UUIDv7 generator. `MemoryEventStore` is
 the reference the others are measured against, with `ForkedAuthor` and
-`BadToken`, and `eventStoreSuite` in `test/v3/suite/` is the conformance
+`BadToken`, and `eventStoreSuite` in `test/suite/` is the conformance
 suite every version-3 store runs.
 
 The object model: raw DASL objects hashed as they stream, whole-resource
@@ -124,7 +121,7 @@ a second Worker of the origin is refused before it touches the
 directory; the directory's one normalized spelling names both the lock
 and the VFS, so two spellings contend and two directories never share
 a pool, and a closed pool refuses every call. The driver cases in
-`test/v3/sqlite/driver-cases.ts` run over both, Node on a file and in
+`test/sqlite/driver-cases.ts` run over both, Node on a file and in
 memory and Chromium in a Worker; the pool's own cases are in
 `test/browser/pool-cases.ts`. In Chromium the page spawns the Workers
 all at once, each over a directory of its own: a case marked `large`
@@ -198,7 +195,7 @@ every call is `VaultClosed`; a create or open that fails, for any
 reason, closes the driver it was given, so ownership never stays with
 a handle nobody can use. Everything a file must show is a `NotAVault`
 naming what it did not. The open cases in
-`test/v3/sqlite/open-cases.ts` run over both platforms, Node on files
+`test/sqlite/open-cases.ts` run over both platforms, Node on files
 and Chromium in a Worker, a UTF-16 file among their inputs.
 
 Over an open runtime, the event store: `SqliteEventStore(db, { now })`
@@ -241,9 +238,9 @@ run — and `ingest` refuse with `DamagedHistory` until a validated
 snapshot is restored into a new runtime. Over an inspector's handle
 the store reads and refuses every write with `ReadOnlyVault` before it
 reads a source. `eventStoreSuite` runs over it in memory and on files;
-`test/v3/sqlite/events.test.ts` adds what only a database shows — the
+`test/sqlite/events.test.ts` adds what only a database shows — the
 rows, the positions, a reopen, damage, the inspector, a process dying
-inside its transaction — and `test/v3/sqlite/event-cases.ts` what the
+inside its transaction — and `test/sqlite/event-cases.ts` what the
 two platforms' SQLite must agree on, run on `node:sqlite` and in a
 Chromium Worker: a NUL in a type, damage stopping writes across a
 reopen, a sparse batch.
@@ -308,10 +305,10 @@ refused with `ReadOnlyVault` before a source is read. The chunk size
 is the format's and not a setting: a test that wants a chunk
 boundary inside an object puts one of more than a mebibyte.
 `objectStoreSuite` runs over it in memory and on files;
-`test/v3/sqlite/objects.test.ts` adds what only a database shows —
+`test/sqlite/objects.test.ts` adds what only a database shows —
 the staging beside a read, the staging bound, a stream across a
 repair, a key that is no CID, a process dying inside its acceptance
-— and `test/v3/sqlite/object-cases.ts` what the two platforms'
+— and `test/sqlite/object-cases.ts` what the two platforms'
 SQLite must agree on, run on `node:sqlite` and in a Chromium Worker:
 the chunk rows, a reopen, a preparation rolled back, damage of each
 kind and its repair, collection under an open stream, the inspector,
@@ -358,17 +355,17 @@ anchor, resetIdentity: true })` is the recovery from `ForkedAuthor`:
 once every check has passed, one transaction gives the runtime a
 fresh replica ID and generation and drops the cache, the events,
 positions, objects, options and keystore staying and every token of
-the old generation refused. `vaultSuite` in `test/v3/suite/` is what
+the old generation refused. `vaultSuite` in `test/suite/` is what
 any runtime must show through `Vault`, `VaultRuntime` and `Held` — a
 commit whole or not at all, damage and its repair, collection under
 open streams, the held view's ordering, rewrap under the lock, ingest
 as yielded — run over the runtime in memory and over the SQLite vault
-in memory and on files; `test/v3/sqlite/vault-cases.ts` is what the
+in memory and on files; `test/sqlite/vault-cases.ts` is what the
 two platforms' SQLite must agree on, run on `node:sqlite` and in a
 Chromium Worker: the rows one commit leaves and a reopen finds, a
 refused commit leaving nothing, the identity reset, the history
 stopping writes, the local tables, a `COMMIT` that fails, ownership
-across close; and `test/v3/sqlite/vault.test.ts` bundles a process
+across close; and `test/sqlite/vault.test.ts` bundles a process
 that commits through the vault and kills itself right after each of
 the commit's statements in turn, reopening the file after each to
 find the batch whole or not at all.
@@ -444,7 +441,7 @@ what SQLite itself cannot read is a problem like the others. Every
 problem found is in `InvalidSnapshot.problems`. Whether the events'
 known payloads are valid is the fold's to decide, in the layer that
 knows them: what `heldRoots` throws is what the export or the
-validation fails with. `test/v3/sqlite/export-cases.ts` runs on
+validation fails with. `test/sqlite/export-cases.ts` runs on
 `node:sqlite` and in a Chromium Worker: what a snapshot holds and
 what never enters it, checked in the file's raw bytes; the refusals
 before and after the destination is made, and the conflict that is
@@ -454,7 +451,7 @@ in memory exporting into the same file; every way a snapshot that
 opens still fails validation; a file past the bound refused as it is opened; the bound
 counting the events, tallied before one is read; a chunk longer than
 its layout never loaded; and a file whose own CHECK every row
-violates, validated on its values. `test/v3/sqlite/export.test.ts`
+violates, validated on its values. `test/sqlite/export.test.ts`
 adds what only a path shows: no sidecar beside the file whatever
 journal the destination was created with, two readers holding it at
 once, an inspector's export, a destination that is not fresh, and a
@@ -526,7 +523,7 @@ bytes, `IncompleteImport` when the root is required and it does not
 — rather than accept an event over bytes known damaged. The target's
 identity, wrapper, options and trace stay. The same snapshot again
 adds nothing and, with nothing to repair and no conflict to record,
-writes nothing. `test/v3/sqlite/import-cases.ts` runs on
+writes nothing. `test/sqlite/import-cases.ts` runs on
 `node:sqlite` and in a Chromium Worker: a restore's runtime checked
 row by row and run on; its refusals before and after the destination
 is made; an import's union, what it reports and keeps, the repeat
@@ -543,21 +540,21 @@ planned again or refusing it with nothing written; the source
 validated before the lock, another vault's snapshot and an inspector
 refused; and an import interrupted at every statement of its
 transaction, or at its `COMMIT`, leaving the whole old union or the
-whole new. `test/v3/sqlite/import.test.ts` adds a restore into a
+whole new. `test/sqlite/import.test.ts` adds a restore into a
 destination of either journal.
 
 The two platforms, side by side. The three conformance suites —
 `eventStoreSuite`, `objectStoreSuite`, `vaultSuite` — run over the
 wasm pool in the Chromium Worker as they run over `node:sqlite` in
 memory and on files, through the same openers
-(`test/v3/sqlite/suite-openers.ts`); the Worker's bundle gets the
+(`test/sqlite/suite-openers.ts`); the Worker's bundle gets the
 `vitest` the suites import from `test/browser/vitest-stand-in.ts`,
 whose `describe` and `it` collect the tests for the Worker to run one
 at a time and whose `expect` is vitest's own matchers over chai, so a
 suite asserts in the Worker exactly what it asserts under vitest, and
-`test/v3/sqlite/browser-driver.test.ts` reports each collected test
+`test/sqlite/browser-driver.test.ts` reports each collected test
 as a case of its own. One portable snapshot crosses between them
-(`test/v3/sqlite/exchange.ts`): a sample vault — text with control
+(`test/sqlite/exchange.ts`): a sample vault — text with control
 characters and numbers of every JSON kind in the events' data, a
 type outside ASCII, a second author's event, the empty object, one
 across a chunk boundary and one of bytes that are no text — is
@@ -573,7 +570,7 @@ both platforms under a source that reuses one buffer, with what the
 platform holds sampled on the way, in two measures. What JavaScript
 holds once garbage is collected — the heap and the backing stores of
 its array buffers — on Node from `process.memoryUsage`, the collector
-taken from V8 at run time (`test/v3/sqlite/node-memory.ts`); in the Worker from
+taken from V8 at run time (`test/sqlite/node-memory.ts`); in the Worker from
 outside it, over the DevTools protocol the test exposes to the page
 before it loads (`Target.exposeDevToolsProtocol`), which attaches to
 the Worker's target by name, collects its garbage and reads
@@ -588,7 +585,7 @@ the export and the restore copy, their source is watched from the
 test's side and what is held sampled every mebibyte read, the most of
 those the copy's sample: the batch an export gathers before a
 transaction, seen while it is held. The bounds are on growth, one
-table for each measure (`test/v3/sqlite/export-cases.ts`). For
+table for each measure (`test/sqlite/export-cases.ts`). For
 JavaScript: none across the second half of the commit or of the
 read, a batch's worth at most while a copy runs, none from the
 commit to the restore, and less than half the object in all. For
@@ -622,46 +619,3 @@ the handle's flush; a snapshot built there is in the same journal.
 On both, the temporary database is on a file (`temp_store=FILE`),
 and `journal_mode=OFF` or `MEMORY` and `synchronous=OFF` are never
 set.
-
-Everything below is
-version 2, which stays until the vault switches over.
-
-What is here is the **model**, the **seam**, and the **folder**:
-
-- the event — envelope (`eid`, `at`, `author`, `type`, `blobs`) plus
-  an opaque `data` — its validation, canonical order (`at`, then
-  `eid`, then `author`), structural equality, and the equality
-  `Filter`;
-- the three interfaces every vault store implements: `EventStore`
-  (`append`, `ingest`, `scan`, `changes`), `BlobStore` (a block store
-  of the `unixfs-v1-2025` profile with `collect` by age) and
-  `FileStore`;
-- `MemoryEventStore`, `MemoryBlobStore`, `MemoryFileStore` — the
-  reference semantics, and what folds are tested on;
-- the block functions a store's blob side is made of: `hashFile`,
-  `checkBlock`, `readFile`, `reachable`;
-- the `LocalEvent` shape a trace uses;
-- the folder ([`docs/vault-folder.md`](../../docs/vault-folder.md)):
-  `VaultBackend` — the bytes interface, with `MemoryBackend`,
-  `OpfsBackend` and (from `@estoc/event-store/node`) `FsBackend` —
-  and over it `FolderEventStore` (`devices/<dev>/<seg>.jsonl`),
-  `FolderBlobStore` (`blobs/<cid>`, aged by modification time),
-  `FolderFileStore` (every other path, by shape), the
-  `FolderLocalEventStore` a trace is kept in, and `FolderVault`:
-  `config.json` checked, `local/self.json` minted, `device.minted`
-  announced, a store per extension, `dispose`.
-
-No event type is known here — `device.minted` is the one name the
-folder writes, because the format says the folder writes it. What an
-event *means*, and the folds that turn a set of them into contacts
-and threads, are `@estoc/vault`'s (`docs/vault-events.md`).
-Interchange — `snapshot`, `exportVault`, `importVault`,
-`restoreFolder`, and `zipFiles` / `filesFromZip` for the shape a
-backup travels in — is here too (`docs/event-store.md` §10).
-
-`test/suite/` holds the conformance suites — `storeSuite`,
-`blobSuite`, and the backend cases — that every store and backend of
-this package runs, so that a folder, a database and a map in memory
-read and write the same set. The OPFS backend runs the backend cases
-in a headless Chromium (`test/opfs.test.ts`); without one the cases
-are skipped with a warning, and `ESTOC_BROWSER` names one.

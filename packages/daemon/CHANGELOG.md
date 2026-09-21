@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-09-20
+
+The daemon over the version-3 vault, in place of the version-2 one.
+
+- **Version 3 is the package.** What was `@estoc/daemon/v3` and
+  `@estoc/daemon/v3/node` are now `@estoc/daemon` and
+  `@estoc/daemon/node`, and the `./v3` entries are gone; every entry
+  below that names them describes what these export now.
+- **The version-2 daemon is removed**: its `createDaemon`, `Daemon`
+  and `Snapshot`, the folder backup, and the Node host over `FsBackend`
+  with its pid file, with the upstream `didcomm-node` and
+  `@estoc/folder-object` dependencies. `guardedFetch` is the Node
+  host's default fetch and is no longer exported.
 
 - **`estoc-daemon` runs the version-3 daemon.** `runDaemon`,
   `installedApp` and `exitOnSignal` moved from `@estoc/daemon/node` to

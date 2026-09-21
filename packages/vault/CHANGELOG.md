@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-09-20
+
+The version-3 vault, in place of the version-2 one.
+
+- **Version 3 is the package.** What was `@estoc/vault/v3` is now the
+  root export, and the `./v3` entry is gone; every entry below describes
+  what `@estoc/vault` exports now.
+- **The version-2 vault is removed**: its event types and
+  `readVaultEvent`, `peerKeyOf` / `fingerprint`, `VaultFold` and
+  `EventSet`, `drafts`, the procedures over them, `Keys` over the
+  keystore's `keys[]` cache with `MintDid`, and `createFolderVault` /
+  `openFolderVault`. `Components`, the union-find the continuity fold
+  uses, is kept.
 
 - **Version 3**, under `@estoc/vault/v3`: the code form of the
   replica model's vault events, channels, relationship policy and

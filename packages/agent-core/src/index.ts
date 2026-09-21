@@ -1,133 +1,158 @@
 /**
- * @estoc/agent-core — the DIDComm v2 agent behind Estoc's clients, over
- * the `.estoc` vault as `@estoc/vault` folds it.
- *
- * Bottom up: the folder and its events (`@estoc/event-store`,
- * `@estoc/vault`), bound here to did:peer:4 minted from a seed-derived
- * key (`openVault`, `createVault`, `inspectVault`); the protocols as the
- * specifications have them (`protocol/`: types, message shapes, the
- * checks — nothing that reads a vault); and the agent's own modules: the
- * records a caller reads, the trace of what this device saw, the channel
- * an envelope proves, the keys this device holds, the line to the
- * mediator and the rituals over it, the pickup of what it holds for us,
- * the handlers for what the mail says, what one opened envelope becomes,
- * what a message of ours becomes on its way out and the outbox it waits
- * in, and the `Agent` that runs it all as one loop. What stays out: the
- * format itself, WASM instantiation (handed in as `DidcommApi`), UI
- * state, and how a passphrase becomes a `SeedKey`.
+ * `@estoc/agent-core` — the DIDComm v2 agent over the vault. A
+ * message is decided over the fold read under the vault's writer lock
+ * and committed as an intent, then as a package, before its one
+ * transport call, which goes under a live action once the lock is
+ * released. The protocols themselves — message types and shapes — are
+ * under `protocol/`; `unpack` opens an
+ * inbound envelope there with its rotation proof left for the vault
+ * to judge.
  */
 
-export { createVault, inspectVault, openVault, type CreateVaultOptions, type Inspected, type OpenOptions, type PeerVault } from "./identity.js";
-export { mintPeerDid, type PeerIdentity } from "./identity/peer.js";
-
-// DIDComm v2 specification protocols — the agent's own
 export * from "./protocol/spec.js";
-// community protocols the agent uses as transport
 export * from "./protocol/mediation.js";
-// the application protocols' types and shapes; their handlers are below
 export { BASIC_MESSAGE } from "./protocol/basicmessage.js";
 export { PROFILE, REQUEST_PROFILE, announcedName } from "./protocol/user-profile.js";
 export {
   ENCRYPTED_MIME,
+  EnvelopeRefused,
   PLAIN_TYP,
-  didOf,
   endpointOf,
   plainMessage,
   secretsResolverFor,
   serviceUris,
+  unpack,
   type DidcommApi,
   type IMessage,
-} from "./protocol/didcomm.js";
-export { resolveDid } from "./protocol/resolver.js";
-export {
-  OBJECT_SHARE,
-  DAG_PB_MEDIA_TYPE,
-  RAW_MEDIA_TYPE,
-  CAR_MEDIA_TYPE,
-  DEFAULT_MAX_SHARE_BYTES,
-  closureOf,
-  packageOf,
-  openPackage,
-  closureSize,
-  attachmentsOf,
-  blocksOf,
-  verifyShare,
-  missingBytes,
-  type ObjectShareBody,
-  type BlockAttachment,
-  type Closure,
-  type VerifiedShare,
-  type PackageProblem,
-  type SharePackage,
-  type PackageAttachment,
-} from "./protocol/object-share.js";
-export { AES256_GCM_HKDF_1MB, encryptStream, decryptStream, freshKey } from "./protocol/streaming-aead.js";
-export {
-  BLOB_STORE_PROTOCOL,
-  BLOB_PUT,
-  BLOB_PUT_RESULT,
-  BLOB_DELETE,
-  BLOB_DELETE_RESULT,
-  type BlobPlacement,
-} from "./protocol/blob-store.js";
-export { didHost, resolveMediatorInput } from "./protocol/mediator-input.js";
-export {
-  envelopeKind,
-  inboundPair,
-  outboundPair,
-  peerKeyOfMethod,
-  publicKeyOf,
-  publicKeyOfMethod,
-  resolvedOf,
-  senderOf,
-  signerOf,
-  type KeyOfDid,
-  type Proved,
   type Unpacked,
-} from "./channel.js";
-export { Keyring, type MyIdentity, type Routed, type Skipped } from "./keyring.js";
-export { MediatorLink, UnverifiedReply, ritual, sealData, type LinkOptions, type Opened, type Sealed } from "./link.js";
-export { current, establish, leave, register, registerPending, rotateStale, routedOf, type EstablishStep, type Established, type Left, type Rotated } from "./mediation.js";
-export { Pickup, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
-export { type HandlerContext, type InboundRecord, type ProtocolHandler, type SendOptions } from "./handler.js";
-export { basicmessageHandler } from "./handlers/basicmessage.js";
-export { shareProfile, userProfileHandler } from "./handlers/user-profile.js";
-export { keepShare, objectShareHandler } from "./handlers/object-share.js";
-export { fillBlocks, stripBlocks, type Lifted } from "./lift.js";
-export { Inbound, type Handled, type InboundOptions } from "./inbound.js";
-export { Outbound, Outbox, type Attempted, type Composed, type OutboundOptions, type OutboxOptions } from "./outbound.js";
-export { BlobRefused, buildShare, deleteBlob, fetchPackage, placePackage, putBlob, type PlacedPackage, type Placing, type ShareParts, type WireNote } from "./share.js";
-export { Agent, type AgentEvents, type AgentOptions, type AgentStatus } from "./agent.js";
-export { GOAL_CONNECT, invitationMessage, invitationUrl, parseInvitation, type Invitation } from "./oob.js";
+} from "./protocol/didcomm.js";
+export { GOAL_CONNECT, invitationUrl, parseInvitation, type Invitation } from "./protocol/oob.js";
+export { didHost, resolveMediatorInput } from "./protocol/mediator-input.js";
+
+export { AmbiguousTarget, EntityConflict, MediatorRefused, NoTarget, NotificationConflict, ReceiverClosed, ReceiverInUse, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
-  attributedTo,
-  contactRecord,
-  didPlaceholder,
-  invitationRecord,
-  messageRecord,
-  nameOf,
-  type BodyState,
-  type ContactRecord,
-  type InvitationRecord,
-  type MessageRecord,
-  type PlainMessage,
-} from "./records.js";
+  createVault,
+  inspectRuntime,
+  inspectSnapshot,
+  openVault,
+  type CreateVaultOptions,
+  type InspectSnapshotOptions,
+  type InspectedRuntime,
+  type InspectedSnapshot,
+  type OpenedVault,
+  type Unlock,
+  type VaultOptions,
+} from "./identity.js";
+export { Keyring } from "./keyring.js";
 export {
   AgentTrace,
   TRACE_LEVELS,
   TRACE_NORMAL,
   TRACE_OFF,
+  TRACE_OPTION,
   TRACE_STREAMS,
   TRACE_VERBOSE,
   isTraceLevel,
   isTraceStream,
-  traceLevelOf,
+  streamOf,
   tracePolicy,
   type AgentTraceOptions,
   type TraceData,
-  type TraceEvent,
+  type TraceFilter,
   type TraceLevel,
   type TracePolicy,
-  type TracePruneReport,
   type TraceStream,
 } from "./trace.js";
+export { MediatorLink, bounded, ritual, sealData, sealerOf, senderOf, type LinkOptions, type Opened, type Sealed } from "./link.js";
+export { Pickup, type Delivered, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
+export { decide, serially, type Decided } from "./procedure.js";
+export { canonicalDid, sameDid } from "./same-did.js";
+export { createMediation, establish, mediationOf, reconcile, reconcileNow, registered, selectMediation, type EstablishStep, type Established, type Reconciled } from "./mediation.js";
+export {
+  configureRoute,
+  createDid,
+  didOf,
+  disclose,
+  ensureRoute,
+  invitationOf,
+  mediatedRouteOf,
+  retireDid,
+  routeOf,
+  routeTargetOf,
+  type CreatedDid,
+  type Disclosed,
+  type Disclosure,
+  type RouteSpec,
+} from "./dids.js";
+export { DEFINITIVE_TRANSPORT_CODES, MAX_DOCUMENT_BYTES, knownLongForms, resolve, webDidUrl, type KnownLongForms, type Resolution, type Resolved, type ResolverOptions, type WebResolverOptions } from "./resolver.js";
+export {
+  authorizedKeys,
+  commitResolution,
+  didcommDocumentOf,
+  pinnedResolver,
+  readResolution,
+  resolutionData,
+  type CommitResolutionOptions,
+  type PinnedResolverOptions,
+  type ResolutionEvidence,
+} from "./evidence.js";
+export { automaticDraft, manualNotificationDraft, send, type AutomaticDraft, type Content, type Effect, type EffectContent, type SendOptions, type Sent, type Target } from "./send.js";
+export { MAX_CONTENT_BYTES, hasExpired, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
+export { LiveAction, LiveInput, type ActionKind } from "./action.js";
+export { DISPATCH_TIMEOUT_MS, MAX_ENVELOPE_BYTES, cancel, dispatch, type Cancelled, type DispatchOptions, type Dispatched } from "./dispatch.js";
+export { Dispatcher, GLOBAL_TIMERS, LONGEST_TIMER_MS, RETRY_POLICY, type DispatcherOptions, type PendingOutbound, type RetryPolicy, type Timers, type Waiting } from "./dispatcher.js";
+export { classifyRecipients, sealingOf, senderEvidence, senderProof, type AuthenticatedSender, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
+export {
+  DISCARDED_KEPT,
+  ENDED_KEPT,
+  MAX_HELD_BYTES,
+  MAX_WAITING,
+  REASON_KEPT,
+  Receiver,
+  deliveryKey,
+  recipientWatch,
+  type Authenticated,
+  type Delivery,
+  type Discarded,
+  type Ingress,
+  type Receipt,
+  type ReceiptOutcome,
+  type Received,
+  type ReceiverOptions,
+  type Source,
+  type WaitingDelivery,
+  type Watch,
+} from "./receive/receiver.js";
+export { receiptOf, recordReceipt } from "./receive/receipt.js";
+export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
+export { afterReceipt, recordOwed, type AfterReceipt, type AfterReceiptOptions, type Owed } from "./receive/after.js";
+export { completeResponse, reactTo, type Called, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
+export { completeNotification, rotate, type RotateOptions, type Rotated, type RotationTarget } from "./rotate.js";
+export { privacyPolicy, privateAddress, type PrivacyPolicy, type PrivateAddress } from "./privacy.js";
+export { BUILT_IN_HANDLERS, basicMessage, claimedName, effectTypesOf, empty, handlerFor, handlersOf, reportProblem, reportedProblem, trustPing, userProfile, type Handler, type Input, type Response } from "./handlers/index.js";
+export {
+  recorder,
+  type BodyRecord,
+  type ChannelRecord,
+  type ConflictingNotification,
+  type ContactChannelRecord,
+  type ContactRecord,
+  type Diagnostic,
+  type DiagnosticKind,
+  type InvitationRecord,
+  type ManualEntry,
+  type MessageHeaders,
+  type MessageRecord,
+  type OwedNotification,
+  type OwedResponse,
+  type OpenOutbound,
+  type WaitingProof,
+  type PendingWork,
+  type Recorder,
+  type Unplaced,
+  type UnplacedInput,
+  type UnplacedOutput,
+  type ViewOptions,
+} from "./records.js";
+export { manualProcedures, readRecords, type Manual, type ManualOptions } from "./views.js";
+export { Agent, type AgentOptions, type Connection, type Inbound, type Submitted } from "./agent.js";

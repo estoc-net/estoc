@@ -4,7 +4,8 @@ Status: implemented — store side in `didcomm-mediator` (`put`/`delete`
 handlers, bytes at `/b/<id>`), client side in `@estoc/agent-core` 0.16.0
 (`put`, upload, then the package named in an `object-share/1.0` share),
 2026-08-26; blobs made one mediation's own, served under a random id,
-2026-08-27.
+2026-08-27. The client side left `@estoc/agent-core` with the version-2
+agent (0.19.0, 2026-09-20); the store side stands.
 Design history: `research/notes/2026-08-26-want-and-blob-road.md`.
 
 ## 1. What it is for

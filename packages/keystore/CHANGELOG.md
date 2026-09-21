@@ -1,5 +1,15 @@
 # @estoc/keystore
 
+## 0.4.0 — 2026-09-20
+
+- **The store lists no keys.** `SeedKeystoreDocument` is `{ version: 3,
+  seedJwe }`; `keys[]`, `DerivedKeyEntry`, `addDerivedKey`,
+  `openDerivedKey`, `removeDerivedKey` and `listKeys` are removed. A name
+  derives its key with `deriveIdentity(seedKey, name)`, and which names
+  are in use is the vault's events' to say. `parseSeedKeystore` refuses a
+  document that carries `keys`. The derivation itself is unchanged: the
+  same seed and name give the same Ed25519 and X25519 keys as 0.3.0.
+
 ## 0.3.0 — 2026-08-17
 
 Seed keystore v3: keys are derived by **name**, not by index. One store,

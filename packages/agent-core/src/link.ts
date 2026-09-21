@@ -1,37 +1,29 @@
 /**
  * The line to the mediator: what every ritual (coordinate-mediation,
  * messagepickup) and every pickup rides. Sealing to the mediator from
- * the key of ours it knows us by (`me`), opening what it sends back,
- * the HTTP round trip a ritual is, the socket live delivery comes down —
- * and the trace of all of it: the frame on `wire` (and its bytes on
- * `wire.bytes`), the envelope on `envelope`, the ritual's plaintext on
- * `mediation`, each line hung on the one it happened inside. The link
- * decides nothing: what a grant means, what a delivery carries, when to
- * reconnect, is the caller's; the link is the wire and what was seen
- * on it.
+ * the identity it knows this vault by — the mediation arrangement's
+ * own DID — opening what it sends back, the HTTP round trip a ritual
+ * is, the socket live delivery comes down, and the trace of all of it:
+ * the frame on `wire` (and its bytes on `bytes`), the envelope on
+ * `envelope`, the ritual's plaintext on `mediation`, each entry hung
+ * on the one it happened inside. The link decides nothing: what a
+ * grant means, what a delivery carries, when to reconnect, is the
+ * caller's; the link is the wire and what was seen on it.
  *
  * The wire behaviour itself — the DID shapes, second timestamps, the
- * WebSocket ritual, `return_route` on every request — is what mediator-ts
- * pins in its demo-interop test.
+ * WebSocket ritual, `return_route` on every request — is what
+ * mediator-ts pins in its demo-interop test.
  */
 
 import type { DIDDoc, Secret } from "@estoc/did-peer";
 import type { JsonObject } from "@estoc/event-store";
 
-import type { PeerIdentity } from "./identity/peer.js";
 import { ENCRYPTED_MIME, didOf, endpointOf, packEncrypted, plainMessage, secretsResolverFor, unpackMessage, type DidcommApi, type IMessage, type UnpackMetadata } from "./protocol/didcomm.js";
 import { envelopeHeader } from "./protocol/envelope.js";
 import { LIVE_DELIVERY_CHANGE } from "./protocol/mediation.js";
-import { sealerOf, senderOf } from "./channel.js";
+import { UnverifiedReply } from "./errors.js";
+import { sameDid } from "./same-did.js";
 import type { AgentTrace, TraceData, TraceStream } from "./trace.js";
-
-/** What came back over the line to the mediator was not sealed by the mediator to the key it knows us by: whatever it says, it is not the mediator's answer. */
-export class UnverifiedReply extends Error {
-  constructor(reason: string) {
-    super(`the reply was not sealed by the mediator to us: ${reason}`);
-    this.name = "UnverifiedReply";
-  }
-}
 
 export interface LinkOptions {
   didcomm: DidcommApi;
@@ -40,14 +32,14 @@ export interface LinkOptions {
   fetch?: typeof fetch;
   WebSocket?: typeof WebSocket;
   trace: AgentTrace;
-  /** every secret this device holds: what an envelope may be opened with, whatever key it was sealed to */
+  /** every secret this runtime holds: what an envelope may be opened with, whatever key it was sealed to */
   secrets: () => Secret[];
-  /** the key of ours the mediator knows us by — the current mediation's `me`; throws when there is none */
-  me: () => PeerIdentity;
+  /** the DID the mediator knows this vault by: the arrangement's own, its long form. A link is one arrangement's for its whole life. */
+  me: string;
   mediatorDid: string;
   /** the mediator's document, resolved by the caller: where `http()` and `ws()` read the endpoints */
   mediatorDoc: DIDDoc;
-  /** how long a whole ritual round trip may take — pack, POST and unpack together — before giving up; default 15s (`Outbound.deliver` runs the same budget over a delivery) */
+  /** how long a whole ritual round trip may take — pack, POST and unpack together — before giving up; default 15s */
   timeoutMs?: number;
   /** a line for the human log: a trace that could not be written is reported here, not thrown, and a socket frame that failed */
   log?: (line: string) => void;
@@ -56,30 +48,25 @@ export interface LinkOptions {
 /** An envelope opened: the plaintext and what the envelope itself proves. */
 export interface Opened {
   msg: IMessage;
-  /** the DID whose key proved the envelope — sealed it, or signed it when no one sealed it (`senderOf`); null when anonymous */
+  /** the DID whose key proved the envelope — sealed it, or signed it when no one sealed it; null when anonymous */
   sender: string | null;
-  /** the DID of ours it was opened with: the first key it was sealed to that this device holds, as `inboundPair` names `myKey`; null when it was not sealed */
+  /** the DID of ours it was opened with: the first key it was sealed to that this runtime holds; null when it was not sealed */
   recipient: string | null;
   /** a `from_prior` header didcomm-rust verified: signed by `iss`, naming `sub` */
   fromPrior: { iss: string; sub: string; jwt: string } | null;
-  /** what didcomm says of the envelope: the channel is read from it (`inboundPair`) */
+  /** what didcomm says of the envelope */
   metadata: UnpackMetadata;
   /**
    * The documents didcomm resolved to open it — the sender's, a signer's,
    * a `from_prior` issuer's — by DID, each resolved once for the whole
-   * open: what the envelope was verified against, so that the channel is
-   * read from the same and not from a later resolution that may say
-   * otherwise.
+   * open: what the envelope was verified against, so that what is read
+   * of the sender is read from the same and not from a later resolution.
    */
   documents: ReadonlyMap<string, DIDDoc>;
-  /**
-   * The `envelope.open` observation, prepared at unpack and written by
-   * `noteOpen` once the message's fate is known — so the line can name
-   * the record it ended in.
-   */
+  /** The `envelope.open` observation, prepared at unpack and written by `noteOpen` once the message's fate is known. */
   open: TraceData;
-  /** the eid `noteOpen` gave the observation */
-  eid?: string;
+  /** the sequence number `noteOpen` gave the observation */
+  seq?: number;
 }
 
 /** A packed envelope with its `envelope.seal` observation, written once the frame it rides is known (`traceSeal`). */
@@ -89,27 +76,34 @@ export interface Sealed {
 }
 
 /**
- * A mediation ritual message as the `mediation` stream keeps it: the
- * plaintext with attachment bodies replaced by their sizes — the bytes
- * are ciphertext already on `wire.bytes`, or opened envelopes of their own.
+ * The DID of the key that sealed the envelope as authcrypt; null when
+ * none did. The binding reports a header that is not there as null,
+ * whatever its typing says, so only a string names a sealer.
  */
+export function sealerOf(metadata: UnpackMetadata): string | null {
+  return typeof metadata.encrypted_from_kid === "string" ? didOf(metadata.encrypted_from_kid) : null;
+}
+
+/** The DID whose key proved the envelope: the sealer of an authcrypt, the signer of a signed one, no one otherwise. */
+export function senderOf(metadata: UnpackMetadata): string | null {
+  return sealerOf(metadata) ?? (metadata.non_repudiation && typeof metadata.sign_from === "string" ? didOf(metadata.sign_from) : null);
+}
+
+/** A mediation ritual message as the `mediation` stream keeps it: the plaintext with attachment bodies replaced by their sizes. */
 export function ritual(msg: IMessage): JsonObject {
   const attachments = msg.attachments;
-  if (!Array.isArray(attachments)) {
-    return msg as unknown as JsonObject;
-  }
+  if (!Array.isArray(attachments)) return msg as unknown as JsonObject;
   return {
     ...msg,
     attachments: attachments.map((a) => {
       const data = (a as { data?: { base64?: unknown; json?: unknown } }).data;
-      const bytes =
-        typeof data?.base64 === "string" ? data.base64.length : data?.json !== undefined ? JSON.stringify(data.json).length : 0;
+      const bytes = typeof data?.base64 === "string" ? data.base64.length : data?.json !== undefined ? JSON.stringify(data.json).length : 0;
       return { ...(a as object), data: { bytes } };
     }),
   } as unknown as JsonObject;
 }
 
-/** The `envelope.seal` line's data: the header read off the bytes, and the plaintext's type. */
+/** The `envelope.seal` entry's data: the header read off the bytes, and the plaintext's type. */
 export function sealData(packed: string, plain: IMessage): TraceData {
   return { ...envelopeHeader(packed), type: plain.type };
 }
@@ -120,16 +114,11 @@ function utf8Length(text: string): number {
 }
 
 function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  const message = (err as { message?: unknown } | null)?.message;
+  return typeof message === "string" ? message : String(err);
 }
 
-/**
- * The DID of ours an envelope was opened with: the first of the kids it
- * was sealed to whose secret this device holds — the one didcomm opened
- * it with. didcomm-rust seals to the keys of one DID only, so the first
- * kid is usually ours too; an envelope crafted by hand can name anyone's
- * key first, and the first kid is then no DID of ours.
- */
+/** The DID of ours an envelope was opened with: the first of the kids it was sealed to whose secret this runtime holds. */
 function openedWith(kids: readonly string[], secrets: readonly Secret[]): string | null {
   const held = new Set(secrets.map((secret) => secret.id));
   return didOf(kids.find((kid) => held.has(kid)));
@@ -139,9 +128,10 @@ function openedWith(kids: readonly string[], secrets: readonly Secret[]): string
  * `work`, unless `signal` fires first. The deadline is the caller's,
  * one for a whole ritual or delivery: a resolver or a seal that never
  * settles must not hold the queue it runs on. Work that loses the race
- * is abandoned — its late result is dropped, its late failure
- * swallowed; the caller has already thrown, so nothing downstream of
- * the loss (a POST after a pack) runs.
+ * is abandoned — its late result dropped, its late failure swallowed.
+ * A failure that is not an `Error` is wrapped in one that keeps it as
+ * the cause, so what it carried — a code, a cause of its own — is
+ * still there for whoever classifies it.
  */
 export function bounded<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -162,7 +152,7 @@ export function bounded<T>(signal: AbortSignal, work: () => Promise<T>): Promise
       },
       (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(err instanceof Error ? err : new Error(String(err)));
+        reject(err instanceof Error ? err : new Error(messageOf(err), { cause: err }));
       }
     );
   });
@@ -173,9 +163,9 @@ export class MediatorLink {
   private readonly resolver: { resolve: (did: string) => Promise<DIDDoc | null> };
   private readonly fetchFn: typeof fetch;
   private readonly WebSocketCtor: typeof WebSocket;
-  private readonly trace: AgentTrace;
+  readonly trace: AgentTrace;
   private readonly secrets: () => Secret[];
-  private readonly me: () => PeerIdentity;
+  readonly me: string;
   private readonly mediatorDoc: DIDDoc;
   private readonly timeoutMs: number;
   private readonly log: (line: string) => void;
@@ -185,8 +175,7 @@ export class MediatorLink {
   constructor(options: LinkOptions) {
     this.didcomm = options.didcomm;
     this.resolver = { resolve: (did) => options.resolveDid(did) };
-    // wrapped, not assigned: calling a native fetch with `this` bound to
-    // anything but the global is an "Illegal invocation" in browsers
+    // wrapped, not assigned: a native fetch called with `this` bound to anything but the global is an "Illegal invocation" in browsers
     const fetchImpl = options.fetch ?? fetch;
     this.fetchFn = (input, init) => fetchImpl(input, init);
     this.WebSocketCtor = options.WebSocket ?? WebSocket;
@@ -202,18 +191,14 @@ export class MediatorLink {
   /** The mediator's HTTP endpoint; throws when its document lists none. */
   http(): string {
     const endpoint = endpointOf(this.mediatorDoc, "http");
-    if (endpoint === null) {
-      throw new Error("mediator has no HTTP endpoint");
-    }
+    if (endpoint === null) throw new Error("mediator has no HTTP endpoint");
     return endpoint;
   }
 
   /** The mediator's WebSocket endpoint; throws when its document lists none. */
   ws(): string {
     const endpoint = endpointOf(this.mediatorDoc, "ws");
-    if (endpoint === null) {
-      throw new Error("mediator has no WebSocket endpoint");
-    }
+    if (endpoint === null) throw new Error("mediator has no WebSocket endpoint");
     return endpoint;
   }
 
@@ -225,11 +210,8 @@ export class MediatorLink {
   /**
    * Seal a message to `to` from a key of ours (`from`), or anonymously
    * (null): one layer, no forward — every layer an envelope has passes
-   * through the caller's hands. What the envelope looks like is in
-   * `seal`, for `traceSeal` once the frame it rides is known. A
-   * document among `documents` is what didcomm seals to, resolved
-   * again for no one: the caller read the address off it, and the key
-   * is read off the same.
+   * through the caller's hands. A document among `documents` is what
+   * didcomm seals to, resolved again for no one.
    */
   async seal(message: IMessage, to: string, from: string | null, documents?: ReadonlyMap<string, DIDDoc>): Promise<Sealed> {
     const resolver = documents === undefined ? this.resolver : { resolve: async (did: string): Promise<DIDDoc | null> => documents.get(did) ?? this.resolver.resolve(did) };
@@ -237,37 +219,29 @@ export class MediatorLink {
     return { packed, seal: sealData(packed, message) };
   }
 
-  /**
-   * Seal a message from the mediator-facing DID to the mediator itself.
-   * Every such request declares the connection it arrives on as its return
-   * route — messagepickup 3.0 requires clients to say so explicitly, once
-   * per WebSocket and on every HTTP POST.
-   */
+  /** Seal a message from the arrangement's own DID to the mediator, declaring the connection it arrives on as its return route, as messagepickup 3.0 requires of every request. */
   pack(message: IMessage): Promise<Sealed> {
-    return this.seal({ ...message, return_route: "all" } as IMessage, this.mediatorDid, this.me().did);
+    return this.seal({ ...message, return_route: "all" } as IMessage, this.mediatorDid, this.me);
   }
 
   /**
    * Open an envelope; `parent` is the observation it arrived inside (the
    * frame, or the delivery it was attached to). One that will not open
-   * leaves an `envelope.error` line and throws; one that does is
+   * leaves an `envelope.error` entry and throws; one that does is
    * described in the returned `open`, written by `noteOpen`.
    */
-  async unpack(packed: string, parent?: string): Promise<Opened> {
+  async unpack(packed: string, parent?: number): Promise<Opened> {
     const open: TraceData = { ...envelopeHeader(packed), parent };
     const secrets = this.secrets();
     const documents = new Map<string, DIDDoc>();
     const pending = new Map<string, Promise<DIDDoc | null>>();
     const resolver = {
-      // one resolution per DID for the whole open, however many times didcomm asks (a signature to verify, a
-      // key to decrypt with, a from_prior to check): what it verified against is one document, and the one kept
+      // one resolution per DID for the whole open, however many times didcomm asks: what it verified against is one document, and the one kept
       resolve: (did: string): Promise<DIDDoc | null> => {
         let resolving = pending.get(did);
         if (resolving === undefined) {
           resolving = this.resolver.resolve(did).then((doc) => {
-            if (doc !== null) {
-              documents.set(did, doc);
-            }
+            if (doc !== null) documents.set(did, doc);
             return doc;
           });
           pending.set(did, resolving);
@@ -280,7 +254,7 @@ export class MediatorLink {
     try {
       [value, metadata] = await unpackMessage(this.didcomm, packed, resolver, secretsResolverFor(secrets), {});
     } catch (err) {
-      void this.note("envelope", "envelope.error", { ...open, error: messageOf(err) });
+      void this.note("envelope", "error", { ...open, error: messageOf(err) });
       throw err;
     }
     // the binding hands back null, not undefined, for a header that is not there
@@ -312,29 +286,21 @@ export class MediatorLink {
    * observation as a parent. Throws when the line is cut, before or
    * during the answer (`wire.error` written), when the mediator
    * answers anything but 2xx (the answer on `wire`, unopened), or at
-   * the deadline — `timeoutMs` runs from entry and covers the whole
-   * ritual, pack and unpack with their resolutions included, not just
-   * the POST: the queue a ritual rides must not hang on a wire or a
-   * resolver that never answers, and no ritual needs an answer to stay
-   * safe (`leave` drops every DID that might have been told, answered
-   * or not). The cut is at the wire: before the POST every wait — the
-   * notes included — fails the ritual at the deadline, nothing having
-   * been sent; once the answer is in hand, only the noting of it can
-   * still lose the race, and it loses alone (`noted`) — the answer
-   * stands.
+   * the deadline: `timeoutMs` runs from entry and covers the whole
+   * ritual, pack and unpack with their resolutions included. Before
+   * the POST every wait fails the ritual at the deadline, nothing
+   * having been sent; once the answer is in hand, only the noting of
+   * it can still lose the race, and it loses alone.
    */
   async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
     const signal = AbortSignal.timeout(this.timeoutMs);
-    const me = this.me().did;
-    const message = plainMessage(type, me, this.mediatorDid, body);
-    const { packed, seal } = await bounded(signal, () => this.seal({ ...message, return_route: "all" } as IMessage, this.mediatorDid, me));
+    const message = plainMessage(type, this.me, this.mediatorDid, body);
+    const { packed, seal } = await bounded(signal, () => this.pack(message));
     const endpoint = this.http();
     const out = await bounded(signal, () => this.traceOut("http", endpoint, packed, { type }));
     await bounded(signal, () => this.traceSeal(seal, out, message));
     const { ok, status, text, ms } = await bounded(signal, () => this.post(endpoint, packed, out, signal));
-    // the note of the reply runs beside the unpack, not before it: a note
-    // that jams must not spend the budget the unpack still needs — and an
-    // answer is noted whatever its status, before a bad one throws
+    // the note of the reply runs beside the unpack, not before it: a note that jams must not spend the budget the unpack still needs
     const noting = this.noted(signal, () => this.traceIn("http", text, { parent: out, status, ms }));
     if (!ok) {
       await noting;
@@ -343,51 +309,46 @@ export class MediatorLink {
     const opened = await bounded(signal, () => this.unpack(text));
     opened.open.parent = await noting;
     await this.noted(signal, () => this.noteOpen(opened));
-    await this.fromMediator(opened, me, signal);
+    await this.fromMediator(opened, signal);
     this.noteRitual(opened);
     return opened;
   }
 
   /**
    * What the mediator sends down the line counts only when the envelope
-   * is authcrypt from the mediator's key to the key of ours the request
-   * went out from. Sender protection, an anonymous layer over that
-   * authcrypt, still carries it. A signature under an anonymous seal
-   * is other evidence, whoever signed, and not what this boundary
-   * accepts. The note of a refusal is observability only: it waits at
-   * most for `signal`, and not at all without one.
+   * is authcrypt from the mediator's key to the arrangement's own DID.
+   * Sender protection, an anonymous layer over that authcrypt, still
+   * carries it. A signature under an anonymous seal is other evidence,
+   * whoever signed, and not what this boundary accepts. The note of a
+   * refusal is observability only: it waits at most for `signal`, and
+   * not at all without one.
    */
-  private async fromMediator(opened: Opened, me: string | null, signal?: AbortSignal): Promise<void> {
+  private async fromMediator(opened: Opened, signal?: AbortSignal): Promise<void> {
     const { metadata, recipient } = opened;
     const sealer = sealerOf(metadata);
     const reason = sealer === null
       ? "not authenticated encryption"
-      : sealer !== this.mediatorDid
+      : !sameDid(sealer, this.mediatorDid)
         ? `sealed by ${sealer}`
-        : me === null || recipient !== me
+        : recipient === null || !sameDid(recipient, this.me)
           ? `sealed to ${recipient ?? "no key of ours"}`
           : null;
     if (reason === null) return;
-    const noting = (): Promise<string | undefined> => this.note("envelope", "envelope.rejected", { parent: opened.eid, reason });
+    const noting = (): Promise<number | undefined> => this.note("envelope", "rejected", { parent: opened.seq, reason });
     if (signal === undefined) void noting();
     else await this.noted(signal, noting);
     throw new UnverifiedReply(reason);
   }
 
   /**
-   * POST a frame already traced as `out` (`traceOut`) — to the mediator,
-   * or to wherever a contact's document says — and read what came back:
-   * the status, the text, and how long the wire took. Throws when the
-   * line is cut, before or during the answer, with `wire.error`
-   * written; a status that is no 2xx is the caller's to judge. `signal`
-   * bounds the wait: an answer not in hand by the deadline is a
-   * failure — and the caller races the whole call too (`bounded`),
-   * since an injected fetch may ignore the signal. The reply's `wire.in` note is the caller's (`traceIn`),
-   * under its own semantics — once the answer is in hand, a note that
-   * hangs must lose alone, never retell a 2xx the far side applied as
-   * a failure, nor starve what the caller still does with the text.
+   * POST a frame already traced as `out` (`traceOut`) and read what
+   * came back: the status, the text, and how long the wire took.
+   * Throws when the line is cut, with `wire.error` written; a status
+   * that is no 2xx is the caller's to judge. `signal` bounds the wait,
+   * and the caller races the whole call too, since an injected fetch
+   * may ignore the signal.
    */
-  async post(endpoint: string, packed: string, out: string | undefined, signal?: AbortSignal): Promise<{ ok: boolean; status: number; text: string; ms: number }> {
+  async post(endpoint: string, packed: string, out: number | undefined, signal?: AbortSignal): Promise<{ ok: boolean; status: number; text: string; ms: number }> {
     const started = Date.now();
     let response: Response;
     let text: string;
@@ -400,7 +361,7 @@ export class MediatorLink {
       });
       text = await response.text();
     } catch (err) {
-      void this.note("wire", "wire.error", { via: "http", parent: out, ms: Date.now() - started, error: messageOf(err) });
+      void this.note("wire", "error", { via: "http", parent: out, ms: Date.now() - started, error: messageOf(err) });
       throw err;
     }
     return { ok: response.ok, status: response.status, text, ms: Date.now() - started };
@@ -409,13 +370,10 @@ export class MediatorLink {
   /**
    * Open the socket and switch live delivery on: live-delivery-change is
    * the first frame it ever carries. Every frame that comes down is
-   * opened, noted, and handed to `onFrame` — a status, a delivery; what
-   * they mean is the caller's — one that will not open, or that `onFrame`
-   * threw on, is logged and dropped. `onClose` is told when the socket
-   * closed on its own: dropped by the mediator, or closed here because
-   * live delivery could not be switched on. Not when `closeSocket`
-   * closed it — so reconnecting, and when, is the caller's. Throws when
-   * the mediator lists no WebSocket endpoint.
+   * opened, noted, and handed to `onFrame`; one that will not open, or
+   * that `onFrame` threw on, is logged and dropped. `onClose` is told
+   * when the socket closed on its own, not when `closeSocket` closed it,
+   * so reconnecting, and when, is the caller's.
    */
   openSocket(onFrame: (opened: Opened) => Promise<void> | void, onClose?: () => void): void {
     const uri = this.ws();
@@ -423,18 +381,14 @@ export class MediatorLink {
     const socket = new this.WebSocketCtor(uri);
     this.socket = socket;
 
-    let me: string | null = null;
     socket.onopen = async () => {
       try {
-        me = this.me().did;
-        const plain = plainMessage(LIVE_DELIVERY_CHANGE, me, this.mediatorDid, { live_delivery: true });
-        const { packed, seal } = await this.seal({ ...plain, return_route: "all" } as IMessage, this.mediatorDid, me);
+        const plain = plainMessage(LIVE_DELIVERY_CHANGE, this.me, this.mediatorDid, { live_delivery: true });
+        const { packed, seal } = await this.pack(plain);
         socket.send(packed);
         await this.traceSeal(seal, await this.traceOut("ws", uri, packed, { type: plain.type }), plain);
       } catch (err) {
-        // an unhandled rejection here would leave the socket open and
-        // live delivery never switched on; closing it hands the caller
-        // its onClose, and the reconnect that goes with it
+        // closing hands the caller its onClose, and the reconnect that goes with it, instead of a socket with live delivery never switched on
         this.log(`could not open live delivery: ${messageOf(err)}`);
         socket.close();
       }
@@ -451,7 +405,7 @@ export class MediatorLink {
       }
       await this.noteOpen(opened);
       try {
-        await this.fromMediator(opened, me);
+        await this.fromMediator(opened);
       } catch (err) {
         this.log(`a socket frame was dropped: ${messageOf(err)}`);
         return;
@@ -465,10 +419,7 @@ export class MediatorLink {
     };
 
     socket.onclose = () => {
-      // closed by us (`closeSocket`): not ours to report
-      if (this.socket !== socket) {
-        return;
-      }
+      if (this.socket !== socket) return;
       this.socket = null;
       onClose?.();
     };
@@ -481,72 +432,57 @@ export class MediatorLink {
     socket?.close();
   }
 
-  /** A frame going out: its header on `wire`, its bytes on `wire.bytes`; returns the frame's eid. */
-  async traceOut(via: "http" | "ws", endpoint: string, body: string, extra: TraceData = {}): Promise<string | undefined> {
-    const eid = await this.note("wire", "wire.out", { via, endpoint, bytes: utf8Length(body), ...extra });
-    if (this.trace.enabled("wire.bytes")) {
-      void this.note("wire.bytes", "wire.out", { parent: eid, body });
-    }
-    return eid;
+  /** A frame going out: its header on `wire`, its bytes on `bytes`; returns the frame's sequence number. */
+  async traceOut(via: "http" | "ws", endpoint: string, body: string, extra: TraceData = {}): Promise<number | undefined> {
+    const seq = await this.note("wire", "out", { via, endpoint, bytes: utf8Length(body), ...extra });
+    if (this.trace.enabled("bytes")) void this.note("bytes", "out", { parent: seq, body });
+    return seq;
   }
 
   /** A frame that came in, the same way; `parent` is the request it answers, when it answers one. */
-  async traceIn(via: "http" | "ws", body: string, extra: TraceData = {}): Promise<string | undefined> {
-    const eid = await this.note("wire", "wire.in", { via, bytes: utf8Length(body), ...extra });
-    if (this.trace.enabled("wire.bytes")) {
-      void this.note("wire.bytes", "wire.in", { parent: eid, body });
-    }
-    return eid;
+  async traceIn(via: "http" | "ws", body: string, extra: TraceData = {}): Promise<number | undefined> {
+    const seq = await this.note("wire", "in", { via, bytes: utf8Length(body), ...extra });
+    if (this.trace.enabled("bytes")) void this.note("bytes", "in", { parent: seq, body });
+    return seq;
   }
 
-  /** The `envelope.seal` line inside `parent`, and the plaintext on `mediation` when it was a ritual with a mediator. */
-  async traceSeal(seal: TraceData, parent: string | undefined, plain?: IMessage): Promise<string | undefined> {
-    const eid = await this.note("envelope", "envelope.seal", { ...seal, parent });
-    if (plain !== undefined) {
-      void this.note("mediation", "mediation.out", { parent: eid, msg: ritual(plain) });
-    }
-    return eid;
+  /** The `envelope.seal` entry inside `parent`, and the plaintext on `mediation` when it was a ritual with a mediator. */
+  async traceSeal(seal: TraceData, parent: number | undefined, plain?: IMessage): Promise<number | undefined> {
+    const seq = await this.note("envelope", "seal", { ...seal, parent });
+    if (plain !== undefined) void this.note("mediation", "out", { parent: seq, msg: ritual(plain) });
+    return seq;
   }
 
-  /** The `envelope.open` line of an opened envelope, naming the record it ended in when it did. */
-  async noteOpen(opened: Opened, mid?: string): Promise<string | undefined> {
-    const eid = await this.note("envelope", "envelope.open", mid === undefined ? opened.open : { ...opened.open, mid });
-    opened.eid = eid;
-    return eid;
+  /** The `envelope.open` entry of an opened envelope, naming the message it ended in when it did. */
+  async noteOpen(opened: Opened, messageId?: string): Promise<number | undefined> {
+    const seq = await this.note("envelope", "open", messageId === undefined ? opened.open : { ...opened.open, messageId });
+    opened.seq = seq;
+    return seq;
   }
 
   /** An opened ritual message from a mediator, in the clear on `mediation`. */
   noteRitual(opened: Opened): void {
-    void this.note("mediation", "mediation.in", { parent: opened.eid, msg: ritual(opened.msg) });
+    void this.note("mediation", "in", { parent: opened.seq, msg: ritual(opened.msg) });
   }
 
-  /**
-   * One line of the trace. A trace that cannot be written is not a
-   * reason to stop sending: the failure is logged and the line's eid is
-   * nothing — what would have hung on it hangs on nothing, as when the
-   * stream was off.
-   */
-  private async note(stream: TraceStream, type: string, data: TraceData): Promise<string | undefined> {
+  /** One entry of what a caller did over the link, waited for no longer than a round trip may take: what it records stands whether or not the entry lands. */
+  observe(stream: TraceStream, what: string, data: TraceData): Promise<number | undefined> {
+    return this.noted(AbortSignal.timeout(this.timeoutMs), () => this.note(stream, what, data));
+  }
+
+  /** One entry of the trace. A trace that cannot be written is not a reason to stop sending: the failure is logged and the entry has no number. */
+  private async note(stream: TraceStream, what: string, data: TraceData): Promise<number | undefined> {
     try {
-      return await this.trace.append(stream, type, data);
+      return await this.trace.append(stream, what, data);
     } catch (err) {
       this.log(`trace not written: ${messageOf(err)}`);
       return undefined;
     }
   }
 
-  /**
-   * A trace wait that is observability only: what it would note is
-   * already in hand, so losing the race loses the line alone — the
-   * waiting stops at the deadline, the loss is logged, and what was
-   * won stands. The notes before a POST ride `bounded` directly
-   * instead: no side effect has happened yet, and the deadline fails
-   * the whole exchange.
-   */
-  private async noted(signal: AbortSignal | undefined, work: () => Promise<string | undefined>): Promise<string | undefined> {
-    if (signal === undefined) {
-      return work();
-    }
+  /** A trace wait that is observability only: losing the race loses the entry alone, and what was won stands. */
+  private async noted(signal: AbortSignal | undefined, work: () => Promise<number | undefined>): Promise<number | undefined> {
+    if (signal === undefined) return work();
     try {
       return await bounded(signal, work);
     } catch {

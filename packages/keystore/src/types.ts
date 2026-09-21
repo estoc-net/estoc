@@ -14,16 +14,17 @@ export interface Signer {
 }
 
 /**
- * A did:key signer additionally does X25519 key agreement, because the
- * did:key convention derives an X25519 keyAgreement key from the Ed25519
- * key and DIDComm decryption needs the private ECDH operation.
+ * A did:key signer additionally does X25519 key agreement, because
+ * DIDComm decryption needs the private ECDH operation. The X25519 key is
+ * its own key, not the one the did:key convention would convert from the
+ * Ed25519 key, so whoever publishes the DID publishes it alongside.
  *
  * Kept as a separate capability from `sign` on purpose: hardware devices
  * commonly support Ed25519 signing but not X25519 ECDH, so a future
  * hardware-backed Signer may implement only the base interface.
  */
 export interface DidKeySigner extends Signer {
-  /** X25519 public key (32 bytes) derived from the Ed25519 key. */
+  /** X25519 public key (32 bytes). */
   x25519PublicKey(): Uint8Array;
   /**
    * X25519 shared secret (32 bytes) with the other party's X25519 public
@@ -33,28 +34,13 @@ export interface DidKeySigner extends Signer {
 }
 
 /**
- * One derived key in a v3 store. Nothing here is secret, and nothing here
- * is needed to derive the key: the name alone is the derivation path. The
- * entry is a cache so listing needs no unlock.
- */
-export interface DerivedKeyEntry {
-  /** The derivation path — see `isValidKeyName`. Never renamed, never reused. */
-  name: string;
-  /** did:key of the Ed25519 half, cached so listing needs no unlock. */
-  did: string;
-  /** ISO 8601 time this store first derived the key. */
-  createdAt: string;
-}
-
-/**
- * The v3 store — one sealed seed, every key derived from it by name.
- * Unlock once, keep the SeedKey, derive forever; the seed is the only thing
- * that cannot be regenerated. `keys` is a cache: two stores around the
- * same seed can list different keys and still derive each other's.
+ * The store: one sealed seed, every key derived from it by name. Unlock
+ * once, keep the SeedKey, derive forever; the seed is the only thing that
+ * cannot be regenerated, and which names are in use is for whoever holds
+ * the store to record.
  */
 export interface SeedKeystoreDocument {
   version: 3;
   /** The 32-byte seed as a compact JWE (PBES2-HS512+A256KW / A256GCM). */
   seedJwe: string;
-  keys: DerivedKeyEntry[];
 }

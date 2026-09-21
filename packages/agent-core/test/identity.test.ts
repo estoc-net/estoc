@@ -1,99 +1,124 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { resolveDIDCommDoc } from "@estoc/did-peer";
-import { CONFIG_PATH, ESTOC_DIR, KEYSTORE_FILE, MemoryBackend, NotAVault } from "@estoc/event-store";
+import { openNodeSqlite } from "@estoc/event-store/node";
+import { AnchorMismatch, NotAVault, ReadOnlyVault, SnapshotTooLarge, exportVault, type OpenMode } from "@estoc/event-store";
 import { createSeedKeystore } from "@estoc/keystore";
-import { KEY_ANCHOR, mediationKeyName } from "@estoc/vault";
+import { Keys, vaultDraft, vaultHeldRoots } from "@estoc/vault";
 
-import { createVault, inspectVault, mintPeerDid, openVault } from "../src/index.js";
+import { createVault, inspectRuntime, inspectSnapshot, openVault } from "../src/index.js";
+import { PASSPHRASE, freshVault, memoryDriver, seedOf, ticking } from "./helpers.js";
 
-const FIXED_SEED = new Uint8Array(32).map((_, i) => i);
-const OTHER_SEED = new Uint8Array(32).map((_, i) => 31 - i);
+let dir: string;
+let n = 0;
 
-async function freshKeystore(seed = FIXED_SEED) {
-  return createSeedKeystore("test", { seed });
-}
+beforeAll(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), "estoc-c01-"));
+});
 
-/**
- * The folder is tested in `@estoc/vault` with a minter that is only a
- * name. What the agent binds it to — did:peer:4 from a seed-derived key,
- * the routing DID as the service — is pinned here, on the v2 folder.
- */
-describe("v2 identity: did:peer:4 over the folder", () => {
-  it("creates, labels, and reopens as the same identity; the anchor and a mediator-facing DID are pinned for the fixed seed", async () => {
-    // Any change to derivation (`estoc/v3/<purpose>/<name>`) or to the
-    // did:peer:4 document shape shows up here. The mediation id is random
-    // per vault, so the peer DID is pinned under a fixed name — the same
-    // name v1 used, so the same DID as v1's pin.
-    const backend = new MemoryBackend();
-    const { doc, seedKey } = await freshKeystore();
-    const made = await createVault(backend, { keystore: doc, seedKey, label: "Alice" });
-    expect(made.anchor).toEqual({ key: KEY_ANCHOR, did: "did:key:z6Mkk4RzvEvh61iNGk7gJVk9UPSrGofjLgLDrtEqzdCATJ5A" });
-    expect(made.fold.label()).toBe("Alice");
-    expect(made.keys.keystore.keys.map((key) => key.name)).toEqual([KEY_ANCHOR]);
+afterAll(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
 
-    const opened = await openVault(backend, seedKey);
-    expect(opened.anchor).toEqual(made.anchor);
-    expect(opened.vault.self).toBe(made.vault.self);
-    expect(opened.fold.label()).toBe("Alice");
-    expect(opened.fold.device(opened.vault.self)?.mintedAt).not.toBeNull();
+const fresh = (): string => path.join(dir, `vault-${n++}.sqlite`);
+const open = (file: string, mode: OpenMode) => openNodeSqlite(file, mode === "create" ? { mode, journal: "delete" } : { mode });
 
-    const me = await opened.keys.identity(mediationKeyName("0198b7c0-0000-7000-8000-000000000000"), null);
-    expect(me.did.slice(0, 40)).toBe("did:peer:4zQmRG8Tb4SW5rtKZZUwZxTVHAmCy8N");
-    expect(me.secrets.map((s) => s.id)).toEqual([`${me.did}#key-1`, `${me.did}#key-2`]);
-    const resolved = await resolveDIDCommDoc(me.did);
-    expect(resolved?.verificationMethod).toHaveLength(2);
-    expect(resolved?.service).toEqual([]);
+describe("the vault opened with the seed", () => {
+  it("creates under the seed's anchor with its label, and reopens as the same identity with the seed or the passphrase", async () => {
+    const file = fresh();
+    const { doc, seedKey } = await createSeedKeystore(PASSPHRASE, { seed: seedOf(1) });
+    const made = await createVault(open(file, "create"), { seedKey, wrapped: doc, label: "Alice", now: ticking() });
+    expect(made.runtime.metadata.anchor).toBe(await Keys.anchorOf(seedKey));
+    expect(made.fold.label).toBe("Alice");
+    expect(made.fold.authors.map((author) => author.author)).toEqual([made.runtime.author]);
+    await made.runtime.close();
+
+    const bySeed = await openVault(open(file, "readwrite"), seedKey);
+    expect(bySeed.runtime.metadata.anchor).toBe(made.runtime.metadata.anchor);
+    expect(bySeed.runtime.author).toBe(made.runtime.author);
+    expect(bySeed.fold.label).toBe("Alice");
+    expect(bySeed.keys.locked).toBe(false);
+    await bySeed.runtime.close();
+
+    const byPassphrase = await openVault(open(file, "readwrite"), { passphrase: PASSPHRASE });
+    expect(byPassphrase.fold.label).toBe("Alice");
+    await byPassphrase.runtime.close();
   });
 
-  it("refuses the wrong seed on open, and a used keystore on create", async () => {
-    const backend = new MemoryBackend();
-    const { doc, seedKey } = await freshKeystore();
-    const made = await createVault(backend, { keystore: doc, seedKey, label: "Alice" });
-    const other = await freshKeystore(OTHER_SEED);
-    await expect(openVault(backend, other.seedKey)).rejects.toThrow(/wrong seed/);
-    await expect(createVault(new MemoryBackend(), { keystore: made.keys.keystore, seedKey, label: "again" })).rejects.toThrow(/no keys/);
+  it("refuses another seed and a wrong passphrase, closing the driver either way", async () => {
+    const file = fresh();
+    const made = await freshVault(1, "Alice", open(file, "create"));
+    await made.runtime.close();
+    const other = await createSeedKeystore(PASSPHRASE, { seed: seedOf(2) });
+    await expect(openVault(open(file, "readwrite"), other.seedKey)).rejects.toBeInstanceOf(AnchorMismatch);
+    await expect(openVault(open(file, "readwrite"), { passphrase: "wrong" })).rejects.toThrow();
+    // the file is not held by the refused opens: it opens again
+    const again = await openVault(open(file, "readwrite"), made.seedKey);
+    expect(again.fold.label).toBe("Alice");
+    await again.runtime.close();
+  });
+});
+
+describe("the runtime inspected without the seed", () => {
+  it("reads the wrapped seed and the fold, writes nothing, and lets the passphrase be checked before a writable open", async () => {
+    const file = fresh();
+    const made = await freshVault(1, "Alice", open(file, "create"));
+    await made.runtime.close();
+
+    const inspected = await inspectRuntime(open(file, "readwrite"));
+    expect(inspected.fold.label).toBe("Alice");
+    expect(inspected.fold.checks.didKeys.size).toBe(0);
+    expect(inspected.wrapped).toEqual({ version: 3, seedJwe: made.keystore.seedJwe });
+    expect(inspected.runtime.writable).toBe(false);
+    await expect(inspected.runtime.vault.commit([], [vaultDraft("identity.label", { name: "Mallory" })])).rejects.toBeInstanceOf(ReadOnlyVault);
+    const keys = await Keys.unlock(inspected.wrapped, PASSPHRASE, inspected.runtime.metadata.anchor);
+    expect(keys.locked).toBe(false);
+    await expect(Keys.unlock(inspected.wrapped, "wrong", inspected.runtime.metadata.anchor)).rejects.toThrow();
+    await inspected.runtime.close();
+
+    const opened = await openVault(open(file, "readwrite"), made.seedKey);
+    expect(opened.fold.label).toBe("Alice");
+    await opened.runtime.close();
+  });
+});
+
+describe("a snapshot inspected", () => {
+  it("validates the snapshot against its own fold's retention and reads its fold; a runtime file is not a snapshot", async () => {
+    const made = await freshVault(1, "Alice");
+    const snapshot = fresh();
+    const exported = await exportVault(made.runtime, (mode) => open(snapshot, mode), { heldRoots: vaultHeldRoots(made.keys) });
+    expect(exported.events).toBe(1);
+    await made.runtime.close();
+
+    const inspected = await inspectSnapshot(open(snapshot, "readonly"));
+    expect(inspected.validated).toEqual(exported);
+    expect(inspected.fold.label).toBe("Alice");
+    expect(inspected.snapshot.metadata.anchor).toBe(made.runtime.metadata.anchor);
+    inspected.snapshot.close();
+
+    const runtimeFile = fresh();
+    const other = await freshVault(2, "Bob", open(runtimeFile, "create"));
+    await other.runtime.close();
+    await expect(inspectSnapshot(open(runtimeFile, "readonly"))).rejects.toBeInstanceOf(NotAVault);
+    const reopened = await openVault(open(runtimeFile, "readwrite"), other.seedKey);
+    await reopened.runtime.close();
   });
 
-  it("a DID with a service carries the routing DID; the same key and service give the same DID", async () => {
-    const { doc, seedKey } = await freshKeystore();
-    const made = await createVault(new MemoryBackend(), { keystore: doc, seedKey, label: "Alice" });
-    const routing = "did:peer:2.Ez6routing";
-    const a = await made.keys.identity("did/x", routing);
-    const b = await made.keys.identity("did/x", routing);
-    const c = await made.keys.identity("did/x", null);
-    expect(a.did).toBe(b.did);
-    expect(a.did).not.toBe(c.did);
-    const doc2 = await resolveDIDCommDoc(a.did);
-    expect(doc2?.service[0]?.serviceEndpoint).toEqual({ uri: routing, accept: ["didcomm/v2"], routingKeys: [] });
-    expect(doc2?.keyAgreement).toEqual([`${a.did}#key-2`]);
-    // `identity` derives; it does not mint: the cache lists the anchor alone
-    expect(made.keys.keystore.keys.map((key) => key.name)).toEqual([KEY_ANCHOR]);
-    expect(mintPeerDid).toBeTypeOf("function");
+  it("a snapshot's file bound is enforced before anything is read", async () => {
+    const made = await freshVault(1, "Alice");
+    const snapshot = fresh();
+    await exportVault(made.runtime, (mode) => open(snapshot, mode), { heldRoots: vaultHeldRoots(made.keys) });
+    await made.runtime.close();
+    await expect(inspectSnapshot(open(snapshot, "readonly"), { maxFileBytes: 1 })).rejects.toBeInstanceOf(SnapshotTooLarge);
   });
+});
 
-  it("inspects without the seed: the folder and the sealed keystore; a v1 folder, or none, is not a vault", async () => {
-    const backend = new MemoryBackend();
-    const { doc, seedKey } = await freshKeystore();
-    const made = await createVault(backend, { keystore: doc, seedKey, label: "Alice" });
-    const inspected = await inspectVault(backend);
-    expect(inspected.vault.self).toBe(made.vault.self);
-    expect(inspected.keystore).toEqual(made.keys.keystore); // the document as create left it: sealed seed, the anchor cached
-
-    await expect(inspectVault(new MemoryBackend())).rejects.toThrow(NotAVault);
-
-    // a version-1 folder, as the v1 agent laid one down: config.json says
-    // version 1 and carries the label and mediation, the keystore is a v3
-    // document like ours — refused at the config, the keystore never read
-    const other = await freshKeystore(OTHER_SEED);
-    const v1 = new MemoryBackend();
-    const encoder = new TextEncoder();
-    await v1.write(
-      CONFIG_PATH,
-      encoder.encode(JSON.stringify({ format: "estoc", version: 1, label: "Alice", identity: { anchor: { key: KEY_ANCHOR, did: "did:key:z6Mk" } }, mediation: null }))
-    );
-    await v1.write(`${ESTOC_DIR}/${KEYSTORE_FILE}`, encoder.encode(JSON.stringify(other.doc)));
-    await expect(inspectVault(v1)).rejects.toThrow(NotAVault);
-    await expect(openVault(v1, other.seedKey)).rejects.toThrow(NotAVault);
+describe("in memory", () => {
+  it("a private database works the same, for tests", async () => {
+    const made = await freshVault(3, "Carol", memoryDriver());
+    expect(made.fold.label).toBe("Carol");
+    await made.runtime.close();
   });
 });

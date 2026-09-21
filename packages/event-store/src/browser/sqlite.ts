@@ -16,7 +16,7 @@
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import type { Database, PreparedStatement, SAHPoolUtil, Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 
-import { DatabaseBusy, DatabaseExists, DatabaseMissing, SqliteError } from "../v3/errors.js";
+import { DatabaseBusy, DatabaseExists, DatabaseMissing, SqliteError } from "../errors.js";
 import {
   Connection,
   decodeText,
@@ -28,7 +28,7 @@ import {
   type SqlRow,
   type SqliteDriver,
   type SqlValue,
-} from "../v3/sqlite/driver.js";
+} from "../sqlite/driver.js";
 
 export interface SqlitePoolOptions {
   /** The OPFS directory the pool owns, such as `/estoc/vaults`: one or more path segments under the OPFS root, none `.` or `..`. Everything in it is the pool's: put nothing else there. */

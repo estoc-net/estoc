@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The libraries are imported from their roots: `@estoc/daemon`,
+  `@estoc/daemon/node`, `@estoc/agent-core`, `@estoc/event-store`,
+  `@estoc/vault`, the `./v3` entries being gone.
 - **The vault is version 3**: `estoc init` makes `.estoc/vault.sqlite` as
   the daemon's Node host keeps it (`@estoc/daemon/v3/node`), with the
   seed sealed inside it and the label as its first `identity.label`, and

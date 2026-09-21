@@ -12,13 +12,13 @@
  */
 
 import { openSqlitePool } from "../../src/browser.js";
-import { type Case, driverCases } from "../v3/sqlite/driver-cases.js";
-import { eventCases } from "../v3/sqlite/event-cases.js";
-import { exportCases } from "../v3/sqlite/export-cases.js";
-import { importCases } from "../v3/sqlite/import-cases.js";
-import { objectCases } from "../v3/sqlite/object-cases.js";
-import { openCases } from "../v3/sqlite/open-cases.js";
-import { vaultCases } from "../v3/sqlite/vault-cases.js";
+import { type Case, driverCases } from "../sqlite/driver-cases.js";
+import { eventCases } from "../sqlite/event-cases.js";
+import { exportCases } from "../sqlite/export-cases.js";
+import { importCases } from "../sqlite/import-cases.js";
+import { objectCases } from "../sqlite/object-cases.js";
+import { openCases } from "../sqlite/open-cases.js";
+import { vaultCases } from "../sqlite/vault-cases.js";
 import { poolCases } from "./pool-cases.js";
 import type { Exchanged, PageAnswer, WorkerAsk, WorkerCaseResult, WorkerReply, WorkerRequest } from "./sqlite-worker.js";
 
