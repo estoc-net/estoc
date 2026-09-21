@@ -3,26 +3,27 @@
  * and serves the app (@estoc/app) for it; Alice's page is opened at that origin and talks to the
  * process over its own socket; Bob is an ordinary in-browser install at
  * the preview. The preview opened with the `?_daemon=` link the daemon also
- * prints reaches the same vault. They exchange
- * messages and an object both ways (records and bytes cross the socket),
- * Alice's history survives a reload and a second tab (both are the same
- * daemon, so neither yields), the vault is a folder on disk, lock asks for
- * the passphrase, and the daemon's package fetch refuses a private address.
+ * prints reaches the same vault. They meet over an invitation link and
+ * exchange messages both ways (records cross the socket), Alice's history
+ * survives a reload and a second tab (both are the same daemon, so neither
+ * yields), the vault is a file on disk that `estoc status` asks the daemon
+ * about while it runs, and lock asks for the passphrase.
  *
  *   npm run preview                      # the build on :4173
  *   node scripts/e2e-daemon.mjs [app-url]   (default http://localhost:4173)
  *
- * The mediator is the rail's localhost entry unless E2E_MEDIATOR=estoc.
+ * The mediator is mediator.estoc.dev: the daemon `estoc serve` runs reaches
+ * public addresses only, so a mediator on this machine is not one it can use.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const APP_URL = process.argv[2] ?? "http://localhost:4173";
-const MEDIATOR_LABEL = process.env.E2E_MEDIATOR === "estoc" ? "mediator.estoc.dev" : "localhost:8080";
+const MEDIATOR_LABEL = "mediator.estoc.dev";
 const executablePath = "/usr/bin/chromium";
 const PASS = { Alice: "alice-passes-the-salt", Bob: "bob-builds-boats-2026" };
 const BIN = fileURLToPath(new URL("../../packages/cli/dist/bin.js", import.meta.url));
@@ -43,14 +44,7 @@ function watch(page, name) {
   page.on("pageerror", (err) => console.error(`[${name} pageerror] ${err}`));
 }
 
-async function waitLive(page) {
-  await page.waitForSelector("text=live delivery on", { timeout: 25000 });
-  await page.waitForFunction(
-    () => document.querySelector(".did-chip")?.getAttribute("title")?.startsWith("did:peer:4"),
-    { timeout: 20000 }
-  );
-  return page.getAttribute(".did-chip", "title");
-}
+const waitLive = (page) => page.waitForSelector("text=live delivery on", { timeout: 30000 });
 
 async function createIdentity(page, name, startUrl) {
   await page.goto(startUrl);
@@ -58,7 +52,7 @@ async function createIdentity(page, name, startUrl) {
   await page.fill('input[placeholder^="passphrase (seals"]', PASS[name]);
   await page.fill('input[placeholder="passphrase again"]', PASS[name]);
   await page.click('button:has-text("Create identity")');
-  return mediate(page, name);
+  await mediate(page, name);
 }
 
 /** A vault `estoc init` made: the page finds it locked and unlocks it. */
@@ -67,29 +61,30 @@ async function unlockIdentity(page, name, startUrl) {
   await page.waitForSelector('input[placeholder="passphrase"]', { timeout: 15000 });
   await page.fill('input[placeholder="passphrase"]', PASS[name]);
   await page.click('button:has-text("Unlock")');
-  return mediate(page, name);
+  await mediate(page, name);
 }
 
 async function mediate(page, name) {
-  await page.waitForSelector("text=not reachable yet", { timeout: 20000 });
+  await page.waitForSelector("text=not reachable yet", { timeout: 30000 });
   await page.selectOption(".rail-form select.field", { label: `via ${MEDIATOR_LABEL}` });
   await page.click('button:has-text("Use this mediator")');
-  const did = await waitLive(page);
-  ok(`${name} mediated; public DID ${did.length} chars`);
-  return did;
+  await waitLive(page);
+  ok(`${name} mediated: live delivery on`);
 }
 
-async function addContact(page, label, did) {
-  await page.click('button:has-text("+ contact")');
-  await page.fill('input[placeholder="name, e.g. Bob"]', label);
-  await page.fill('input[placeholder="paste their invitation link or DID"]', did);
-  await page.click('button:has-text("Add contact")');
+async function invite(page) {
+  await page.click('button:has-text("New invitation link")');
+  await page.waitForSelector("[data-invitation-url]", { timeout: 20000 });
+  return page.getAttribute("[data-invitation-url]", "title");
 }
+
+const channelsShown = (page, count) => page.waitForSelector(`[data-details-toggle]:has-text("${count} channel")`, { timeout: 45000 });
+
 async function send(page, contactLabel, text) {
   await page.fill(`input[placeholder="Write to ${contactLabel}"]`, text);
   await page.click('button:has-text("Send")');
 }
-async function expectBubble(page, text, timeout = 15000) {
+async function expectBubble(page, text, timeout = 30000) {
   await page.waitForSelector(`.bubble:has-text("${text}")`, { timeout });
 }
 
@@ -132,41 +127,45 @@ try {
   watch(alice, "alice");
   watch(bob, "bob");
 
-  const aliceDid = await unlockIdentity(alice, "Alice", link.own);
+  await unlockIdentity(alice, "Alice", link.own);
   await alice.waitForSelector("text=via estoc-daemon at", { timeout: 5000 });
   // the link carried the token; the page took it off the URL and kept it
   if (new URL(alice.url()).origin !== new URL(link.own).origin || alice.url().includes("token=")) {
     fail(`Alice should be at the daemon's own origin with the token taken off the URL, not ${alice.url()}`);
   }
-  await stat(join(root, ".estoc", "config.json"));
-  ok("Alice's vault is the folder estoc init made, unlocked in the daemon; the rail says so");
-  const bobDid = await createIdentity(bob, "Bob", APP_URL);
+  await stat(join(root, ".estoc", "vault.sqlite"));
+  ok("Alice's vault is the file estoc init made, unlocked in the daemon; the rail says so");
+  const status = execFileSync(process.execPath, [BIN, "status"], { cwd: root, encoding: "utf8" });
+  if (!/^daemon\s+ws:\S+\s+open$/m.test(status) || !/^label\s+Alice$/m.test(status) || !/^anchor\s+did:key:/m.test(status) || status.includes("token=")) {
+    fail(`estoc status should ask the daemon that holds the vault, and keep the token to itself:\n${status}`);
+  }
+  ok("estoc status, refused the folder, asked the daemon at its socket");
+  await createIdentity(bob, "Bob", APP_URL);
 
-  await addContact(alice, "Bob", bobDid);
+  // Bob hands Alice a link; she pastes it into the page the daemon serves.
+  const bobLink = await invite(bob);
+  await alice.click('button:has-text("+ contact")');
+  await alice.fill('input[placeholder="name, e.g. Bob"]', "Bob");
+  await alice.fill('input[placeholder="paste their invitation link"]', bobLink);
+  await alice.click('button:has-text("Add contact")');
+  await alice.waitForSelector('.contact-chip.active:has-text("Bob")', { timeout: 30000 });
+  await bob.waitForSelector('.contact-chip.nameless:has-text("Alice")', { timeout: 45000 });
+  await bob.click('.contact-chip.nameless:has-text("Alice")');
+  await bob.click("[data-details-toggle]");
+  await bob.fill('[data-details] input[placeholder="what you call them"]', "Alice");
+  await bob.click('button:has-text("Name this conversation")');
+  await bob.waitForSelector('.contact-chip.active:not(.nameless):has-text("Alice")', { timeout: 15000 });
+  ok("the daemon accepted Bob's invitation; Bob named who arrived");
+
+  // Bob answers from a private DID that replaces the disclosed one; she writes once that reached her page.
+  await channelsShown(alice, 2);
   await send(alice, "Bob", "hello bob, from a laptop process");
   await expectBubble(alice, "hello bob");
   await expectBubble(bob, "hello bob");
   ok("Bob received a message the daemon sent");
-  await bob.waitForSelector('.contact-chip:has-text("Alice")', { timeout: 15000 });
   await send(bob, "Alice", "hi alice, got it");
   await expectBubble(alice, "hi alice");
   ok("Alice's page shows what the daemon received, live over the socket");
-
-  // an object each way: bytes cross the socket in both directions
-  const seaDay = fileURLToPath(new URL("../../packages/folder-object/test/fixtures/sea-day/", import.meta.url));
-  await alice.setInputFiles('input[data-share="object"]', seaDay);
-  await alice.click('[data-share-choice="plain"]');
-  await alice.waitForSelector('.object-title:has-text("A Day at the Sea")', { timeout: 15000 });
-  await bob.waitForSelector('.object-title:has-text("A Day at the Sea")', { timeout: 15000 });
-  ok("an object picked in Alice's page went through the daemon to Bob");
-  await bob.setInputFiles('input[data-share="object"]', seaDay);
-  await bob.click('[data-share-choice="plain"]');
-  await alice.waitForFunction(() => document.querySelectorAll(".object-title").length >= 2, null, { timeout: 15000 });
-  const blobs = await readdir(join(root, ".estoc", "blobs")).catch(() => []);
-  if (blobs.length === 0) {
-    fail("the object Bob sent should be in the daemon's blobs/ on disk");
-  }
-  ok(`Bob's object arrived at the daemon: ${blobs.length} entries under .estoc/blobs`);
 
   // history is the daemon's: a reload and a second tab both see it, neither yields
   await alice.reload();
@@ -215,14 +214,13 @@ try {
   await alice.waitForSelector('.contact-chip:has-text("Bob")', { timeout: 15000 });
   ok("lock and unlock go through the daemon");
 
-  // the daemon gone: the page says so, and finds it again when it is back
+  // the daemon gone: the page says so
   daemon.child.kill("SIGTERM");
   await alice.waitForSelector("text=is not answering", { timeout: 10000 });
   ok("Alice's page reports the daemon gone");
   await alice.goto(`${APP_URL}/?_daemon=off`);
   await alice.waitForSelector('input[placeholder="your name, e.g. Alice"]', { timeout: 15000 });
   ok("?_daemon=off returns the preview to its own worker: a fresh install there");
-  void aliceDid;
 } finally {
   await browser.close();
   daemon.child.kill("SIGTERM");

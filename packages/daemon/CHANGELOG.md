@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`estoc-daemon` runs the version-3 daemon.** `runDaemon`,
+  `installedApp` and `exitOnSignal` moved from `@estoc/daemon/node` to
+  `@estoc/daemon/v3/node`, and the bin with them. A folder that holds a
+  folder-format vault is refused at the start with nothing written to
+  it. The token is `.estoc/daemon.token`; once the folder is the
+  daemon's own, the socket's URL is left in `.estoc/daemon.url` until it
+  closes, for a process on this machine the folder is refused to. The
+  record is removed before the folder is let go, so a daemon that takes
+  over keeps its own; a `runDaemon` that fails past listening closes
+  what it opened before it rejects. `vaultDir` makes `.estoc` and closes
+  one that stood open to others to 0700.
+- **`Snapshot.anchor`**: the did:key the vault's seed derives.
+- Node 22.13 is the oldest that runs it, which is what `node:sqlite`
+  needs.
+
 - **`@estoc/daemon/v3`** and **`@estoc/daemon/v3/node`**: the daemon
   over the version-3 vault, built beside the entries above, which stay
   as they are. The host provides SQLite files by name

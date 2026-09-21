@@ -7,7 +7,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Validate the shape of an index (spec §3.1, §8 format layer). */
+/** Validate the shape of an index; what fails here is malformed at the format layer. */
 export function parseIndex(bytes: Uint8Array): IndexJson {
   let value: unknown;
   try {
@@ -52,7 +52,7 @@ export function isInsideFiles(path: string): boolean {
 /**
  * Take an object out of a mapping rooted at the object folder. The canonical
  * tree is taken by enumeration: `index.json` and everything under `files/`
- * except hidden entries (§4); any other entry is litter and is dropped (§2).
+ * except hidden entries; any other entry is litter and is dropped.
  */
 export function readObject(mapping: TreeFiles): FolderObject {
   const indexBytes = mapping["index.json"];

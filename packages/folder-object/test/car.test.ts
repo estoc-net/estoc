@@ -34,10 +34,41 @@ describe("CAR", () => {
   it("refuses a truncated file and a wrong version", async () => {
     const cid = await fileCid(utf8("x"));
     const car = encodeCar([cid], new Map([[cid, utf8("x")]]));
-    await expect(decodeCar(car.subarray(0, car.length - 1))).rejects.toThrow(/truncated/);
+    await expect(decodeCar(car.subarray(0, car.length - 1))).rejects.toThrow(/does not hold/);
     const tampered = new Uint8Array(car);
     tampered[car[0] as number] = 0x02; // the header's last byte: its version
-    await expect(decodeCar(tampered)).rejects.toThrow(/version 2/);
+    await expect(decodeCar(tampered)).rejects.toThrow(/Invalid CAR header/);
+
+    // CARv2: the pragma, then characteristics, data offset, data size and index offset around the same CARv1
+    const v2 = new Uint8Array(51 + car.length);
+    v2.set([0x0a, 0xa1, 0x67, ...utf8("version"), 0x02]);
+    const fields = new DataView(v2.buffer, 11);
+    fields.setBigUint64(16, 51n, true);
+    fields.setBigUint64(24, BigInt(car.length), true);
+    v2.set(car, 51);
+    await expect(decodeCar(v2)).rejects.toThrow(/version 2/);
+  });
+
+  it("refuses a section too short for the CID it opens with", async () => {
+    const empty = await fileCid(new Uint8Array(0));
+    const next = await fileCid(utf8("next"));
+    const car = encodeCar([empty], new Map([[empty, new Uint8Array(0)], [next, utf8("next")]]));
+    const header = 1 + (car[0] as number);
+    expect(car[header]).toBe(36);
+    const short = new Uint8Array(car);
+    short[header] = 1;
+    await expect(decodeCar(short)).rejects.toThrow(/does not hold/);
+  });
+
+  it("reads an empty block, no blocks at all, and a view into a larger buffer", async () => {
+    const empty = await fileCid(new Uint8Array(0));
+    const car = encodeCar([empty], new Map([[empty, new Uint8Array(0)]]));
+    expect((await decodeCar(car)).blocks.get(empty)).toEqual(new Uint8Array(0));
+    expect(await decodeCar(encodeCar([], new Map()))).toEqual({ roots: [], blocks: new Map(), bad: [] });
+
+    const backing = new Uint8Array(car.length + 13).fill(0xff);
+    backing.set(car, 5);
+    expect(await decodeCar(backing.subarray(5, 5 + car.length))).toEqual(await decodeCar(car));
   });
 
   it("handles many roots and big sections", async () => {

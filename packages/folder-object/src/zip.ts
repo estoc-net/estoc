@@ -3,8 +3,8 @@ import type { TreeFiles } from "./types.js";
 
 /**
  * A mapping as one file. Deterministic (sorted entries, fixed mtime):
- * the same tree zips to the same bytes. Spec §7: a fact is a mapping,
- * and any faithful container is legal — this is the one we ship.
+ * the same tree zips to the same bytes. A fact is a mapping, and any
+ * faithful container is legal — this is the one we ship.
  */
 export function zipTree(tree: TreeFiles): Uint8Array {
   const zippable: Record<string, [Uint8Array, { mtime: Date }]> = {};

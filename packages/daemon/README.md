@@ -11,7 +11,8 @@ Two hosts ship:
 - **A browser worker** (the app's `src/daemon/worker.ts`): OPFS, Web Locks,
   the seed in IndexedDB, the DIDComm WASM as Vite loads it. The RPC rides a
   message port (`serve` / `connect` in `src/rpc.ts`; structured clone).
-- **A Node process** (`@estoc/daemon/node`, the `estoc-daemon` command): a
+- **A Node process** (`@estoc/daemon/node`; the `estoc-daemon` command
+  runs the version-3 host below, under the same socket rules): a
   folder on disk (`FsBackend` from `@estoc/event-store/node`, `<folder>/.estoc` the vault), a pid file for
   one daemon per folder, the seed in memory only (every start is locked
   until a UI types the passphrase), `didcomm-node`, and one HTTP server
@@ -27,7 +28,7 @@ cd ~/my-vault && estoc init && estoc serve   # open the link it prints: http://1
 estoc-daemon . --port 0 --app http://localhost:5173   # also a ?_daemon= link for a dev server
 ```
 
-The token (kept in `.estoc/local/daemon/daemon.token`) is the one key to the
+The token (kept in `.estoc/daemon.token`) is the one key to the
 socket, whoever asks: the page the daemon serves finds the socket at its
 own origin (index.html is sent with a `<meta name="estoc-daemon">`) and
 takes the token from the `?token=` in the link, remembering it for reloads
@@ -70,11 +71,17 @@ ordinary fetch.
 
 `@estoc/daemon/v3` is the daemon over the version-3 vault — one SQLite
 file, the agent of `@estoc/agent-core/v3` over it — built beside the
-entries above until the app and the CLI move to it. `createDaemon(host,
+entries above. The app, the CLI and the `estoc-daemon` command are on
+it; of the folder-format entries only the libraries remain. `createDaemon(host,
 emit)` takes a `DaemonHost` whose storage is SQLite files by name; the
 RPC (`serve`, `connect`) and the text encoding are the same.
 `@estoc/daemon/v3/node` has `nodeHost(root)`, whose vault is
-`<root>/.estoc/vault.sqlite`, and `serveDaemon`.
+`<root>/.estoc/vault.sqlite`, `serveDaemon`, and `runDaemon`, the
+command itself: it refuses a folder-format `.estoc` before writing
+anything, and once the folder is its own it leaves the socket's URL,
+token included, in `.estoc/daemon.url` (mode 0600, removed when it
+closes) for a process on this machine that finds the folder taken,
+which is how `estoc status` and `estoc init` reach it.
 
 A host hands its files to one daemon at a time, from `storage()` to the
 storage's `close()`; the Node host keeps an empty `owner.sqlite` open

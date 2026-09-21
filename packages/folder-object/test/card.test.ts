@@ -8,6 +8,7 @@ async function signer(seedByte = 7) {
 }
 
 const b64 = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64bytes = (bytes: Uint8Array) => b64(String.fromCharCode(...bytes));
 const ROOT = "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354";
 
 describe("object card", () => {
@@ -30,21 +31,45 @@ describe("object card", () => {
     await expect(verifyCard(`${h}.${forged}.${sig}`)).rejects.toThrow(/does not verify/);
   });
 
-  it("rejects a card whose kid is not the payload did's", async () => {
+  it("rejects a card whose kid names another key than the one that signed", async () => {
     const a = await signer(1);
     const b = await signer(2);
     const [, p, sig] = (await signRoot(a.did(), ROOT, a)).split(".") as [string, string, string];
     const h = b64(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(b.did()) }));
+    await expect(verifyCard(`${h}.${p}.${sig}`)).rejects.toThrow(/does not verify/);
+  });
+
+  it("rejects a card one did signed in the name of another", async () => {
+    const a = await signer(1);
+    const b = await signer(2);
+    const h = b64(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(b.did()) }));
+    const p = b64(JSON.stringify({ did: a.did(), root: ROOT }));
+    const sig = b64bytes(await b.sign(new TextEncoder().encode(`${h}.${p}`)));
     await expect(verifyCard(`${h}.${p}.${sig}`)).rejects.toThrow(/does not belong/);
+  });
+
+  it("rejects, of cards signed over the very header they carry, another algorithm, an extension it does not know, and an unencoded payload", async () => {
+    const s = await signer();
+    const card = { alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(s.did()) };
+    const payload = JSON.stringify({ did: s.did(), root: ROOT });
+    const signed = async (header: object, p = b64(payload)) => {
+      const h = b64(JSON.stringify(header));
+      return `${h}.${p}.${b64bytes(await s.sign(new TextEncoder().encode(`${h}.${p}`)))}`;
+    };
+
+    expect(await verifyCard(await signed(card))).toEqual({ did: s.did(), root: ROOT });
+    await expect(verifyCard(await signed({ ...card, alg: "HS256" }))).rejects.toThrow(/"alg".*not allowed/);
+    await expect(verifyCard(await signed({ ...card, alg: "none" }))).rejects.toThrow(/"alg".*not allowed/);
+    await expect(verifyCard(await signed({ ...card, crit: ["exp"], exp: 1 }))).rejects.toThrow(/"exp" is not recognized/);
+    await expect(verifyCard(await signed({ ...card, b64: false, crit: ["b64"] }, payload))).rejects.toThrow(/payload is base64url/);
   });
 
   it("rejects a card with any member beyond {did, root}", async () => {
     const s = await signer();
     const h = b64(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(s.did()) }));
     const p = b64(JSON.stringify({ did: s.did(), root: ROOT, iat: 1 }));
-    const sig = await s.sign(new TextEncoder().encode(`${h}.${p}`));
-    const b64bytes = btoa(String.fromCharCode(...sig)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    await expect(verifyCard(`${h}.${p}.${b64bytes}`)).rejects.toThrow(/exactly/);
+    const sig = b64bytes(await s.sign(new TextEncoder().encode(`${h}.${p}`)));
+    await expect(verifyCard(`${h}.${p}.${sig}`)).rejects.toThrow(/exactly/);
   });
 
   it("rejects a JWS without the object-card typ", async () => {
@@ -55,8 +80,8 @@ describe("object card", () => {
   });
 
   it("rejects shapes that are not a compact JWS", async () => {
-    await expect(verifyCard("nope")).rejects.toThrow(/compact JWS/);
-    await expect(verifyCard("a.b.c")).rejects.toThrow(/header/);
+    await expect(verifyCard("nope")).rejects.toThrow(/Compact JWS/);
+    await expect(verifyCard("a.b.c")).rejects.toThrow(/Header/);
   });
 
   it("refuses to sign as anything but a did:key", async () => {

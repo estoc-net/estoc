@@ -142,9 +142,10 @@ waits for the restore to be explained, and, when a service worker is
 serving, a message written with the network off that is still there after
 an offline reload and goes out by hand once the network is back.
 
-`scripts/e2e-daemon.mjs` drives the app against `estoc serve`, which
-still runs the earlier daemon: it does not pass until the CLI moves to
-`@estoc/daemon/v3`.
+`scripts/e2e-daemon.mjs` drives the app against `estoc serve`, using
+`@estoc/daemon/v3` and the public mediator at `mediator.estoc.dev`.
+Run `node scripts/e2e-daemon.mjs` with the built app available as described
+at the top of the script; an optional first argument sets the app URL.
 
 ## How it hangs together
 

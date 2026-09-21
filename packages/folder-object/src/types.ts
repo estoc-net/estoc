@@ -86,7 +86,7 @@ export interface HashedTree {
   files: Map<string, string>;
 }
 
-/** The structural members of index.json (spec §3.1); vocabulary members ride along untyped. */
+/** The structural members of index.json; vocabulary members ride along untyped. */
 export interface IndexJson {
   format: string;
   id: string;
@@ -124,14 +124,14 @@ export interface CardSigner {
   sign(data: Uint8Array): Promise<Uint8Array>;
 }
 
-/** A signed object: the object and the card that stands behind it (spec §5). */
+/** A signed object: the object and the card that stands behind it. */
 export interface SignedObject {
   object: FolderObject;
   /** compact JWS, the contents of `card.jws` */
   card: string;
 }
 
-/** Which layer rejected the tree (spec §8). */
+/** Which layer rejected the tree. */
 export type MalformedLayer = "format" | "closure";
 
 export class MalformedObjectError extends Error {
