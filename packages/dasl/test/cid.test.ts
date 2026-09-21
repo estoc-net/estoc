@@ -64,30 +64,29 @@ describe("DASL CID", () => {
   });
 });
 
-// docs/replica-model/dasl-objects.md — the version-3 vault names its objects by
-// raw DASL CIDs. §4.2 gives two executable vectors; DO-3 lists what a reader
-// must refuse. Refusing *drisl* CIDs is the object store's rule (DO §3), not
-// this package's: parseCid accepts both codecs and says which one it saw.
-describe("dasl-objects.md", () => {
+// The vault names its objects by raw DASL CIDs. Refusing *drisl* CIDs is the
+// object store's rule, not this package's: parseCid accepts both codecs and
+// says which one it saw.
+describe("raw CIDs the vault names objects by", () => {
   const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
   const fromHex = (h: string) => new Uint8Array(h.match(/../g)!.map((x) => parseInt(x, 16)));
   const ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
-  it("DO-2 the empty raw object has the CID of §4.2", async () => {
+  it("the empty raw object has its known CID", async () => {
     const cid = await cidOf(RAW_CODE, new Uint8Array());
     expect(hex(cid.bytes)).toBe("01551220e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     expect(cid.text).toBe("bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku");
     expect(parseCid(cid.text).text).toBe(cid.text);
   });
 
-  it("§4.2 UTF-8 \"hello\" has the CID of §4.2, in both forms", async () => {
+  it("UTF-8 \"hello\" has its known CID, in both forms", async () => {
     const cid = await cidOf(RAW_CODE, utf8("hello"));
     expect(hex(cid.bytes)).toBe("015512202cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
     expect(cid.text).toBe("bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq");
     expect(cidFromBytes(fromHex(hex(cid.bytes))).text).toBe(cid.text);
   });
 
-  it("DO-3 CIDv0, uppercase, non-canonical base32, dag-pb, non-SHA-256 and a wrong digest length are refused", async () => {
+  it("CIDv0, uppercase, non-canonical base32, dag-pb, non-SHA-256 and a wrong digest length are refused", async () => {
     const raw = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq";
     const digest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
     // CIDv0 (base58btc, dag-pb, sha-256)

@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **draft, phase 1** — ordinary DIDComm channels, discovery and
+Status: **phase 1, implemented** — ordinary DIDComm channels, discovery and
 early private-address allocation for one active writable vault runtime.
 Phase-1 channel endpoints support only `did:peer:4`; mediator DID resolution
 is independent of that restriction.

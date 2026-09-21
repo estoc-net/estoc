@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **draft, phase 1**. SQLite is the sole persistent vault and portable
+Status: **phase 1, implemented**. SQLite is the sole persistent vault and portable
 backup format.
 
 The capitalized requirement words in this document have their BCP 14 meanings.

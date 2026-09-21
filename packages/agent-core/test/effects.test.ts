@@ -187,6 +187,30 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
+  it("an input contradicted by another observation of it earns nothing more, live or by hand, and is no listed work; the receipt already handed over stays the message it was, handed over", async () => {
+    const { alice, bob } = await parties();
+    const { wire, options, receive, live, executionOf } = await reacting(alice);
+    const answered = crypto.randomUUID() as WireMessageId;
+    const ack = created((await live(bob, ping(answered, { body: { response_requested: false } }))).effects[0]);
+    expect(wire.posts).toHaveLength(1);
+
+    const contradicting = await live(bob, ping(answered));
+    expect(contradicting.effects.map((effect) => effect.outcome)).toEqual(contradicting.effects.map(() => "none"));
+    const unanswered = crypto.randomUUID() as WireMessageId;
+    const executionId = await executionOf(await receive(bob, ping(unanswered)));
+    await receive(bob, ping(unanswered, { body: { response_requested: false } }));
+    for (const [id, effectType] of [[contradicting.executionId!, PING_RESPONSE_EFFECT], [contradicting.executionId!, PURE_ACK_EFFECT], [executionId, PING_RESPONSE_EFFECT], [executionId, PURE_ACK_EFFECT]] as const) {
+      const completed = await completeResponse(alice.runtime, alice.keys, id, effectType, options);
+      expect([completed.outcome, "because" in completed && completed.because.startsWith("the input is not established")]).toEqual(["none", true]);
+    }
+
+    const fold = await foldOf(alice);
+    expect([fold.inbound.executions.get(contradicting.executionId!)!.status.status, fold.inbound.executions.get(executionId)!.status.status]).toEqual(["conflict", "conflict"]);
+    expect([wire.posts.length, fold.set.of("message.out").length, unfinishedWork(fold).responses]).toEqual([1, 1, []]);
+    expect(fold.outbound.outbounds.get(ack.messageId)).toMatchObject({ messageId: ack.messageId, submitted: true, released: true, effect: { status: "conflict" }, work: { kind: "none" } });
+    await closeAll(alice, bob);
+  });
+
   it("each operation follows its own policy: a Ping asking for no reply gets its receipt alone, one asking for no receipt its reply alone, chat only what it asks, a pure acknowledgement nothing, an expired Ping no reply, and a request naming nothing here no receipt", async () => {
     const { alice, bob } = await parties();
     const { live } = await reacting(alice, { now: () => (CREATED + 100) * 1000 });

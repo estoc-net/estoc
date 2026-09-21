@@ -1,6 +1,6 @@
 # Estoc version 3 specification suite
 
-Status: **draft**. Phase 1 has one active writable full vault runtime, seven
+Status: **implemented**. Phase 1 has one active writable full vault runtime, seven
 specifications. SQLite is the sole persistent vault and portable interchange
 format. This guide is informative; linked specification sections define requirements.
 
@@ -104,6 +104,9 @@ RZ owns DID resolution and address/display policy.
 | DD | [Distributed delivery](distributed-delivery.md#required-conformance-cases) | Phase 1 |
 | CH | [Channels and continuity](channels.md#required-conformance-cases) | Phase 1 |
 | RZ | [Channel address and contact policy](relationships.md#required-conformance-cases) | Phase 1 |
+
+[Conformance status](conformance-status.md) reports, case by case, the code and
+tests behind each of them in this repository.
 
 The seven documents above are the complete phase-1 contract. Multi-replica
 mediation, network vault synchronization and mutable channel DIDs have only
