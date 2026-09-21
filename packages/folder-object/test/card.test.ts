@@ -48,13 +48,20 @@ describe("object card", () => {
     await expect(verifyCard(`${h}.${p}.${sig}`)).rejects.toThrow(/does not belong/);
   });
 
-  it("rejects an algorithm other than EdDSA and a header that asks for more than it understands", async () => {
+  it("rejects, of cards signed over the very header they carry, another algorithm, an extension it does not know, and an unencoded payload", async () => {
     const s = await signer();
-    const [, p, sig] = (await signRoot(s.did(), ROOT, s)).split(".") as [string, string, string];
-    for (const extra of [{ alg: "HS256" }, { alg: "none" }, { crit: ["exp"], exp: 1 }, { b64: false, crit: ["b64"] }]) {
-      const h = b64(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(s.did()), ...extra }));
-      await expect(verifyCard(`${h}.${p}.${sig}`)).rejects.toThrow();
-    }
+    const card = { alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(s.did()) };
+    const payload = JSON.stringify({ did: s.did(), root: ROOT });
+    const signed = async (header: object, p = b64(payload)) => {
+      const h = b64(JSON.stringify(header));
+      return `${h}.${p}.${b64bytes(await s.sign(new TextEncoder().encode(`${h}.${p}`)))}`;
+    };
+
+    expect(await verifyCard(await signed(card))).toEqual({ did: s.did(), root: ROOT });
+    await expect(verifyCard(await signed({ ...card, alg: "HS256" }))).rejects.toThrow(/"alg".*not allowed/);
+    await expect(verifyCard(await signed({ ...card, alg: "none" }))).rejects.toThrow(/"alg".*not allowed/);
+    await expect(verifyCard(await signed({ ...card, crit: ["exp"], exp: 1 }))).rejects.toThrow(/"exp" is not recognized/);
+    await expect(verifyCard(await signed({ ...card, b64: false, crit: ["b64"] }, payload))).rejects.toThrow(/payload is base64url/);
   });
 
   it("rejects a card with any member beyond {did, root}", async () => {

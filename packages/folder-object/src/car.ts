@@ -1,7 +1,7 @@
 /**
  * CARv1 (https://ipld.io/specs/transport/car/carv1/): a header naming the
  * roots, then blocks — each a CID and its bytes, length-prefixed. This is
- * how a tree's closure travels as one file (`docs/object-share.md` §8).
+ * how a tree's closure travels as one file.
  *
  * The header is dag-cbor `{version: 1, roots: [CID…]}`, hand-encoded and
  * hand-decoded here: the map has two fixed keys and a CID is CBOR tag 42
@@ -80,7 +80,7 @@ export async function decodeCar(bytes: Uint8Array): Promise<Car> {
 }
 
 /**
- * The name of a blob — any bytes — as `docs/blob-store.md` names them: a
+ * The name of a blob — any bytes — in a blob store: a
  * sha-256 multihash, multibase base32 lower (`b…`, 56 characters).
  */
 export async function blobHash(bytes: Uint8Array): Promise<string> {

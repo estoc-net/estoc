@@ -2,7 +2,7 @@ import { readObject } from "./object.js";
 import { MalformedObjectError, type FolderObject, type SignedObject, type TreeFiles } from "./types.js";
 
 /**
- * A signed object on disk (spec §5):
+ * A signed object on disk:
  *
  *     object/     the canonical tree, verbatim
  *     card.jws    the card

@@ -15,7 +15,6 @@ import { base64url, compactVerify, errors, importJWK, type CompactJWSHeaderParam
 import { hashObject } from "./object.js";
 import type { CardSigner, FolderObject, ObjectCard } from "./types.js";
 
-/** The JWS `typ` of an object card. */
 export const CARD_TYP = "estoc/object-card";
 
 const DID_KEY = "did:key:";
@@ -28,9 +27,10 @@ export function didKeyKid(did: string): string {
 
 /**
  * Sign a card over a root as `did`. Two cards over the same (did, root)
- * are equivalent. The JWS is put together here rather than by a JOSE
- * library because the signer may be a device that signs bytes and never
- * gives up a key, and the libraries sign only with a key they hold.
+ * are equivalent. The JWS is put together here rather than by `jose`
+ * because the signer may be a device that signs bytes and never gives
+ * up a key, and `jose` signs with a key it is given: it takes no signer
+ * to call.
  */
 export async function signRoot(did: string, root: string, signer: Pick<CardSigner, "sign">): Promise<string> {
   const header = base64url.encode(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(did) }));
@@ -48,17 +48,14 @@ export async function signObject(object: FolderObject, signer: CardSigner): Prom
 /** The key an object card's header names: the did:key of its `kid`, which is self-certifying. */
 function cardKey(header: CompactJWSHeaderParameters) {
   if (header.typ !== CARD_TYP) throw new Error(`not an object card (typ ${String(header.typ)})`);
+  // RFC 7797 lets a header carry its payload unencoded; no card is signed that way, and a verifier without the extension would refuse one this one took.
+  if (header.b64 === false) throw new Error("a card's payload is base64url");
   const did = header.kid?.split("#")[0] ?? "";
   if (!did.startsWith(DID_KEY) || didKeyKid(did) !== header.kid) throw new Error("expected the kid of a did:key");
   return importJWK({ kty: "OKP", crv: "Ed25519", x: base64url.encode(publicKeyFromDidKey(did)) }, "EdDSA");
 }
 
-/**
- * Verify a card on its own terms: an `estoc/object-card` JWS whose
- * signature checks out under the did:key its `kid` names, saying
- * `{did, root}` of that same did. Throws on anything else. Whether the
- * root is the tree you hold is `verifyObjectCard`'s question.
- */
+/** Verify a card on its own terms; throws on anything that is not one. Whether the root is the tree you hold is `verifyObjectCard`'s question. */
 export async function verifyCard(jws: string): Promise<ObjectCard> {
   const verified = await compactVerify(jws, cardKey, { algorithms: ["EdDSA"] }).catch((err: unknown) => {
     if (err instanceof errors.JWSSignatureVerificationFailed) throw new Error("card signature does not verify");

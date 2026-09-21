@@ -7,7 +7,9 @@
   library's to check, under the did:key the `kid` names; the card's own
   rules stay here (`typ`, exactly `{did, root}`, the did being the
   `kid`'s). A card whose `kid` names another key than the one that
-  signed now fails as a signature that does not verify. Signing still
+  signed now fails as a signature that does not verify, and a header
+  with `b64: false` (RFC 7797, which `jose` reads) is refused as it
+  always was: a card's payload is base64url. Signing still
   assembles the JWS itself, since the signer may be a device that only
   signs bytes.
 
