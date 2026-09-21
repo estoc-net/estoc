@@ -342,6 +342,25 @@ describe("an outbound message", () => {
     expect(outboundOf(vault, noExpiry)).toMatchObject({ acknowledged: true, late: false });
   });
 
+  it("is acknowledged by no input whose observations contradict one another, however complete each witness is", async () => {
+    const { scene, keys, a0, b0 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    const out = intent(scene, a0, b0);
+    packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    const wire = uuidv7() as WireMessageId;
+    const first = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1, wire, overrides: { ack: [out.data.messageId] } });
+    let vault = await fold(scene, keys);
+    expect(outboundOf(vault, out).ackWitnesses.map(({ source }) => source.event.eventId)).toEqual([first.eventId]);
+
+    const second = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 2, wire, overrides: { ack: [out.data.messageId], intentHash: OTHER_HASH } });
+    vault = await fold(scene, keys);
+    expect(vault.continuity.witness(first.eventId).status).toBe("complete");
+    expect(vault.continuity.witness(second.eventId).status).toBe("complete");
+    expect(vault.inbound.ofSource(first.eventId)!.status.status).toBe("conflict");
+    expect(outboundOf(vault, out)).toMatchObject({ ackWitnesses: [], acknowledged: false });
+    expectSameOverEveryOrder(scene, vault.checks);
+  });
+
   it("attributes a receipt to no outbound whose package is not here: the acknowledgement waits for the package, and conflicts with one that contradicts the intent", async () => {
     const { scene, keys, a0, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);

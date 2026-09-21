@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **draft, phase 1** — event vocabulary and fold rules for
+Status: **phase 1, implemented** — event vocabulary and fold rules for
 one single-seed vault executed by exactly one active writable full runtime.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,

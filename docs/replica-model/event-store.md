@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **draft, phase 1**. SQLite is the sole persistent vault and interchange
+Status: **phase 1, implemented**. SQLite is the sole persistent vault and interchange
 format for one active writable runtime. This specification defines observable
 store semantics, not SQLite's implementation. Capitalized requirement words
 have their BCP 14 meanings.

@@ -766,6 +766,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
 
     createContact: (petname, channels) =>
       act(async (_agent, running) => {
+        if (channels.length === 0) throw new Error("a contact is created with at least one channel");
         const contactId = uuidv7() as ContactId;
         await commit(running, () => [vaultDraft("contact.created", { contactId, because: "user" }), vaultDraft("contact.petname", { contactId, name: petname }), vaultDraft("contact.channelsSet", { contactId, channels })]);
         return contactId;

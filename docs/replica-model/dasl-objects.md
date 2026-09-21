@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **draft, phase 1**. The version-3 vault accepts only whole-resource raw
+Status: **phase 1, implemented**. The version-3 vault accepts only whole-resource raw
 DASL objects. Capitalized requirement words have their BCP 14 meanings.
 
 <!-- reading-guide:start -->

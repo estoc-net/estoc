@@ -475,6 +475,8 @@ describe("two daemons over a mediator", () => {
       const moved = (snapshot: Snapshot) => snapshot.channels.find((channel) => channel.head !== null && channel.head.localDid !== channel.channel.localDid);
       await until("alice's successor is the head of the pair bob wrote in", () => moved(alice.heard.snapshot()) !== undefined);
       const head = moved(alice.heard.snapshot())!.head as Channel;
+      await expect(alice.daemon.createContact("Nobody", [])).rejects.toThrow("at least one channel");
+      expect(alice.heard.snapshot().contacts).toEqual([]);
       const contactId = await alice.daemon.createContact("Bob", [head]);
       expect(alice.heard.snapshot().contacts).toMatchObject([{ petname: "Bob", defaultWriteTo: head }]);
       await alice.daemon.renameContact(contactId, "Bobby");

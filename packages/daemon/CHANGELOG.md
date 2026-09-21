@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `createContact` refuses an empty channel list: a contact is created
+  with at least one channel.
+
 ## 0.3.0 — 2026-09-20
 
 The daemon over the version-3 vault, in place of the version-2 one.

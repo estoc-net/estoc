@@ -1,6 +1,6 @@
 # Channels, continuity and operation evidence
 
-Status: **draft, phase 1**. This document owns channel identity, invitation
+Status: **phase 1, implemented**. This document owns channel identity, invitation
 consumption, directed continuity evidence and operation eligibility. Storage
 envelopes and durability follow [event-store.md](event-store.md). Sending and
 effect ordering follow [distributed-delivery.md](distributed-delivery.md).

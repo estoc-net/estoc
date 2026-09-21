@@ -18,6 +18,7 @@
 import { InvalidDidDocument, InvalidPublicKey } from "../errors.js";
 import { channelOf, sameChannel } from "../ids.js";
 import { canonicalDidOf } from "../peer-document.js";
+import { expandPleaseAck } from "../projection.js";
 import { agreementKey } from "../public-key.js";
 import type { VaultEvent } from "../schema.js";
 import type { Channel, Did, EventId, MessageId, MessageOut, WireMessageId } from "../types.js";
@@ -179,7 +180,7 @@ export function foldOutbound(
   const submissions = groupBy(set.of("delivery.submitted"), (event) => event.data.messageId);
   const failures = groupBy(set.of("delivery.failed"), (event) => event.data.messageId);
   const acknowledgements = groupBy(set.of("delivery.acknowledged"), (event) => event.data.messageId);
-  const witnesses = witnessesByTarget(evidence, continuity);
+  const witnesses = witnessesByTarget(evidence, continuity, inbound);
   const selections = new Map<EventId, MessageId[]>();
   for (const event of set.of("message.out")) {
     if (event.data.rotationEventId === null) continue;
@@ -245,12 +246,17 @@ export function foldOutbound(
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-/** The complete witnesses whose `ack` names each wire ID, in first-receipt order. */
-function witnessesByTarget(evidence: ChannelEvidence, continuity: Continuity): Map<string, Source[]> {
+/**
+ * The complete witnesses whose `ack` names each wire ID, in first-receipt
+ * order. An input whose observations contradict one another acknowledges
+ * nothing: which of its `ack` lists the peer meant is not known.
+ */
+function witnessesByTarget(evidence: ChannelEvidence, continuity: Continuity, inbound: InboundFold): Map<string, Source[]> {
   const byTarget = new Map<string, Source[]>();
   const sources = [...evidence.sources.values()].sort((a, b) => compareReceiptKeys(receiptOrderKey(a.event), receiptOrderKey(b.event)));
   for (const source of sources) {
     if (source.channel === null || source.event.data.ack.length === 0 || continuity.witness(source.event.eventId).status !== "complete") continue;
+    if (inbound.ofSource(source.event.eventId)?.status.status === "conflict") continue;
     for (const target of new Set(source.event.data.ack)) {
       const list = byTarget.get(target);
       if (list === undefined) byTarget.set(target, [source]);
@@ -572,7 +578,7 @@ function builtInOf(data: MessageOut, source: Source | null, execution: Execution
 function ackTargetsIn(targets: readonly string[], source: Source, execution: Execution | null, inputs: Inputs, missing: string[]): EffectStatus | null {
   const carried = source.event.data;
   if (carried.pleaseAck === null || carried.pleaseAck.length === 0) return { status: "conflict", because: "the source requests no ACK" };
-  const requested = new Set(carried.pleaseAck.map((target) => (target === "" ? carried.wireMessageId : target)));
+  const requested = new Set(expandPleaseAck(carried.wireMessageId, carried.pleaseAck));
   for (const target of targets) if (!requested.has(target)) return { status: "conflict", because: `the source does not request an ACK of ${target}` };
   if (source.channel === null) {
     missing.push("the source's channel is not known yet");
@@ -684,7 +690,7 @@ function ackTargetsOf(sourceEventId: EventId, evidence: ChannelEvidence, continu
   if (continuity.witness(sourceEventId).status !== "complete") return [];
   const own = inbound.ofSource(sourceEventId);
   const targets: Execution[] = [];
-  for (const wanted of new Set(requested.map((target) => (target === "" ? source.event.data.wireMessageId : target)))) {
+  for (const wanted of expandPleaseAck(source.event.data.wireMessageId, requested)) {
     const target = targetOf(wanted as WireMessageId, source, source.channel, own, evidence, continuity, executionsByWire);
     if (target.status === "eligible") targets.push(target.execution);
   }
