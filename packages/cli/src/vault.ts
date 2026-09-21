@@ -3,7 +3,7 @@ import path from "node:path";
 import { createVault, inspectRuntime } from "@estoc/agent-core";
 import { RESTORE_EXPLAINED, VAULT_FILE, connect, decode, encode, type Daemon, type DaemonStorage, type Phase, type Port, type Snapshot } from "@estoc/daemon";
 import { ESTOC_DIR, SOCKET_FILE, nodeHost, vaultDir } from "@estoc/daemon/node";
-import { DatabaseBusy } from "@estoc/event-store";
+import { DamagedHistory, DatabaseBusy } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, unlockSeedKeystore, type DerivedIdentity } from "@estoc/keystore";
 import { ANCHOR_KEY_NAME, Keys } from "@estoc/vault";
 
@@ -207,6 +207,8 @@ export interface VaultStatus {
   label: string | null;
   /** the daemon that holds the folder, when one does */
   daemon: { at: string; phase: Phase; detail: string | null } | null;
+  /** the damage to the vault's history, in words, where this process read the vault and met some: the label is then read from a history short of what was damaged */
+  damaged: string | null;
 }
 
 export async function vaultStatus(vault: Vault): Promise<VaultStatus> {
@@ -216,9 +218,12 @@ export async function vaultStatus(vault: Vault): Promise<VaultStatus> {
     const { remote } = reached;
     remote.close();
     const { at, phase, detail, snapshot } = remote;
-    return { anchor: snapshot?.anchor ?? null, label: snapshot?.label ?? null, daemon: { at, phase, detail } };
+    return { anchor: snapshot?.anchor ?? null, label: snapshot?.label ?? null, daemon: { at, phase, detail }, damaged: phase === "damaged" ? detail : null };
   }
-  return looked(vault, reached.storage, async ({ runtime, fold }) => ({ anchor: runtime.metadata.anchor, label: fold.label, daemon: null }));
+  return looked(vault, reached.storage, async ({ runtime, fold }) => {
+    const { stopped } = runtime;
+    return { anchor: runtime.metadata.anchor, label: fold.label, daemon: null, damaged: stopped instanceof DamagedHistory ? stopped.message : null };
+  });
 }
 
 async function looked<T>(vault: Vault, storage: DaemonStorage, work: (inspected: Awaited<ReturnType<typeof inspectRuntime>>) => Promise<T>): Promise<T> {

@@ -41,6 +41,7 @@ export {
   type InspectedSnapshot,
   type OpenedVault,
   type Unlock,
+  type OpenVaultOptions,
   type VaultOptions,
 } from "./identity.js";
 export { Keyring } from "./keyring.js";
@@ -155,4 +156,4 @@ export {
   type ViewOptions,
 } from "./records.js";
 export { manualProcedures, readRecords, type Manual, type ManualOptions } from "./views.js";
-export { Agent, type AgentOptions, type Connection, type Inbound, type Submitted } from "./agent.js";
+export { Agent, UNKNOWN_REGISTRATIONS_KEPT, type AgentOptions, type Connection, type Inbound, type Submitted } from "./agent.js";

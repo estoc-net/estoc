@@ -1,7 +1,7 @@
 import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it } from "vitest";
 
-import type { DIDDoc } from "@estoc/did-peer";
+import { resolveDIDCommDoc, type DIDDoc } from "@estoc/did-peer";
 import type { JsonObject } from "@estoc/event-store";
 import {
   EMPTY_MESSAGE_TYPE,
@@ -38,14 +38,17 @@ import {
   Unusable,
   completeNotification,
   createDid,
+  createMediation,
   disclose,
   dispatch,
+  ensureRoute,
   manualNotificationDraft,
   pinnedResolver,
   privateAddress,
   reactTo,
   receiptOf,
   rotate,
+  selectMediation,
   unpack,
   type EffectOutcome,
   type Reacted,
@@ -53,7 +56,7 @@ import {
   type Rotated,
   type Source,
 } from "../src/index.js";
-import { didcomm, directParty, peerSealer, posting, refuseCommits, sealed, type DirectParty, type Fresh, type Post } from "./helpers.js";
+import { didcomm, directParty, newMediator, peerSealer, posting, refuseCommits, sealed, type DirectParty, type Fresh, type Post } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const ALICE_NEXT = "019b0000-0000-7000-8000-00000000000b" as DidId;
@@ -63,6 +66,7 @@ const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
 const BOB_FORK = "019b0000-0000-7000-8000-0000000000b2" as DidId;
 const BOB_OTHER_FORK = "019b0000-0000-7000-8000-0000000000b3" as DidId;
 const CHARLIE = "019b0000-0000-7000-8000-0000000000c0" as DidId;
+const DAVE = "019b0000-0000-7000-8000-0000000000d0" as DidId;
 const CREATED = 1_757_700_000;
 const IAT = 1_757_700_000;
 
@@ -168,6 +172,37 @@ describe("a local rotation", () => {
     fold = await foldOf(alice);
     expect([fold.routes.dids.size, fold.set.of("did.rotationSelected").length, wire.posts.length]).toEqual([2, 1, 1]);
     await closeAll(alice, bob);
+  });
+
+  it("the successor goes on the route new addresses go on: its predecessor's while no arrangement is preferred, the preferred arrangement's once one is, and a route given outright whichever that is; a successor recorded already keeps its own", async () => {
+    const { alice, bob } = await parties();
+    const charlie = await directParty(3, "https://charlie.example/didcomm", CHARLIE);
+    const dave = await directParty(4, "https://dave.example/didcomm", DAVE);
+    const { options, receive } = await rotating(alice);
+    for (const peer of [bob, charlie, dave]) await receive(peer, { type: BASIC_MESSAGE });
+    const direct = (await foldOf(alice)).routes.dids.get(ALICE)!.created!.boundRouteId;
+
+    const unpreferred = await rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: bob.did }, options);
+    expect((await successorOf(alice, unpreferred)).boundRouteId).toBe(direct);
+
+    const mediator = await newMediator();
+    const { mediationId } = (await createMediation(alice.runtime, alice.keys, mediator.did as Did)).data;
+    await alice.runtime.vault.commit([], [vaultDraft("mediation.granted", { mediationId, routingDid: mediator.did as Did })]);
+    await selectMediation(alice.runtime, alice.keys, mediationId);
+    const mediated = await ensureRoute(alice.runtime, alice.keys, mediationId);
+    expect(mediated).not.toBe(direct);
+
+    const preferred = await rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: charlie.did }, options);
+    const onMediated = await successorOf(alice, preferred);
+    expect(onMediated.boundRouteId).toBe(mediated);
+    expect((await resolveDIDCommDoc(onMediated.longFormDid))!.service[0]!.serviceEndpoint).toMatchObject({ uri: mediator.did });
+
+    const again = await rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: charlie.did }, { ...options, didId: preferred.successor });
+    expect([again.existed, again.successor]).toEqual([true, preferred.successor]);
+
+    const given = await rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: dave.did }, { ...options, routeId: direct });
+    expect((await successorOf(alice, given)).boundRouteId).toBe(direct);
+    await closeAll(alice, bob, charlie, dave);
   });
 
   it("no rotation from an address the peer never wrote to, in a denied channel, toward oneself, from an unknown entity, over a control input, or where decisions already compete", async () => {

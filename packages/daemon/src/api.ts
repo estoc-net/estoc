@@ -23,11 +23,21 @@ import type {
 
 /**
  * Which screen the vault dictates: booting → (elsewhere: another
- * daemon has the files) → onboarding (no vault) | unreadable | locked
- * (a vault, no cached seed) → open. `unreachable` is the one phase no
- * daemon says: a client over a socket says it when nothing answers.
+ * daemon has the files) → onboarding (no vault) | unreadable | damaged
+ * | locked (a vault, no cached seed) → open. `unreachable` is the one
+ * phase no daemon says: a client over a socket says it when nothing
+ * answers.
+ *
+ * `damaged` is a vault of this version whose history no longer reads
+ * whole, found as it opens or while it runs: it is not run, since it
+ * would accept no write, and nothing of it is changed. What the person
+ * is owed there: the history comes back only by restoring a validated
+ * snapshot into a new vault, as far as that snapshot goes and no
+ * further; with no usable snapshot none of it does; the seed is still
+ * what the passphrase unlocks from any readable copy of the vault or
+ * snapshot. `forgetIdentity` removes the damaged vault to make room.
  */
-export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open" | "unreachable";
+export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "damaged" | "locked" | "open" | "unreachable";
 
 /** An arrangement with a mediator, as the fold has it. */
 export interface MediationSummary {
@@ -100,6 +110,12 @@ export interface Merged {
   conflicts: number;
   objects: number;
   repaired: number;
+  /**
+   * The backup and this vault had both written under one replica ID,
+   * as two copies of one runtime do, and this one took a fresh ID
+   * before the merge went through. Nothing of the history changed.
+   */
+  renewed: boolean;
 }
 
 export interface CreatedInvitation {

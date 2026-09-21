@@ -27,7 +27,7 @@
 
 import type { DIDDoc } from "@estoc/did-peer";
 import type { VaultRuntime } from "@estoc/event-store";
-import { requiredReceivingSet, scanVault, type DidId, type Keys, type MediationId } from "@estoc/vault";
+import { requiredReceivingSet, scanVault, type Did, type DidId, type Keys, type MediationId } from "@estoc/vault";
 
 import { LiveInput, type LiveAction } from "./action.js";
 import { disclose, didOf, routeOf, type Disclosed, type Disclosure } from "./dids.js";
@@ -77,10 +77,19 @@ export interface Connection {
   /** why the last connection stopped short; null when it ran through */
   unreachable: string | null;
   reconciled: Reconciled | null;
+  /**
+   * Every registration a reconciliation of this agent's found at the
+   * mediator that no DID of the vault accounts for, the first
+   * `UNKNOWN_REGISTRATIONS_KEPT` of them: a reconciliation removes what
+   * it finds, so the next one no longer reports it.
+   */
+  unknownRegistrations: Did[];
   drained: Drained | null;
   /** whether the socket is open, or opening */
   live: boolean;
 }
+
+export const UNKNOWN_REGISTRATIONS_KEPT = 32;
 
 export interface Submitted extends Sent {
   dispatched: Called;
@@ -258,15 +267,20 @@ export class Agent {
   }
 
   private shown(connection: Connection): Connection {
-    return { ...connection, live: this.lines.get(connection.mediationId)?.link.live ?? false };
+    return { ...connection, unknownRegistrations: [...connection.unknownRegistrations], live: this.lines.get(connection.mediationId)?.link.live ?? false };
   }
 
   private async connectTo(mediationId: MediationId): Promise<Connection> {
-    const connection: Connection = this.attempts.get(mediationId) ?? { mediationId, unreachable: null, reconciled: null, drained: null, live: false };
+    const connection: Connection = this.attempts.get(mediationId) ?? { mediationId, unreachable: null, reconciled: null, unknownRegistrations: [], drained: null, live: false };
     this.attempts.set(mediationId, connection);
     try {
       const { link, pickup } = await this.lineOf(mediationId);
       connection.reconciled = await reconcile(link, this.runtime, this.keys, mediationId);
+      for (const did of connection.reconciled.unknown) {
+        if (connection.unknownRegistrations.length >= UNKNOWN_REGISTRATIONS_KEPT) break;
+        if (!connection.unknownRegistrations.includes(did)) connection.unknownRegistrations.push(did);
+      }
+      if (connection.reconciled.unknown.length > 0) this.log(`the mediator of ${mediationId} held ${connection.reconciled.unknown.length} registration(s) no DID of this vault accounts for`);
       connection.drained = await pickup.drain();
       if ((this.options.liveDelivery ?? true) && !link.live && !this.closed) link.openSocket((opened) => pickup.onFrame(opened));
       connection.unreachable = null;

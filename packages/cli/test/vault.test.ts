@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SOCKET_FILE, nodeHost, runDaemon, type Served } from "@estoc/daemon/node";
@@ -38,7 +39,7 @@ describe("initVault", () => {
     expect(vault.dir).toBe(path.join(root, ESTOC_DIR));
     expect(did).toMatch(/^did:key:z6Mk/);
     expect((await readdir(vault.dir)).filter((name) => name.endsWith(".sqlite")).sort()).toEqual(["owner.sqlite", "vault.sqlite"]);
-    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "my-vault", daemon: null });
+    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "my-vault", daemon: null, damaged: null });
 
     expect((await openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).did).toBe(did);
     await expect(openVaultKey(vault, ANCHOR_KEY_NAME, "wrong")).rejects.toThrow();
@@ -75,6 +76,22 @@ describe("initVault", () => {
     const { vault, did } = await initVault(root, "first", PASSPHRASE);
     await expect(initVault(root, "second", "another passphrase")).rejects.toThrow(/already holds a vault/);
     expect(await vaultStatus(vault)).toMatchObject({ anchor: did, label: "first" });
+  });
+
+  it("says of a vault whose history is damaged that it is, read here or held by a daemon, and still derives its keys: the seed does not hang on the history", async () => {
+    const root = path.join(base, "v");
+    const { vault, did } = await initVault(root, "v", PASSPHRASE);
+    const db = new DatabaseSync(path.join(vault.dir, "vault.sqlite"));
+    const { event_id: eventId, canonical } = db.prepare("SELECT event_id, canonical FROM events LIMIT 1").get() as { event_id: string; canonical: Uint8Array };
+    db.prepare("UPDATE events SET canonical = ? WHERE event_id = ?").run(canonical.slice(0, -3), eventId);
+    db.close();
+
+    const damaged = expect.stringMatching(/^events\/.* is damaged/);
+    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: null, daemon: null, damaged });
+    expect((await openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).did).toBe(did);
+
+    const { url } = await daemonOn(root);
+    expect(await vaultStatus(vault)).toEqual({ anchor: null, label: null, daemon: { at: new URL(url).origin, phase: "damaged", detail: damaged }, damaged });
   });
 
   it("writes nothing beside a vault of the folder format", async () => {
@@ -153,12 +170,12 @@ describe("a folder a daemon holds", () => {
     const served = await daemonOn(root);
     const at = new URL(served.url).origin;
 
-    expect(await vaultStatus(vault)).toEqual({ anchor: null, label: null, daemon: { at, phase: "locked", detail: null } });
+    expect(await vaultStatus(vault)).toEqual({ anchor: null, label: null, daemon: { at, phase: "locked", detail: null }, damaged: null });
     await expect(openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).rejects.toThrow(/holds this vault/);
     await expect(initVault(root, "again", PASSPHRASE)).rejects.toThrow(/already holds a vault/);
 
     await served.daemon.unlock(PASSPHRASE);
-    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "v", daemon: { at, phase: "open", detail: null } });
+    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "v", daemon: { at, phase: "open", detail: null }, damaged: null });
   });
 
   it("has its vault made by the daemon, and is this process's again once the daemon is gone", async () => {
@@ -171,7 +188,7 @@ describe("a folder a daemon holds", () => {
     await served.close();
     daemons = [];
     await expect(readFile(path.join(vault.dir, SOCKET_FILE))).rejects.toThrow();
-    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "made over the socket", daemon: null });
+    expect(await vaultStatus(vault)).toEqual({ anchor: did, label: "made over the socket", daemon: null, damaged: null });
     expect((await openVaultKey(vault, ANCHOR_KEY_NAME, PASSPHRASE)).did).toBe(did);
   });
 

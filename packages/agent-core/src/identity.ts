@@ -35,6 +35,16 @@ export interface OpenedVault {
 
 export interface VaultOptions extends SqliteVaultOptions, ScanOptions {}
 
+export interface OpenVaultOptions extends VaultOptions {
+  /**
+   * The runtime takes a fresh replica ID and store generation as it
+   * opens, its history untouched: for a copy of a vault that went on
+   * being written elsewhere under the same replica ID, which a merge
+   * refuses as a forked author until one of the two is renewed.
+   */
+  resetIdentity?: boolean;
+}
+
 /** The seed in hand, or the passphrase that unlocks the wrapped seed the vault holds. */
 export type Unlock = SeedKey | { passphrase: string };
 
@@ -45,13 +55,14 @@ export type Unlock = SeedKey | { passphrase: string };
  * so a wrong passphrase fails before any comparison. Either failure
  * closes the driver.
  */
-export async function openVault(driver: SqliteDriver, unlock: Unlock, options: VaultOptions = {}): Promise<OpenedVault> {
+export async function openVault(driver: SqliteDriver, unlock: Unlock, { resetIdentity, ...options }: OpenVaultOptions = {}): Promise<OpenedVault> {
   let seedKey: SeedKey | undefined = "passphrase" in unlock ? undefined : unlock;
   const db = await openRuntime(driver, {
     anchor: async (wrapped) => {
       if (seedKey === undefined) seedKey = await unlockSeedKeystore({ version: 3, seedJwe: wrapped.seedJwe }, (unlock as { passphrase: string }).passphrase);
       return Keys.anchorOf(seedKey);
     },
+    ...(resetIdentity === true ? { resetIdentity } : {}),
   });
   const keys = await Keys.open(seedKey as SeedKey, db.metadata.anchor);
   return opened(new SqliteVault(db, options), keys, options);

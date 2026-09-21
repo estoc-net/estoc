@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 
 import { pairKey, successorOf } from "./core/conversations.js";
-import { discardFolderVault, state } from "./core/store.js";
+import { discardFolderVault, forgetIdentity, state } from "./core/store.js";
 import ChatPane from "./ui/ChatPane.vue";
 import Onboarding from "./ui/Onboarding.vue";
 import Rail from "./ui/Rail.vue";
@@ -11,6 +11,12 @@ import Unlock from "./ui/Unlock.vue";
 function startOver() {
   if (confirm("Delete the old vault from this browser? There is no way back except a backup made by the version that wrote it.")) {
     void discardFolderVault();
+  }
+}
+
+function removeDamaged() {
+  if (confirm("Remove the damaged vault from here? It cannot be opened again afterwards; what you keep is what your backup holds.")) {
+    void forgetIdentity();
   }
 }
 
@@ -81,6 +87,32 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
         it<template v-if="state.daemonAt === null"
           >, then <button class="link" @click="startOver">start over</button> to delete it and begin a new identity</template
         >.
+      </p>
+    </div>
+  </div>
+
+  <div v-else-if="state.phase === 'damaged'" class="hollow" style="height: 100%" data-damaged>
+    <div class="hollow-card">
+      <div class="eyebrow">Estoc</div>
+      <h1>This vault's history is damaged</h1>
+      <p>
+        Part of what this vault recorded no longer reads back as it was written{{ state.phaseDetail === null ? "." : `: ${state.phaseDetail}` }}
+      </p>
+      <p>
+        The vault has stopped: it takes nothing in and sends nothing, because
+        it would be building on a history with a hole in it. Nothing here has
+        been changed.
+      </p>
+      <p class="fine">
+        The history comes back one way only: by restoring a backup into a new
+        vault. What that backup holds is what returns; anything recorded after
+        it was made is not recovered, and with no usable backup none of the
+        history is. Your identity is a separate matter: the seed is in every
+        backup, and the passphrase still unlocks it there.
+      </p>
+      <p class="fine">
+        To restore, <button class="link" data-remove-damaged @click="removeDamaged">remove the damaged vault</button>
+        and choose the backup on the screen that follows.
       </p>
     </div>
   </div>
