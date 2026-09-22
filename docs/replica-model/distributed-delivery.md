@@ -228,8 +228,8 @@ when a full vault runtime process-durably appends `message.out`.
 | Submission completion | `delivery.submitted` naming that message/package | Stop preparation and sending for this message ID |
 | Channel receipt | Current authentication, exact resolution, objects and `message.in` | Normal pickup ACK may follow |
 | Proof verification | Exact authenticated carrier with its original JWT and derivable or retained immutable issuer material | Fold computes proof result and continuity status without another event |
-| New source-derived work | Complete source/proof evidence, current policy and any additional evidence required by that consumer | Only the specific eligible operation may proceed |
-| Peer ACK | Complete source witness and exact channel/path target | Receipt information only |
+| New source-derived work | Admitted complete source/proof evidence, current policy and any additional evidence required by that consumer | Only the specific eligible operation may proceed |
+| Peer ACK | Admitted complete source witness and exact channel/path target | Receipt information only |
 
 Every dependency reference names an event committed before the dependent call.
 Object storage alone is not event commitment. Contact membership, a thread ID,
@@ -242,8 +242,8 @@ peer ACK or a missing submission event never supplies dispatch authority.
 Under the operation lock, normalize content, freeze immutable headers, choose
 one concrete sender and recipient, derive their channel and commit `message.out`
 with objects. This call does no network work. An explicit user send may select
-a new channel; an automatic output requires a complete source witness, its
-operation's policy checks and a same-channel or verified role-preserving
+a new channel; a new automatic output requires an admitted complete source
+witness, its operation's policy checks and a same-channel or verified role-preserving
 successor response channel.
 
 The original live initial action may then resolve/register and prepare the
@@ -275,6 +275,17 @@ or not transport was called; reopen cannot replay it. Further calls follow
 
 ### 4.3 Receive a message
 
+Process deliveries one at a time through steps 3–6 in pickup order. Finish a
+delivery's admission decision, including a pending/ignored/refused outcome,
+before the next delivery enters step 3. A pickup batch MAY parallelize the
+checks in steps 1–2, but MUST NOT commit all receipts before admitting the first.
+Do not fold a later delivery's proof or resolution as committed evidence early.
+For direct deliveries, the active runtime's serialized receive order plays the
+same role. Import or other committed evidence that becomes available meanwhile
+still applies at step 6; pickup order never overrides known replacement.
+Sending the pickup ACK need not hold the operation lock or wait for application
+effects, and its network completion does not delay the next local step.
+
 1. Resolve exact local recipient/key/route eligibility and authenticate the
    current sender under [the gate](relationships.md#hard-pre-vault-gate).
    The [phase-1 adapter](channels.md#carried-proof-and-library-boundary) preserves
@@ -290,8 +301,9 @@ or not transport was called; reopen cannot replay it. Further calls follow
    showing missing evidence as pending.
 6. Under the lock, fold all available evidence and reconcile
    [application admission](channels.md#application-admission) for this exact
-   source. Recheck supersession, denial, conflicts and receive policy before
-   committing `message.admitted`. Missing proof remains pending; an unadmitted
+   source as part of the ordered reconciliation pass. Recheck supersession,
+   denial and conflicts before committing `message.admitted`. Missing proof
+   remains pending; an unadmitted
    old-peer source remains `ignored-superseded`. Neither changes pickup ACK.
    For each consumer, validate the admitted source and its required target or
    protocol fields, then current operation policy. Commit its concrete intent
@@ -316,8 +328,11 @@ Rebuild receipt-derived state from retained evidence without current-sender
 re-resolution or another receipt event. Recover missing bytes/references and
 recompute proofs from retained JWTs and immutable issuer material under
 [predecessor resolution](relationships.md#predecessor-resolution).
-The active runtime automatically completes missing
-[invitation consumption](channels.md#invitation-consumed).
+The active runtime reconciles missing
+[admissions](channels.md#application-admission), then automatically completes
+missing [invitation consumption](channels.md#invitation-consumed). These passes
+also run on relevant evidence changes during normal operation; they do not wait
+for a restart.
 
 Expose pending/unconfirmed messages for manual action under
 [dispatch authority](channels.md#fixed-outbound-channel), preserving message,
@@ -846,8 +861,8 @@ In either case, notification recovery reuses the rotation; it never allocates
 another successor. A missing notification is manual work only while its source,
 when present, remains eligible under [channels.md](channels.md#operation-eligibility).
 Supersession of that source's peer prevents creating the intent. An existing
-intent may still be manually dispatched under the ordinary restrictions;
-recovery itself grants no automatic replay.
+intent remains a saved fact; a replaced fixed sender or recipient prohibits its
+preparation and dispatch, and recovery itself grants no automatic replay.
 
 <a id="required-vault-observations"></a>
 
@@ -985,9 +1000,9 @@ or mediator-visible IDs.
 
 - <a id="dd-25"></a> **DD-25.** Missing source authentication, endpoint or required link evidence defers the affected automatic operation; invitation state alone does not. Later evidence validates only its channel-local execution and grants no recovery dispatch.
 
-- <a id="dd-26"></a> **DD-26.** Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and equivalent long/short DID spellings do not cause them.
+- <a id="dd-26"></a> **DD-26.** Contradictory channel identity evidence or independently admitted conflicting intent suppress new effects; contact edits cannot resolve them and equivalent long/short DID spellings do not cause them.
 
-- <a id="dd-27"></a> **DD-27.** Control input with a complete source witness may supply authorized ACK evidence. It creates no contacts or recursive privacy notifications, and its type alone consumes no invitation.
+- <a id="dd-27"></a> **DD-27.** Control input with an admitted complete source witness may supply authorized ACK evidence. It creates no contacts or recursive privacy notifications, and its type alone consumes no invitation.
 
 - <a id="dd-28"></a> **DD-28.** Invalid carried proof prevents link/ACK effects and cannot supply a proof-free invitation source; independently authenticated receipt is retained. Failed envelope authentication creates no receipt and follows the gate's wait or terminal rules.
 
@@ -1036,7 +1051,7 @@ or mediator-visible IDs.
     no-plaintext profile.
 - <a id="dd-43"></a> **DD-43.** ACK targets require exact same-channel or verified role-preserving successor authorization; shared contacts and wire IDs alone supply none.
 
-- <a id="dd-44"></a> **DD-44.** ACK target order uses the minimum complete receipt key, not canonical event
+- <a id="dd-44"></a> **DD-44.** ACK target order uses the minimum admitted complete receipt key, not canonical event
     order or EventStore change order; a clock rollback between two receives
     does not reverse their ACK order in a linear history.
 - <a id="dd-45"></a> **DD-45.** Submitted completion survives restart, loss of local state, clock rollback,
@@ -1062,7 +1077,7 @@ or mediator-visible IDs.
 
 - <a id="dd-52"></a> **DD-52.** Saved `(executionId, effectType)` tuples and intents remain immutable across restore and handler refactoring; neither changes their effect keys or message IDs. Historical input creates no new dispatch action or replacement response channel.
 
-- <a id="dd-53"></a> **DD-53.** Ordinary content, errors and pure ACKs use channel-local identity and their protocol-specific response rules; continuity authorizes exact paths only. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
+- <a id="dd-53"></a> **DD-53.** Ordinary content, errors and pure ACKs use channel-local identity and their protocol-specific response rules; continuity authorizes exact paths only.
 
 - <a id="dd-54"></a> **DD-54.** Equal-intent observations at different local DIDs have different channels and execution IDs; later links never merge or replay them.
 
@@ -1088,7 +1103,7 @@ or mediator-visible IDs.
 
 - <a id="dd-64"></a> **DD-64.** Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
 
-- <a id="dd-65"></a> **DD-65.** ACK authorization uses the outbound fixed oriented channel and exact package/path evidence; display preferences never reassign it. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
+- <a id="dd-65"></a> **DD-65.** ACK authorization uses the outbound fixed oriented channel and admitted complete ACK witnesses with exact package/path evidence; display preferences never reassign it.
 
 - <a id="dd-66"></a> **DD-66.** Opposite-side links justify their evidence-backed join. Existing queued, prepared and submitted messages all keep their original channels.
 
@@ -1100,9 +1115,9 @@ or mediator-visible IDs.
 
 ### Group waits and transition validity (DD-70–DD-71)
 
-- <a id="dd-70"></a> **DD-70.** Incomplete consistent same-channel siblings do not erase a complete witness. A complete observation may witness continuity/confirmation without any handler decision or output intent. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
+- <a id="dd-70"></a> **DD-70.** Incomplete consistent same-channel siblings do not erase a complete witness. An admitted complete observation may confirm an exact address for new work without any handler decision or output intent; cryptographic peer-link inspection and validation of an existing local decision require no admission.
 
-- <a id="dd-71"></a> **DD-71.** Complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution for every effect type; submission remains complete and different channels are never execution aliases.
+- <a id="dd-71"></a> **DD-71.** Independently admitted complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution for every effect type; submission remains complete and different channels are never execution aliases.
 
 ### Independent operation recovery (DD-72–DD-75)
 
@@ -1118,4 +1133,4 @@ or mediator-visible IDs.
 
 - <a id="dd-76"></a> **DD-76.** An ACK or Ping reply uses the carrier channel only while that local sender is still eligible and unreplaced in this context. Otherwise select its unique eligible verified local-only successor head; ambiguous or unusable successors create no automatic intent. Canonical peer spelling is used. A committed rotation affects future selection and can stop an earlier fixed intent from dispatching; neither handler order nor manual action retargets that intent or bypasses endpoint restrictions.
 
-- <a id="dd-77"></a> **DD-77.** Body erasure leaves complete retained receipt/header evidence eligible for ACK source and target selection. It cannot justify a new Ping reply whose response_requested field is unavailable. Manual completion still requires an explicit action and current policy; erasure or recovery alone dispatches neither output. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
+- <a id="dd-77"></a> **DD-77.** Body erasure leaves admitted complete retained receipt/header evidence eligible for ACK source and target selection. It cannot justify a new Ping reply whose response_requested field is unavailable. Manual completion still requires an explicit action and current policy; erasure or recovery alone dispatches neither output.

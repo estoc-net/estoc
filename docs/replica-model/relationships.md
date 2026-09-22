@@ -164,14 +164,14 @@ retained keys may receive while their routes remain eligible. Explicit route
 or mediation retirement stops transport; temporary outage remains recoverable.
 
 Rotation is a channel link, not global address retirement. Keep old and new
-recipient routes through exact-successor confirmation. It changes selection
-for newly created intents only. An existing fixed-channel message never moves
-to the successor; explicit key/route retirement can make its retry impossible.
-Old-peer inputs remain receivable. At creation of new work derived from
-old-peer input, check current verified supersession under [channels.md](channels.md#continuity),
-including when the input was received before that supersession became known.
-Supersession alone neither prohibits an explicit user send to an eligible old
-address nor blocks manual dispatch of an already committed intent.
+recipient routes through exact-successor confirmation. Existing messages keep
+their fixed channels. A verified endpoint replacement prohibits new sends,
+preparation, first dispatch and manual retries on that old endpoint within its
+rotation context under [channels.md](channels.md#fixed-outbound-channel).
+Key or route retirement independently prevents sending. Old-peer inputs remain
+receivable, but cannot gain new admission or start source-derived work after
+supersession becomes known, even if sent or received earlier. Retain prior
+admitted history and committed operations without granting another dispatch.
 
 <a id="ordinary-sending-and-birth-selection"></a>
 
@@ -465,8 +465,9 @@ channel peer's immutable key changed. Live prerequisite retries follow section 1
 For an unopened delivery waiting on local receive prerequisites, retry only
 when its missing local material changes and then reapply sender authentication.
 For a committed observation, newly available exact evidence schedules continuity
-verification or operation recovery without another receipt or pickup. Neither
-kind of evidence recovery grants a new automatic dispatch action.
+verification, admission reconciliation and operation recovery without another
+receipt or pickup. Neither kind of evidence recovery grants a new automatic
+dispatch action.
 
 <a id="duplicate-authentication-and-historical-recovery"></a>
 
@@ -502,8 +503,10 @@ If the issuer is a valid short form and no matching retained `peer.resolved`
 document is available, keep the original carrier and show `pending-proof`.
 Do not poll the network, expire the proof into invalidity, or keep the original
 receive action waiting for that material. A later matching `peer.resolved`
-schedules verification; it grants no automatic ACK, reply or notification for
-that historical carrier.
+schedules verification and admission reconciliation under
+[channels.md](channels.md#application-admission); it grants no automatic ACK,
+reply or notification for that historical carrier. If the material never
+arrives, that carrier remains a pending diagnostic without application admission.
 A new independently authenticated live carrier is evaluated separately.
 
 The fold checks the original signature and the document's authorized
@@ -535,8 +538,8 @@ another DID. Public and private disclosure use this same method.
 
 First disclosure of any local address uses its long form, whether in OOB or
 plaintext `from`. Within each exact channel context, a sender MUST use its long
-form until a complete authenticated observation confirms knowledge of that exact
-address under [channels.md](channels.md#continuity). A successor also includes
+form until an admitted complete authenticated observation confirms knowledge of
+that exact address under [channels.md](channels.md#continuity). A successor also includes
 its frozen proof until confirmed. Confirmation in an unrelated channel does not
 satisfy either condition merely because the address is shared. Later new
 messages in the confirmed context may use the short form;
@@ -625,7 +628,7 @@ Verify the new recipient registration before disclosure, then follow
 Use the exact-address, authenticated-peer and local-only/join context checks in
 [channels.md](channels.md#continuity). Input at a predecessor confirms no
 successor. An ACK's named message IDs alone confirm no address knowledge.
-Its complete authenticated carrier, including a pure ACK, can independently
+Its admitted complete authenticated carrier, including a pure ACK, can independently
 confirm the exact successor address to which it was sent.
 Retain both recipient routes through confirmation; retire a shared resource
 only when no other channel or disclosure still needs it.

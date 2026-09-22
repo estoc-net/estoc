@@ -24,15 +24,15 @@ implemented**. Existing receipt/continuity tests do not establish admission or
 compliance with the new old-DID restrictions. No tests were run for this
 specification-only revision.
 
-| Cases | Current revision status | Remaining work |
+| Cases | Status after this revision | Remaining work |
 | --- | --- | --- |
-| CH-57–CH-63 | `missing` | Durable admission schema, producer/recovery, projections, migration, import-order/crash/duplicate checks and endpoint dispatch checks |
-| CH-4, CH-7, CH-19, CH-49, CH-51, CH-52, CH-54–CH-56 | `partial` | Preserve existing evidence checks; add admission and remove pre-rotation send/retry exceptions |
-| VE-32, VE-37, VE-60, VE-73, VE-78, VE-85, VE-95, VE-97, VE-109, VE-115, VE-126, VE-133, VE-139, VE-141, VE-142, VE-144, VE-150, VE-151 | `partial` | Admission-aware application witnesses, ACK/profile/confirmation views and current endpoint restrictions |
-| DD-23, DD-53, DD-65, DD-70, DD-74, DD-76, DD-77; RZ-33 | `partial` | Receive/recovery admission boundary and strict dispatch eligibility |
+| CH-57–CH-66 | `missing` | Durable admission schema, producer/recovery, projections, legacy history, import-order/crash/duplicate checks, saved-record validity, disposition precedence, pickup ordering and endpoint dispatch checks |
+| CH-7, CH-19, CH-49, CH-51, CH-52, CH-54–CH-56 | `partial` | Preserve existing evidence checks; add admission and remove pre-rotation send/retry exceptions |
+| VE-32, VE-60, VE-61, VE-78, VE-97, VE-109, VE-115, VE-126, VE-133, VE-139, VE-141, VE-142, VE-144, VE-151 | `partial` | Admission-aware application witnesses, ACK/profile/confirmation views and current endpoint restrictions |
+| DD-12, DD-23, DD-26, DD-27, DD-44, DD-65, DD-70, DD-71, DD-74, DD-76, DD-77; RZ-33 | `partial` | Admission-aware intent conflicts and ACK witnesses/order, and strict dispatch eligibility |
 
 The following summary and detailed rows are the **2026-09-21 baseline**. Their
-counts exclude the seven added cases, and their old evidence does not verify
+counts exclude the ten added cases, and their old evidence does not verify
 revised clauses. The revision table above overrides baseline status for the
 listed cases. All other application-consumer cases must also be reassessed
 against the common admission prerequisite before claiming this revision is
