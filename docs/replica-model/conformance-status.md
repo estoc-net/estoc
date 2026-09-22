@@ -14,7 +14,31 @@ Assessed 2026-09-21 against `main` at `54f9b86` plus the changes made with this 
 | `missing` | Not implemented. |
 | `n/a` | Binds no code here: the mediator, a documentation claim, or a feature the suite defers. |
 
-## Summary
+<a id="rotation-admission-revision"></a>
+
+## Pending application-admission revision — 2026-09-22
+
+The specification now requires `message.admitted`, admission-aware application
+projections and strict endpoint replacement gates. These changes are **not
+implemented**. Existing receipt/continuity tests do not establish admission or
+compliance with the new old-DID restrictions. No tests were run for this
+specification-only revision.
+
+| Cases | Current revision status | Remaining work |
+| --- | --- | --- |
+| CH-57–CH-63 | `missing` | Durable admission schema, producer/recovery, projections, migration, import-order/crash/duplicate checks and endpoint dispatch checks |
+| CH-4, CH-7, CH-19, CH-49, CH-51, CH-52, CH-54–CH-56 | `partial` | Preserve existing evidence checks; add admission and remove pre-rotation send/retry exceptions |
+| VE-32, VE-37, VE-60, VE-73, VE-78, VE-85, VE-95, VE-97, VE-109, VE-115, VE-126, VE-133, VE-139, VE-141, VE-142, VE-144, VE-150, VE-151 | `partial` | Admission-aware application witnesses, ACK/profile/confirmation views and current endpoint restrictions |
+| DD-23, DD-53, DD-65, DD-70, DD-74, DD-76, DD-77; RZ-33 | `partial` | Receive/recovery admission boundary and strict dispatch eligibility |
+
+The following summary and detailed rows are the **2026-09-21 baseline**. Their
+counts exclude the seven added cases, and their old evidence does not verify
+revised clauses. The revision table above overrides baseline status for the
+listed cases. All other application-consumer cases must also be reassessed
+against the common admission prerequisite before claiming this revision is
+implemented; unchanged test titles alone are not evidence of that prerequisite.
+
+## Baseline summary
 
 | Series | Spec | Cases | verified | partial | untested | missing | n/a |
 |---|---|---|---|---|---|---|---|
@@ -27,9 +51,9 @@ Assessed 2026-09-21 against `main` at `54f9b86` plus the changes made with this 
 | [RZ](#rz) | [Channel address and contact policy](relationships.md#required-conformance-cases) | 59 | 51 | 8 | 0 | 0 | 0 |
 | | **Total** | 429 | 358 | 66 | 2 | 0 | 3 |
 
-## Open items
+## Baseline open items
 
-No case is `missing` in the vault, the folds or the runtime. What is open falls into four groups.
+In the 2026-09-21 baseline, no case was `missing` in the vault, the folds or the runtime. What is open falls into four groups.
 
 **No exact move.** [SQ-39](vault-sqlite.md#sq-39): the hosts move a vault only as a portable snapshot, which takes fresh IDs, so the stopped-source clause binds nothing here. Two copies of one runtime folder that both went on being written are caught at their first merge, where the daemon renews its own identity and merges.
 

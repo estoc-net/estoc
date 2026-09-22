@@ -4,6 +4,14 @@
 > precedence. These candidates require redesign and integration before any
 > implementation; they reserve no current schema, code or API.
 
+Application acceptance and rotation knowledge must follow
+[durable admission](../channels.md#application-admission). Fan-out or union
+alone cannot make disconnected executors observe a rotation simultaneously.
+Before enabling multiple active executors, this extension must specify their
+admission/dispatch coordination and offline availability tradeoff. Historical
+admissions remain facts after merge; raw delivery is not application acceptance,
+and receipt ordinal ordering cannot serve as a global rotation cutoff.
+
 <!-- suite-navigation:start -->
 [Suite guide](../README.md) · Deferred extension · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->

@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **phase 1, implemented** — event vocabulary and fold rules for
+Status: **phase 1; application-admission and rotation restrictions specified, implementation pending** — event vocabulary and fold rules for
 one single-seed vault executed by exactly one active writable full runtime.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
@@ -275,7 +275,7 @@ it does not imply that every identifier has the same encoding or scope.
 
 For every payload `*EventId`, `T` is the target event type fixed by the
 referencing schema. `sourceEventId` is `EventReference<"message.in">` in
-`invitation.consumed`, `did.rotationSelected`
+`invitation.consumed`, `did.rotationSelected`, `message.admitted`
 and `message.out`;
 `disclosureEventId` in `invitation.consumed` names `did.disclosed`;
 `fromDidId` and `toDidId` in `did.rotationSelected` name local DID entities;
@@ -1277,6 +1277,10 @@ require a complete source witness and consistent logical intent under
 defers attribution; conflicting evidence supports no verified claim. Duplicates
 and cache rebuilds neither create facts nor advance their ordering.
 
+Ordinary chat, peer-profile fields and incoming ACK/error projections additionally
+require effective application admission of their exact source. Unadmitted
+observations belong to labelled diagnostics, not accepted application data.
+
 A peer name must come from a protocol-recognized field and remains a peer claim.
 It creates no contact, changes no `contact.petname` and grants no sharing
 permission. To display a profile as submitted, require a protocol-recognized
@@ -1318,8 +1322,8 @@ resolution; preparation still validates its own peer resolution.
 following verified local successors in the same context even when its saved
 `didId` names a predecessor. If applying the preference does not leave exactly
 one eligible head, the caller must explicitly select an eligible channel before
-intent commit. A channel replaced for default selection is outside `writeTo[]`; an explicit
-pre-rotation choice follows the same head-selection section's restrictions.
+intent commit. A channel with a replaced local sender or peer recipient is
+outside `writeTo[]` and cannot be used by an explicit pre-rotation override.
 Names, peer-DID matches and
 contact merges cannot resolve ambiguity or supply dispatch authority.
 
@@ -1748,7 +1752,7 @@ Sensitive strings remain in local trace; `code` is a stable non-secret value.
 }
 ```
 
-The exact carrier is a complete source witness under
+The exact carrier is an admitted complete source witness under
 [operation eligibility](channels.md#operation-eligibility). Its explicit `ack`
 names this outbound wire ID. Its channel must be the
 outbound's fixed channel or a verified role-preserving successor under
@@ -1782,7 +1786,7 @@ Derive these independent facts:
   intent and package. Validate its own evidence before aggregate eligibility;
   later erasure, termination, policy or a competing package cannot remove this
   historical fact. An incomplete unrelated row cannot erase it;
-- `ackWitnesses`: all complete source witnesses satisfying section 9.6;
+- `ackWitnesses`: all admitted complete source witnesses satisfying section 9.6;
 - `acknowledged`: at least one such witness exists; and
 - message terminations and permanent erasures under their schemas.
 
@@ -2008,6 +2012,27 @@ Pickup ACK follows [the receive procedure](distributed-delivery.md#receive-a-mes
 including its separate hard-rejection path. Subsequent consumers independently
 check [operation eligibility](channels.md#operation-eligibility).
 
+<a id="message-admitted"></a>
+
+#### Application admission record
+
+`message.admitted` is the closed, rootless local decision defined by
+[channels.md](channels.md#application-admission). Its sole required field is
+non-null `sourceEventId: EventReference<"message.in">`. Receipt commits first;
+admission commits before any application projection or input-derived effect.
+Preserve both events through export/import and metadata-preserving erasure.
+The source retains its own objects; admission introduces no extra roots.
+Missing source or verification evidence defers the admission, never completes
+it from another observation. Schema validation rejects additional payload
+fields, wrong reference types, null references and nonempty roots.
+
+Receipt order and admission are independent facts. An earlier `receiptOrdinal`
+does not prove acceptance before rotation; use the durable admission record.
+Imported historic admissions preserve the originating runtime's decisions,
+subject to their exact cryptographic evidence, not today's supersession policy.
+New local admissions always check the complete current graph. Legacy receipts
+without admissions follow the migration rules in the linked section.
+
 <a id="duplicate-transition-and-conflict-rules"></a>
 
 ### 10.3 Duplicate and conflict rules
@@ -2015,12 +2040,15 @@ check [operation eligibility](channels.md#operation-eligibility).
 Group by `(canonical sender DID, canonical recipient DID, wireMessageId)` and its deterministic
 message ID. Each complete observation authenticates independently with its own
 method-valid immutable document and derives the same exact sender/recipient pair. Equal intent hashes
-represent one logical input; differences conflict. Transport, author, ordinal,
+represent one logical input. Differences between independently admitted
+observations conflict for application use; unadmitted differences remain raw
+diagnostics and cannot overwrite admitted content. Transport, author, ordinal,
 authorized key and exact plaintext may
 differ without creating a new logical input in this same channel. Incomplete
 evidence for a consistent sibling neither supplies another execution nor
-withdraws an existing complete witness. Contradictory authenticated evidence
-remains visible and suppresses new affected work.
+withdraws an existing complete witness. Contradictory admitted evidence remains visible and suppresses new affected
+application work. Cryptographic continuity conflicts are evaluated independently
+of application admission.
 
 Another channel always has another message/execution identity. Verified links,
 same bodies and display merges never alias those messages. Local producers
@@ -2042,7 +2070,7 @@ In phase 1 it acknowledges one account-scoped delivery and follows durable
 
 An ultimate ACK is an end-to-end application message. It is recorded as
 `message.in`; each wire ID in its validated `ack` array selects an exact local
-outbound. The complete source witness must be in that outbound's channel or a verified
+outbound. The admitted complete source witness must be in that outbound's channel or a verified
 role-preserving successor channel under [section 9.7](#outbound-message-and-delivery-fold).
 A conflict-free match may produce an idempotent `delivery.acknowledged`.
 A wire ID alone or shared contact grants no ACK authority. A threaded
@@ -2064,7 +2092,7 @@ The consumer defines the candidate set and its required comparisons and
 validation. `ackMessageId` in [section 9.6](#delivery-acknowledged) restricts
 candidates to that observation message ID's group. Any complete matching
 duplicate can witness that claim. In contrast, `sourceEventId` in a
-`did.rotationSelected`, `message.out` or `invitation.consumed`
+`did.rotationSelected`, `message.out`, `message.admitted` or `invitation.consumed`
 names one exact observation and cannot replace it with a duplicate. That source
 must supply its own complete sender authentication and immutable claims.
 If that source carries a JWT, it must independently verify under
@@ -2082,6 +2110,13 @@ Subject to those checks, an existential claim requires at least one complete
 witness. Aggregates use all qualifying witnesses; [section 9.7](#outbound-message-and-delivery-fold)
 therefore computes ACK receipt time across duplicates and distinct carriers.
 
+For application consumers, a qualifying witness additionally needs an effective
+`message.admitted` naming that exact source. This includes ACK timing/targets,
+Report Problem correlation, invitation consumption, address confirmation and
+input-derived intents. Cryptographic carrier verification and continuity/conflict
+inspection do not require admission and cannot supply it. Existing operation
+records remain historical facts, but cannot substitute for missing admission.
+
 <a id="147-inbound-message-and-execution-fold"></a>
 <a id="inbound-message-and-execution-fold"></a>
 
@@ -2098,15 +2133,18 @@ channel evidence. A protocol type string alone does not establish that role
 for an observation received on an ordinary communication channel.
 
 Each consumer derives pending/refused/eligible status from its exact evidence
-and operation rules. At least one complete source witness and no conflicting
-authenticated intent is required.
+and operation rules. At least one admitted complete source witness and no
+conflicting authenticated intent is required for application use. Raw receipt
+and cryptographic proof inspection remain independent of admission. Raw payload
+discrepancies are diagnostic; only independently admitted claims establish an
+application intent conflict.
 A stored exact source reference cannot borrow another row's fields. New work
 also checks current denial, supersession and policy. Read-only ACK/error
 observations follow [operation eligibility](channels.md#operation-eligibility).
 Keep current eligibility separate from historical intents and completed facts.
 
 Intent conflict requires independently complete authentication, exact DID-pair
-agreement and carried-proof evidence for the disagreeing observations.
+agreement, carried-proof evidence and admission for the disagreeing observations.
 Different keys authorized by the same immutable peer document can therefore
 still produce an intent conflict in one logical input. Receipt alone, an
 unauthorized key or
@@ -2114,7 +2152,7 @@ a still-missing reference cannot establish that conflict or invalidate an
 already complete source witness. Retain
 those rows with their own pending/refused diagnostics.
 
-Control input, Empty, ping-response and Report Problem can provide complete
+Admitted control input, Empty, ping-response and Report Problem can provide complete
 ACK witnesses, but never trigger recursive privacy replies.
 Erased input creates no new content-derived work. Stable execution tuples
 survive ordinary graph extension and display changes. Later links never merge
@@ -2286,7 +2324,7 @@ list when no new objects are needed; `Vault.events` is read-only.
    Discard only unpublished staging and reconstruct held roots before GC.
 3. Recover the vault-wide receipt ordinal high-water mark and integrity conflicts.
 4. Rebuild channel receipts, verification statuses, derived links/joins, denials,
-   contact channel selections, invitation consumers and source/intent/result projections from saved evidence.
+   contact channel selections, application admissions, invitation consumers and source/intent/result projections from saved evidence.
 5. Enumerate incomplete references/content and pending/unconfirmed outbounds for
    local recovery and manual action. Reuse their exact intent, channel, proof,
    package and submission records. Never infer "not sent" from missing history.
@@ -2295,7 +2333,10 @@ list when no new objects are needed; `Vault.events` is read-only.
    This work may recover retained issuer material and recompute a previously
    pending proof, but appends no event for verification and grants no protocol
    dispatch or business effect.
-   Automatically complete missing invitation consumption from retained,
+   Reconcile missing admissions only after the full graph and current policy
+   are known; persist acceptance now for eligible sources, never infer a past
+   acceptance. No admission is created for an unadmitted superseded peer.
+   Automatically complete missing invitation consumption from admitted, retained,
    non-erased sources under [channels.md](channels.md#invitation-consumed),
    rechecking current policy and lifecycle after rebuilding erasure and denials.
 7. Start recipient reconciliation and pickup. Enable
@@ -2425,8 +2466,9 @@ Reuse an existing complete decision after interruption; missing references defer
 Recovery does not dispatch a notification. Manual completion reuses an existing
 intent under ordinary dispatch restrictions. It creates the one missing
 notification under the same decision only while its source, when present,
-remains eligible. A superseded source peer prevents creation, but does not by
-itself prohibit manual dispatch of an already committed intent. Completion
+remains eligible. A superseded source peer prevents creation; a replaced
+sender or peer recipient also prohibits preparation and manual dispatch of
+an already committed intent. Completion
 never substitutes another source or successor.
 Live automatic privacy policy follows
 [relationships.md](relationships.md#early-private-address-policy-and-notifications).
@@ -2452,6 +2494,12 @@ Merge is event-store union by `eventId`. It never:
 After merge, every fold reflects the complete union. A cached projection must
 be updated or invalidated in the acceptance transaction and rebuilt before use
 if invalid; an incremental result must equal the pure fold of that union.
+
+Application admissions remain distinct from raw observations under
+[admission and merge](channels.md#application-admission). A complete imported
+admission can restore accepted historical state; merely importing an earlier
+receipt cannot manufacture it. A newer rotation blocks new old-peer admission
+and dispatch without deleting earlier admitted history or submitted outcomes.
 
 <a id="172-object-merge"></a>
 
@@ -2498,6 +2546,13 @@ terminal wrong-recipient gate and its bounded visible diagnostic under
 [relationships.md](relationships.md#hard-pre-vault-gate). Ordinary recipient
 reconciliation removes registrations outside the restored desired set and
 reports unknown registered recipients under [section 5.7](#route-did-and-key-fold).
+
+A snapshot can omit a known peer rotation and its admission history. In that
+case restore cannot reconstruct the missing restriction or the exact past
+acceptance boundary from the seed, ordinals or timestamps. Import newer
+evidence when available; never claim rollback-safe rejection from an old
+snapshot alone. Existing old-peer admissions preserve historical state, not
+permission to send to a peer whose replacement is now known.
 
 A snapshot can predate a peer's successor long form even though the peer has
 already received confirmation and now sends its short form. Such a delivery
@@ -2686,7 +2741,7 @@ derivation requires a new vault version.
 
 - <a id="ve-31"></a> **VE-31.** The first message uses its ordinary application protocol with no custom
     rendezvous wrapper or wire contact ID.
-- <a id="ve-32"></a> **VE-32.** message.in records exact channel/authentication evidence and no separate inner-signature evidence. An inner signature does not replace authenticated encryption for channel authority. Automatic intents directly reference their source; application views derive from retained messages in their fixed channels. Carried-proof eligibility derives from the source JWT, immutable issuer material and endpoints independently of invitation use.
+- <a id="ve-32"></a> **VE-32.** message.in records exact channel/authentication evidence and no separate inner-signature evidence. An inner signature does not replace authenticated encryption for channel authority. Automatic intents directly reference their source; application views derive from retained messages in their fixed channels. Carried-proof eligibility derives from the source JWT, immutable issuer material and endpoints independently of invitation use. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="ve-33"></a> **VE-33.** Sending to a peer and receiving from it use the same local/peer pair within a vault. The other vault observes the reversed local/peer roles; message identity preserves sender/recipient direction.
 
@@ -2697,7 +2752,7 @@ derivation requires a new vault version.
 
 - <a id="ve-36"></a> **VE-36.** Receipt survives crash before consumption/display work. Recovery rebuilds saved evidence and automatically completes missing eligible invitation consumption without redelivery, user action or automatic outgoing effects.
 
-- <a id="ve-37"></a> **VE-37.** invitation.consumed contains exactly disclosureEventId and sourceEventId, with empty roots. Both references are non-null and already committed; the exact proof-free source supplies the consumer and matches the disclosed local DID and oobId.
+- <a id="ve-37"></a> **VE-37.** invitation.consumed contains exactly disclosureEventId and sourceEventId, with empty roots. Both references are non-null and already committed; the exact proof-free source supplies the consumer and matches the disclosed local DID and oobId. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 <a id="address-changes-and-default-responses-ve-38-ve-49"></a>
 
@@ -2760,7 +2815,7 @@ derivation requires a new vault version.
     and append within a commit.
 - <a id="ve-59"></a> **VE-59.** Committed receipt/content survives immediate restart before pickup ACK even with no invitation consumption or contact.
 
-- <a id="ve-60"></a> **VE-60.** ACK lookup validates the exact outbound fixed channel and a role-preserving path from its peer to a carrier with a complete source witness; shared contact/wire ID alone is insufficient.
+- <a id="ve-60"></a> **VE-60.** ACK lookup validates the exact outbound fixed channel and a role-preserving path from its peer to a carrier with a complete source witness; shared contact/wire ID alone is insufficient. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="ve-61"></a> **VE-61.** Every committed inbound carries a durable phase-1 receipt ordinal. ACK arrays
     use `firstReceiptKey`; clock rollback does not reverse receipt order in a
@@ -2800,7 +2855,7 @@ derivation requires a new vault version.
 
 ### Invitation, duplicate and recovery regressions (VE-73–VE-89)
 
-- <a id="ve-73"></a> **VE-73.** Only a complete invitation.consumed for a matching proof-free source consumes a local one-use OOB disclosure. Receipt alone consumes nothing; crash/erasure preserve the committed consumer.
+- <a id="ve-73"></a> **VE-73.** Only a complete invitation.consumed for a matching proof-free source consumes a local one-use OOB disclosure. Receipt alone consumes nothing; crash/erasure preserve the committed consumer. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="ve-74"></a> **VE-74.** ACK membership uses fixed outbound channel/direction and exact package/path evidence; wire-ID equality alone cannot acknowledge it.
 
@@ -2812,7 +2867,7 @@ derivation requires a new vault version.
     a tombstoned contact. A conflicting duplicate supplies no new executable
     work; its prior history remains.
 
-- <a id="ve-78"></a> **VE-78.** An authenticated, correlated no-response error produces no reply; its explicit ACK may independently record receipt. Later rotation or blocking does not erase that observation or ACK evidence.
+- <a id="ve-78"></a> **VE-78.** An authenticated, correlated no-response error produces no reply; its explicit ACK may independently record receipt. Later rotation or blocking does not erase that observation or ACK evidence. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="ve-79"></a> **VE-79.** Crash recovery rebuilds local receipt/policy/proof state without redelivery or automatic protocol effects. A saved response cannot become a different-channel notification.
 
@@ -2827,7 +2882,7 @@ derivation requires a new vault version.
     incompatible consumers leave it unavailable; event order chooses no winner.
 - <a id="ve-84"></a> **VE-84.** contact.merged and contact.channelsSet change display only; operation evidence, executions, ACK authorization, denials, invitation consumption and erasure facts remain unchanged.
 
-- <a id="ve-85"></a> **VE-85.** Matching pthid alone, foreign recipients and proof-bearing continuation sources consume no invitation. A qualifying invitation.consumed names its exact one-use OOB disclosure and source; many-use and non-OOB disclosures cannot be consumed.
+- <a id="ve-85"></a> **VE-85.** Matching pthid alone, foreign recipients and proof-bearing continuation sources consume no invitation. A qualifying invitation.consumed names its exact one-use OOB disclosure and source; many-use and non-OOB disclosures cannot be consumed. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="ve-86"></a> **VE-86.** Prepared state records a fixed package, not a transport invocation. Reopen/import of queued or prepared work grants no send; calls and retry diagnostics remain local. Manual retry uses exact bytes, and missing submission cannot establish prior nondelivery.
 
@@ -2857,9 +2912,9 @@ derivation requires a new vault version.
     group's derived ID, whose effect type or intent violates the producing
     protocol's operation rules, whose key disagrees with its tuple, or
     whose message ID disagrees with its key is invalid and cannot execute.
-- <a id="ve-95"></a> **VE-95.** Every inbound-derived message.out retains executionId, effectType, effectKey and exact sourceEventId. Reopen validates the complete source witness and recomputes the key; missing tuple or required evidence cannot authorize work. Locally initiated sends have these four fields null and ack == [].
+- <a id="ve-95"></a> **VE-95.** Every inbound-derived message.out retains executionId, effectType, effectKey and exact sourceEventId. Reopen validates the complete source witness and recomputes the key; missing tuple or required evidence cannot authorize work. Locally initiated sends have these four fields null and ack == []. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 - <a id="ve-96"></a> **VE-96.** Pure ACK, Ping reply and rotation notification have distinct fixed effect types and may coexist for one input in every import order, including the two outputs with the same Empty message type. Conflicting intents for one `(executionId, effectType)` suppress that operation without suppressing the others; a source intent conflict suppresses all source-derived operations.
-- <a id="ve-97"></a> **VE-97.** A supported no-response error is shown only with a complete source witness, exact channel/path and protocol thread correlation. It does not change submission or authorize replay; erasing its body removes that diagnostic.
+- <a id="ve-97"></a> **VE-97.** A supported no-response error is shown only with a complete source witness, exact channel/path and protocol thread correlation. It does not change submission or authorize replay; erasing its body removes that diagnostic. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="ve-98"></a> **VE-98.** Publicly disclosed numalgo-4 DIDs authenticate invitation consumers under the same long/short-form validation as private DIDs; private allocation remains optional policy.
 
@@ -2881,7 +2936,7 @@ derivation requires a new vault version.
 
 - <a id="ve-107"></a> **VE-107.** Channel selectors preserve local/peer roles and compare canonical DID strings; key encoding and display IDs cannot change the pair.
 
-- <a id="ve-109"></a> **VE-109.** Control type alone creates no invitation consumer, contact or privacy link. A control input with a complete source witness may supply permitted ACK evidence without recursive notifications.
+- <a id="ve-109"></a> **VE-109.** Control type alone creates no invitation consumer, contact or privacy link. A control input with a complete source witness may supply permitted ACK evidence without recursive notifications. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="ve-110"></a> **VE-110.** Retained old recipient keys can receive. No usable authorized sender means no automatic response intent; later recovery exposes manual work instead of sending or retargeting it.
 
@@ -2897,7 +2952,7 @@ derivation requires a new vault version.
 
 - <a id="ve-114"></a> **VE-114.** New successor preparation uses frozen proof until exact confirmation. Committed packages remain unchanged; overlapping recipient routes stay until no retained channel/disclosure needs them.
 
-- <a id="ve-115"></a> **VE-115.** Local rotation changes new intent selection only. Queued, prepared and submitted messages keep their oriented channel; a new-channel send needs a new ID.
+- <a id="ve-115"></a> **VE-115.** Local rotation never retargets queued, prepared or submitted messages. A replaced local sender cannot prepare or dispatch in that rotation context; unrelated contexts remain usable. A successor-channel send needs a new ID.
 
 - <a id="ve-116"></a> **VE-116.** Equivalent DID replacements are idempotent across validated long/short spelling; same-side branches, dependency cycles and contradictory identity evidence conflict. Invitation state cannot defer complete links, automatic output or preparation.
 
@@ -2923,7 +2978,7 @@ derivation requires a new vault version.
 
 - <a id="ve-125"></a> **VE-125.** The common DID schema has no role member. Every address pair uses the same channel receipt and operation-evidence rules, and private allocation still avoids reuse.
 
-- <a id="ve-126"></a> **VE-126.** Peer supersession refuses new old-peer work through its verified local-only context. Earlier source evidence, intents and results remain; unrelated public-DID channels are unaffected.
+- <a id="ve-126"></a> **VE-126.** Peer supersession refuses new old-peer admission and source-derived work throughout the verified local-only context, and prevents sending or retrying to that peer. Raw receipts and previously admitted history, decisions and submissions remain; unrelated public-DID channels are unaffected.
 
 - <a id="ve-127"></a> **VE-127.** Resolution and receipt commit in dependent steps before consumption or other source-derived work. Evidence and invitation decisions serialize under the lock; crash prefixes never authorize automatic recovery dispatch.
 
@@ -2944,7 +2999,7 @@ derivation requires a new vault version.
 
 - <a id="ve-132"></a> **VE-132.** Contacts aggregate explicitly selected channels and may display verified related history. Shared DIDs/keys do not transfer invitation consumption or permission to share information; presentation never changes source channel labels.
 
-- <a id="ve-133"></a> **VE-133.** A displayed peer name requires a supported protocol's recognized name field, readable non-erased content, a complete authenticated source witness and applicable display policy. It is a peer claim derived from the source channel, creates no contact and changes no petname; this schema records no independent name-claim event.
+- <a id="ve-133"></a> **VE-133.** A displayed peer name requires a supported protocol's recognized name field, readable non-erased content, a complete authenticated source witness and applicable display policy. It is a peer claim derived from the source channel, creates no contact and changes no petname; this schema records no independent name-claim event. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="ve-134"></a> **VE-134.** A view that a profile was submitted uses a protocol-recognized outbound and valid package/submission evidence in its fixed channel. Intent, preparation or ACK alone is insufficient; the view proves no peer receipt, and later rotation cannot mark another channel as shared.
 
@@ -2966,21 +3021,21 @@ derivation requires a new vault version.
      cannot be replaced merely because another event has the same key or
      document. Matching never clears a group conflict or bypasses a required
      missing-evidence deferral; enumeration and import order select no winner.
-- <a id="ve-139"></a> **VE-139.** ACK timing considers every carrier with a complete source witness authorized for the exact outbound, including successor-channel carriers; unrelated/invalid rows donate no timestamps.
+- <a id="ve-139"></a> **VE-139.** ACK timing considers every carrier with a complete source witness authorized for the exact outbound, including successor-channel carriers; unrelated/invalid rows donate no timestamps. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 ### Group waits and transition validity (VE-140–VE-142)
 
 - <a id="ve-140"></a> **VE-140.** A carrier with complete authentication and its own verified JWT can derive a peer link while an equivalent sibling lacks authentication evidence. That sibling cannot borrow authentication or a proof result. An invitation consumption with a missing exact disclosure/source still waits; sharing immutable issuer material does not assemble incomplete observations.
 
-- <a id="ve-141"></a> **VE-141.** A complete predecessor observation remains a valid confirmation when another observation later appears at a successor channel. Those messages have distinct identities; missing successor evidence cannot erase the predecessor witness.
+- <a id="ve-141"></a> **VE-141.** A complete predecessor observation remains a valid confirmation when another observation later appears at a successor channel. Those messages have distinct identities; missing successor evidence cannot erase the predecessor witness. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
-- <a id="ve-142"></a> **VE-142.** Conflicting authenticated intent within one sender/recipient/wire-ID execution suppresses new intents for every effect type without undoing submission or collecting disputed bytes. Different channels never merge into this conflict.
+- <a id="ve-142"></a> **VE-142.** Conflicting independently admitted intent within one sender/recipient/wire-ID execution suppresses new intents for every effect type without undoing submission or collecting disputed bytes. Unadmitted old-peer duplicates remain diagnostics and cannot poison admitted application history. Different channels never merge into this conflict.
 
 ### Completion witnesses and address confirmation (VE-143–VE-144)
 
 - <a id="ve-143"></a> **VE-143.** A complete valid intent/package/submission witness preserves completion despite unrelated incomplete or competing packages and later effect conflict. Invalid/missing own intent, package or authentication evidence completes nothing.
 
-- <a id="ve-144"></a> **VE-144.** Proof-free new successor preparation requires complete exact-address confirmation in the valid channel context. Confirmation needs no handler decision; body erasure and waiting siblings erase no complete witness.
+- <a id="ve-144"></a> **VE-144.** Proof-free new successor preparation requires complete exact-address confirmation in the valid channel context. Confirmation needs no handler decision; body erasure and waiting siblings erase no complete witness. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 ### Direct contact channel selections (VE-145–VE-149)
 
@@ -2996,9 +3051,9 @@ derivation requires a new vault version.
 
 ### Concrete operation evidence (VE-150–VE-153)
 
-- <a id="ve-150"></a> **VE-150.** An automatic intent's missing exact source or required endpoint/proof evidence defers that intent even if another duplicate could independently authorize equivalent work. Importing the missing evidence completes its witness; lookup never replaces saved references. Invitation state alone does not defer it.
+- <a id="ve-150"></a> **VE-150.** An automatic intent's missing exact source or required endpoint/proof evidence defers that intent even if another duplicate could independently authorize equivalent work. Importing the missing evidence completes its witness; lookup never replaces saved references. Invitation state alone does not defer it. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
-- <a id="ve-151"></a> **VE-151.** A complete ACK carrier acknowledges its exact outbound through a valid channel path independently of handler execution. Later blocking or peer supersession preserves that evidence while current policy can refuse new outgoing work.
+- <a id="ve-151"></a> **VE-151.** An admitted complete ACK carrier acknowledges its exact outbound through a valid channel path independently of handler execution. Later blocking or peer supersession preserves prior admitted evidence; a newly received or unadmitted superseded carrier changes no ACK state or timing. Current endpoint policy separately governs outgoing work.
 
 - <a id="ve-152"></a> **VE-152.** A dedicated notification requires rotationEventId and uses that decision's successor and peerDid. An inbound-triggered notification uses its exact source in the fromDidId/peerDid pair; a source-free manual notification has null effect/source fields and a UUIDv7 message ID. Different notification IDs for one decision conflict without affecting an independent ACK tuple.
 

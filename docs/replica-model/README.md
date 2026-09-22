@@ -1,6 +1,9 @@
 # Estoc version 3 specification suite
 
-Status: **implemented**. Phase 1 has one active writable full vault runtime, seven
+Status: **implemented baseline with pending specification changes**. Durable application
+admission and strict rotation restrictions are not yet implemented; see
+[conformance status](conformance-status.md#rotation-admission-revision).
+Phase 1 has one active writable full vault runtime, seven
 specifications. SQLite is the sole persistent vault and portable interchange
 format. This guide is informative; linked specification sections define requirements.
 
@@ -20,11 +23,13 @@ whose status remains visible.
 Operations use their own evidence and policy. One-use OOB consumption is
 recorded automatically, including on recovery, and is independent of other
 operations; many-use invitations have no exclusive consumer. Contacts organize
-selected channels with local names and preferences. Applications derive display
-data from retained message history under their protocol rules.
+selected channels with local names and preferences. Applications derive ordinary display
+data only from durably admitted message history under their protocol rules.
+Authenticated receipt and application admission are separate facts; ignored
+old-peer observations remain available as explicitly labelled diagnostics.
 
-An outbound fixes its channel at intent commit; rotation selects new messages
-only. Preparation commits one fixed package. Every transport call requires that
+An outbound fixes its channel at intent commit; rotation never retargets it
+and can prohibit its preparation or dispatch, including manual retries. Preparation commits one fixed package. Every transport call requires that
 package and a live initial/manual action. Recovery exposes pending work for manual
 action. Retry preserves the package; a different package or channel requires a
 new message ID. Peer ACKs record receipt independently of submission. See
@@ -79,7 +84,7 @@ RZ owns DID resolution and address/display policy.
 | New-send head selection | [CH](channels.md#fixed-outbound-channel) | [VE contact fold](vault-events.md#contact-fold), [DD built-in replies](distributed-delivery.md#built-in-independent-operations), [RZ sending](relationships.md#ordinary-sending-and-birth-selection), [VE rotation](vault-events.md#rotate-a-local-relationship-address) |
 | Deferred-proof adapter boundary | [CH](channels.md#carried-proof-and-library-boundary) | [RZ wait/gate](relationships.md#uniform-receipt), [DD receipt](distributed-delivery.md#receive-a-message), [VE carrier](vault-events.md#message-in) |
 | Receipt verification status | [CH status](channels.md#verification-status) | [DD recovery](distributed-delivery.md#receive-recovery) |
-| Operation eligibility | [CH](channels.md#operation-eligibility) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
+| Durable application admission and operation eligibility | [CH](channels.md#application-admission) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
 | Fixed intent/package and manual dispatch | [CH](channels.md#fixed-outbound-channel) | [VE intent](vault-events.md#message-out), [package](vault-events.md#message-prepared), [DD send](distributed-delivery.md#send-an-ordinary-message) |
 | Inbound/execution IDs | [DD identity](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE execution](vault-events.md#inbound-message-and-execution-fold) |
 | Content/intent/plaintext normalization | [DD hashes](distributed-delivery.md#canonical-projections-and-hashes), [VE stored content](vault-events.md#stored-message-document) | [VE package](vault-events.md#message-prepared) |

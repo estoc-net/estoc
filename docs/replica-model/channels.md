@@ -1,6 +1,6 @@
 # Channels, continuity and operation evidence
 
-Status: **phase 1, implemented**. This document owns channel identity, invitation
+Status: **phase 1; application-admission and rotation restrictions specified, implementation pending**. This document owns channel identity, invitation
 consumption, directed continuity evidence and operation eligibility. Storage
 envelopes and durability follow [event-store.md](event-store.md). Sending and
 effect ordering follow [distributed-delivery.md](distributed-delivery.md).
@@ -149,9 +149,9 @@ The channel graph and local policy below are this application's design.
 ### 3.2 Verification status and display
 
 Receipt and continuity verification are separate visible facts. A saved
-authenticated message MAY be displayed before continuity completes, with an
-explicit status beside the message. Do not present a pending sender as the
-verified continuation of an earlier peer or silently group it on that basis.
+authenticated message MAY be inspected before application admission, with an
+explicit diagnostic status beside it, outside the ordinary accepted conversation.
+Do not present a pending sender as the verified continuation of an earlier peer or silently group it on that basis.
 The UI MUST distinguish these derived states:
 
 | State | Meaning |
@@ -171,6 +171,8 @@ does not make continuity pending. If an imported receipt's
 own sender evidence is missing, show that pending authentication separately;
 do not claim its sender has already been verified. Pending/invalid/conflicted
 continuity grants no peer ACK, handler effect or inherited channel permission.
+Application admission is a separate fact under
+[section 6.1](#application-admission); `verified` alone does not mean accepted.
 Later evidence may update the display and graph without another pickup, receipt
 ordinal or message ID. That change alone grants no new automatic dispatch action.
 
@@ -212,7 +214,7 @@ continuity does not transfer consumption to a successor peer.
 The active runtime MUST process consumption automatically under the operation
 lock, checking invitation policy, local DID/route lifecycle, denial, supersession,
 conflicts and availability.
-For an unconsumed disclosure, process retained non-erased proof-free receipts
+For an unconsumed disclosure, process admitted retained non-erased proof-free receipts
 matching its local recipient and `oobId` in ascending
 `receiptOrderKey` order under [vault events](vault-events.md#message-in).
 Select the first eligible receipt, skipping definitively invalid or currently
@@ -247,7 +249,8 @@ consumer. Consumption never disables the disclosed DID.
 ## 5. Derived continuity
 
 The graph folds retained proof evidence and local rotation decisions.
-Proof verification is local and appends no events.
+Proof verification is local and appends no verification events.
+Application admission is a separate durable decision under section 6.1.
 
 <a id="peer-proof-evidence"></a>
 
@@ -346,7 +349,8 @@ original notification. Missing dependencies defer reuse instead of authorizing
 allocation. A missing original notification remains manual work only while its
 source, when present, remains eligible under section 6. After that source's
 peer is superseded in the decision's context, no notification intent is created.
-An already committed intent may still be manually dispatched under section 8;
+An already committed intent remains historical evidence; a replaced peer
+recipient prohibits its dispatch under section 8;
 newly prepared successor-channel messages carry the frozen proof until exact
 successor confirmation. A manual decision without a source still follows the
 ordinary send restrictions. Evidence verified only after decisions were committed
@@ -423,15 +427,20 @@ This prevents old-peer input from continuing to trigger traffic to a replaced
 address. It includes creating a requested ACK, Ping reply or rotation notification,
 even by manual completion and even when the input was sent before supersession.
 The message may still be durably received without a response; no ACK does not
-prove nondelivery. Explicit user sends and manual dispatch of already committed
-intents remain subject to section 8.
+prove nondelivery. Unadmitted old-peer observations have the
+`ignored-superseded` disposition under section 6.1. Previously admitted history
+remains, but cannot create new old-peer responses. Explicit user sends and
+manual dispatch to the replaced peer are prohibited under section 8.
 
-A complete source witness can confirm knowledge of an exact local address
+An admitted complete source witness can confirm knowledge of an exact local address
 when its recipient is that address and its authenticated peer is the selected
 peer or a verified role-preserving successor in the same local-only/paired-link
 context. An observation addressed to a predecessor confirms no successor.
 No handler execution or reply prerequisite is imposed on
-that witness. Confirmation permits future newly prepared messages to omit the
+that witness, but its application admission must already be committed. A
+local decision or its descendants cannot supply its own predecessor admission
+or confirmation; missing independent evidence leaves the decision pending.
+Confirmation permits future newly prepared messages to omit the
 frozen proof; it does not edit a committed package or acknowledge
 any particular wire ID.
 
@@ -459,7 +468,7 @@ sender authentication, proof result or immutable claims.
 Missing exact references defer the affected consumer;
 incompatible authentication, intent or continuity evidence conflicts.
 
-Before creating a new automatic intent, the producer checks its complete
+Before creating a new automatic intent, the producer checks its admitted complete
 source witness under the operation lock, current denial, supersession, local
 lifecycle, operation-specific policy and any existing equivalent intent.
 Local rotation follows section 5's endpoint, proof and confirmation rules,
@@ -474,22 +483,158 @@ Import/rebuild validates each saved action's evidence references and protocol
 rules, not the producer's past wall-clock policy. Ordinary later rotation
 or blocking does not erase an earlier intent, local result or recorded
 submission. Current denial, expiry and conflicts still govern new work and
-dispatch. Peer supersession governs new work derived from old-peer input; it
-does not by itself block an explicit user send to an eligible pre-rotation
-address or manual dispatch of a committed intent. Retaining history supplies
-no dispatch action.
+dispatch. Peer supersession prevents new admission and source-derived work
+from the old peer, and prevents preparation or dispatch to that old peer even
+for an existing intent. Retaining history supplies no dispatch action.
 Incomplete consistent siblings do not erase a complete witness. Different
 incomplete rows cannot be assembled into one witness.
 
 Received ACKs and Report Problem correlation are observations, not commands.
-They require a complete source witness and the exact target/path checks,
+They require an admitted complete source witness and the exact target/path checks,
 including protocol thread correlation for Report Problem, but no handler
-decision. Current blocking or supersession does not
-erase evidence that the peer acknowledged an old message; invalid/conflicting
-evidence still prevents attribution.
+decision. Admission is required even for these read-only projections. Current
+blocking or supersession does not erase ACK evidence from a previously admitted
+source; a newly received or still-unadmitted old-peer ACK supplies none.
+Invalid/conflicting evidence still prevents attribution.
 Body erasure preserves committed event facts but prevents new content-derived
 work and invalidates display data that requires the erased bytes under
 [application views](vault-events.md#application-message-views).
+
+<a id="application-admission"></a>
+
+### 6.1 Durable application admission
+
+`message.in` records an authenticated observation, not permission to apply it.
+Keep otherwise receivable observations under section 3, including old-peer
+messages. Cryptographic, syntax, recipient and resource gates still reject
+ineligible ingress; this is not a requirement to retain arbitrary traffic.
+Retention and explicit content erasure continue to follow the ordinary rules.
+Pickup ACK only removes a transport delivery and grants no application authority.
+
+Before a receipt can contribute accepted chat, profile values, an incoming ACK,
+Report Problem correlation, invitation consumption, address confirmation or an
+input-derived operation, commit `message.admitted` for that exact observation.
+This is a local acceptance decision, not a cached signature-verification result,
+a handler result, or permission to send. Its closed payload and roots are:
+
+```json
+{
+  "type": "message.admitted",
+  "roots": [],
+  "data": { "sourceEventId": "019b0000-0000-7000-8000-000000000001" }
+}
+```
+
+`sourceEventId` is a non-null `EventReference<"message.in">`. The source and its
+required evidence MUST already be committed. Admission retains no extra body
+roots and does not undo erasure. Multiple admissions of the same exact source
+are equivalent decisions, not multiple executions. Admission of one duplicate
+cannot lend authority to another duplicate's headers or authentication.
+
+The single active executor serializes admission with receipt, evidence import,
+rotation decisions and policy changes under the operation lock. Before admitting,
+fold all available evidence, verify the source as a complete witness and reject
+receipt-integrity faults or a candidate contradicting already admitted logical
+intent. A conflicting candidate remains a raw diagnostic, not a second local
+acceptance. Check current channel denial, peer supersession and applicable local receive policy; retirement alone does
+not prevent draining a receivable local address. An anonymous, invalid,
+conflicted or still-incomplete source cannot acquire a new admission. Erased
+content cannot be reconstructed by admission; retained authenticated headers
+may still be admitted for operations that do not require those bytes.
+A peer proof discovered in this pass takes effect before any dependent
+admission or application effect. No wall-clock timestamp, JWT `iat`, UUID order
+or order of iteration can override a known verified replacement.
+
+Verify peer carriers and derive their peer replacements independently of
+admission, so the proof needed to decide admission does not depend on that
+same decision. Local links still require their independently admitted
+predecessor-confirmation witnesses under section 5; neither an admission nor
+a local decision can establish its own prerequisites through a reference cycle. Even an unadmitted carrier may expose a verified replacement
+or competing proof. This does not admit its application payload or authorize
+address confirmation from it. Independently valid competing rotation proofs
+remain available to detect continuity conflicts; admission cannot hide them.
+Unadmitted payloads, including old-peer duplicates, do not enter application
+intent agreement or invalidate accepted history merely by contradicting its
+content. Their raw discrepancy remains visible as a diagnostic.
+
+Validate each admission against its exact source authentication, proof and
+channel evidence independently, then compare the claims of those validated
+admissions within the logical input. Conflicting admitted claims make that
+input unusable for new application work; do not choose by event order or
+repeatedly remove/re-add admissions to resolve the conflict. Missing evidence
+leaves an admission pending; invalid evidence grants no authority.
+Rebuild does not
+re-evaluate the producer's past denial or supersession policy against today's
+graph: a later replacement must not erase previously admitted history.
+As with other local decisions, the event records a trusted vault runtime's
+choice; it is not a cryptographic proof of what another disconnected runtime
+knew. Do not synthesize past acceptance from message timestamps or receipt order.
+
+Expose receipt, proof status and application disposition separately:
+
+| Disposition | Meaning |
+| --- | --- |
+| `admitted` | At least one effective admission names this exact complete source |
+| `ignored-superseded` | No effective admission, and the authenticated peer has a verified replacement in this channel context |
+| `pending-admission` | No effective admission; missing evidence or unfinished local admission must be resolved |
+| `refused` | Authentication/proof/intent/integrity or applicable policy prevents application use; expose the reason |
+
+A saved admission with missing or conflicting evidence remains pending/refused,
+not admitted. For an otherwise complete unadmitted source, supersession takes
+precedence over pending local admission. Disposition is a derived view with its
+supporting admission/source evidence, not a mutable Boolean on `message.in`.
+Ordinary conversation, profile and delivery-state projections consume only
+admitted sources. Raw pending/ignored/refused observations may be inspected
+with their status, but MUST NOT generate ordinary message notifications or
+silently become accepted history. Historical admitted sources remain visible;
+current policy still prevents new responses to a superseded peer.
+
+A crash after receipt but before admission leaves no application acceptance.
+After rebuilding the full available graph, local recovery may admit a still
+eligible source and finish local projections. This is acceptance now, not
+backdated acceptance, and grants no live dispatch action. In particular, if
+rotation became known meanwhile, the old source stays unadmitted even if it
+was sent or received earlier. Resolve an uncertain admission commit before
+retrying or applying anything. Pure fold/replay never appends an admission.
+
+Existing histories without admissions retain their raw observations and saved
+operation/submission facts; neither a historic intent nor an old UI cache may
+stand in for an admission. Reconcile eligible sources under current policy,
+and show the rest as unclassified/pending or ignored diagnostics. Missing
+admission does not undo a recorded transport submission, but its receipt cannot
+supply accepted chat/profile/ACK state. A newer snapshot with an actual admission
+can restore that historical evidence. Migration must not invent earlier acceptance.
+
+### 6.2 Merge, restore and disconnected replicas
+
+Merge remains union by event ID. Import admissions with their exact sources and
+proof evidence; import order must not determine their meaning. Once the same
+complete union is available, all readers derive the same admitted history and
+current restrictions. A late duplicate without its own admission cannot extend
+a previously admitted message's ACK targets, receipt timing or profile content.
+A consistent admitted duplicate keeps the original logical input accepted;
+contradictory independently admitted claims still expose an application intent
+conflict. A late unadmitted old-peer duplicate cannot create that conflict.
+
+Do not use the global minimum receipt ordinal or author tie-break as a global
+rotation cutoff: disconnected histories have no shared physical receive order.
+If one independent history admitted an observation before learning a rotation,
+its valid admission remains historical evidence after merge; another history's
+local refusal cannot retroactively undo that fact or a reply already sent.
+This does not authorize processing an unadmitted old-peer source after merge.
+
+Phase 1 has one active executor. Future simultaneous replicas must define who
+coordinates admission and dispatch, including rotation knowledge, before being
+enabled. Requiring all replicas to stop as soon as any replica knows a rotation
+requires coordination or suspending application processing while freshness
+cannot be established. Offline independent processing cannot promise that rule.
+Neither mediator fan-out nor deterministic event ordering provides it.
+
+Restore from a snapshot that omits a rotation can lose knowledge of that
+restriction. A fresh author, a seed or an admission event is not an anti-rollback
+mechanism. State this limitation; recover newer history when available. Do not
+use an old address as a guaranteed repair channel or enable manual bypass of a
+known replacement. A fresh relationship may be needed when history is lost.
 
 <a id="effects-and-recovery"></a>
 
@@ -579,19 +724,20 @@ the selected contexts. A `contact.useDid` preference also matches verified local
 successors of its DID along forward paths in those contexts. It grants no path
 to an unrelated channel sharing that DID. After applying any saved preference,
 exactly one eligible head supplies the default; otherwise the user must select
-a concrete eligible channel. A replaced channel may be used only by an
-explicit choice labelled as a pre-rotation address, subject to all ordinary
-send restrictions. Replacement for default selection does not itself prohibit
-that explicit send. Peer supersession under section 5.2 instead governs new
-work derived from old-peer input. Automatic replies follow their protocol's
-selection rules
+a concrete eligible channel. A verified peer replacement prohibits using its
+old peer DID as recipient in that context, including explicit pre-rotation
+sends, preparation of queued intents, first dispatch and manual retries.
+A local rotation likewise prevents new sends, preparation or dispatch using the old local
+sender in its rotation context; unrelated contexts sharing that DID remain
+independent. Do not delete the DID or its keys globally. Automatic replies
+follow their protocol's selection rules and these current restrictions
 under [delivery](distributed-delivery.md#built-in-independent-operations).
 
 `message.out` freezes `senderDidId` and `recipientDid` before preparation or
 transport. This immutable channel avoids relying on recovery to prove that an
 earlier call did not occur.
 
-Rotation selects addresses for new messages only and MUST NOT move an existing
+Rotation changes current eligibility but MUST NOT move an existing
 intent, including an unprepared or automatic one, to another channel.
 If that channel can no longer send, retain the original outcome and require an
 explicit new send with a new wire ID to use a successor channel. Message IDs,
@@ -613,9 +759,12 @@ local state supply no dispatch authority.
 
 A manual retry of an uncompleted message preserves the exact channel, wire ID,
 package ID and envelope; check current expiry, erasure, retained keys, route,
-security restrictions and content availability again. A submitted or terminal
-message cannot retry. A deliberate new send, including a send over a new
-channel, creates a new message ID. Any local UI link to the old message is
+security restrictions, endpoint replacement and content availability again.
+Recheck under the operation lock immediately before authorizing each transport
+call. A call already in flight cannot be recalled; record its actual outcome
+without granting another call. Do not hold the lock across network I/O.
+A submitted or terminal message cannot retry. A deliberate new send, including
+a send over a new channel, creates a new message ID. Any local UI link to the old message is
 informative and cannot alias execution or imply that the first send failed.
 
 Recovery exposes pending messages for manual action. A prepared package does
@@ -626,8 +775,10 @@ An explicit manual action may create a missing protocol-response intent only
 while its source, channel authority and content remain eligible under the
 normal response rules. It preserves the source's deterministic execution/tuple.
 If an intent already exists, reuse it under the manual dispatch checks above;
-peer supersession alone does not revoke it. The first dispatch of historical
-work is manual. Completion cannot reopen a submitted/erased response or use
+a replaced sender or peer recipient prohibits its preparation and dispatch.
+The intent remains a saved fact, not an exception to current restrictions.
+The first dispatch of historical work is manual. Completion cannot reopen a
+submitted/erased response or use
 another tuple to bypass an existing selection or conflict.
 
 Sender policy alone cannot constrain an external peer. Cross-channel reuse of
@@ -642,10 +793,10 @@ must define an authenticated application operation ID and its own rules.
 - <a id="ch-1"></a> **CH-1.** A channel is an ordered local/peer canonical DID pair, independent of keys, routes and contacts. Local sending and peer receipt share that pair; reversing local/peer roles selects a different vault-local view.
 - <a id="ch-2"></a> **CH-2.** First authenticated receipt commits and pickup-ACKs without invitation consumption, continuity history or a contact.
 - <a id="ch-3"></a> **CH-3.** A valid retained proof with complete authenticated source and endpoints derives its link without an earlier predecessor-channel message. Invitation state cannot make it pending-history; recovering required evidence adds no receipt or stored graph event.
-- <a id="ch-4"></a> **CH-4.** A recovered peer supersession refuses new old-peer input through its local-only context while preserving channel receipt and previous decisions.
+- <a id="ch-4"></a> **CH-4.** A recovered peer supersession refuses new old-peer input through its local-only context while preserving channel receipt and previous decisions. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 - <a id="ch-5"></a> **CH-5.** Complete independent local/peer links at one exact predecessor pair justify their diagonal join without synthetic observations; unrelated shared DIDs justify nothing.
 - <a id="ch-6"></a> **CH-6.** Observations with the same sender/recipient/wire-ID triple, equal intent and authorized keys share one execution. Another channel has another execution.
-- <a id="ch-7"></a> **CH-7.** Contradictory authenticated intent with complete source witnesses suppresses new effects; previously submitted IDs and outcomes remain unchanged.
+- <a id="ch-7"></a> **CH-7.** Contradictory independently admitted intent with complete source witnesses suppresses new effects; previously submitted IDs and outcomes remain unchanged.
 - <a id="ch-8"></a> **CH-8.** Unknown policy, missing verification evidence and invalid continuity leave receipts intact and grant no effects.
 - <a id="ch-9"></a> **CH-9.** A retained channel denial applies independently of contact membership; deleting a contact alone grants or revokes no cryptographic authority.
 - <a id="ch-10"></a> **CH-10.** Crash after receipt, invitation consumption or a concrete intent/result preserves each committed fact; reopen recomputes proof verification and pending-work views without appending events for verification or dispatching old work.
@@ -657,7 +808,7 @@ must define an authenticated application operation ID and its own rules.
 - <a id="ch-16"></a> **CH-16.** Retained retired recipient keys can drain eligible routes; new sending, disclosure and invitation consumption obey retirement.
 - <a id="ch-17"></a> **CH-17.** An incomplete consistent sibling cannot create another same-channel execution or erase a complete witness. Cross-channel observations never merge executions.
 - <a id="ch-18"></a> **CH-18.** Recovery uses retained authentication evidence without fresh resolution of a saved receipt; new network deliveries authenticate afresh.
-- <a id="ch-19"></a> **CH-19.** Intent freezes its oriented channel; local or peer rotation changes only new intents, including when the old intent has no package yet.
+- <a id="ch-19"></a> **CH-19.** Intent freezes its oriented channel; rotation never retargets a queued, prepared or submitted message. A replaced sender or peer recipient prohibits new preparation/dispatch, including manual retry; sending on a successor needs a new ID.
 - <a id="ch-20"></a> **CH-20.** Commit the fixed package before transport. Crashes immediately before the call and after transport acceptance both reopen without automatic submission or proof of whether the call occurred.
 - <a id="ch-21"></a> **CH-21.** Initial send and manual retry use the committed package exactly, even if it has never been sent. Missing bytes defer; changing package or channel requires a new message ID.
 - <a id="ch-22"></a> **CH-22.** Import, restore, replica change, duplicate pickup and missing ACK never dispatch an old intent or regenerate an automatic response for sending.
@@ -683,12 +834,20 @@ must define an authenticated application operation ID and its own rules.
 - <a id="ch-47"></a> **CH-47.** One invitation fixes its local recipient. Consumption by the same canonical peer is idempotent across validated long/short spelling; another peer conflicts, while another disclosure with a distinct oobId at a different local DID has independent consumption. Verified peer rotation neither transfers nor reopens the recorded consumption.
 
 - <a id="ch-48"></a> **CH-48.** Missing exact local-DID or peer-resolution evidence leaves a source-derived pair pending. Another event, contact selector or shared key cannot substitute for that evidence; restoring it derives the same pair without changing saved message identities.
-- <a id="ch-49"></a> **CH-49.** Without consuming an invitation, a complete live source may produce a policy-permitted automatic intent, its valid fixed-channel package and a local rotation with independent exact-address confirmation. Import validates their own source, endpoints and proof and never dispatches them.
+- <a id="ch-49"></a> **CH-49.** Without consuming an invitation, a complete live source may produce a policy-permitted automatic intent, its valid fixed-channel package and a local rotation with independent exact-address confirmation. Import validates their own source, endpoints and proof and never dispatches them. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 - <a id="ch-50"></a> **CH-50.** An invitation consumption with a missing exact disclosure or source remains pending even if another receipt could independently justify the same consumer. That wait cannot block complete links, joins, rotation notifications or another operation with complete evidence.
-- <a id="ch-51"></a> **CH-51.** Without consuming an invitation, an application may derive channel-scoped display data from a complete source and readable non-erased content under its protocol and display policy. Missing authentication or required proof prevents a verified claim; derived data creates no contact, changes no petname and grants no dispatch action.
-- <a id="ch-52"></a> **CH-52.** Without consuming an invitation, a complete authenticated ACK or Report Problem carrier can be attributed to its exact outbound through a valid same-channel or role-preserving successor path and the required ID/thread match. An unrelated peer knowing the ID cannot supply attribution. These observations neither establish submission nor authorize retry.
+- <a id="ch-51"></a> **CH-51.** Without consuming an invitation, an application may derive channel-scoped display data from a complete source and readable non-erased content under its protocol and display policy. Missing authentication or required proof prevents a verified claim; derived data creates no contact, changes no petname and grants no dispatch action. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
+- <a id="ch-52"></a> **CH-52.** Without consuming an invitation, a complete authenticated ACK or Report Problem carrier can be attributed to its exact outbound through a valid same-channel or role-preserving successor path and the required ID/thread match. An unrelated peer knowing the ID cannot supply attribution. These observations neither establish submission nor authorize retry. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 - <a id="ch-53"></a> **CH-53.** Many-use and non-OOB disclosures cannot be consumed. Republishing an invitation reuses its disclosure; distinct imported OOB disclosures with the same non-null oobId conflict and cannot supply another use or reopen prior consumption.
-- <a id="ch-54"></a> **CH-54.** Consumption requires already committed disclosure and source references, not same-batch prerequisites. After a crash before consumption commit, recovery automatically records the first currently eligible retained source; after commit, recovery preserves that consumer even if an earlier receipt is imported. Erased or currently refused input starts no consumption. Neither crash prefix dispatches a reply or disables the disclosed DID.
-- <a id="ch-55"></a> **CH-55.** A selected C(A0,B0) with verified local and peer replacements defaults to the unique joined head C(A1,B1), including when contact.useDid still names A0. An unusable head, competing same-end successors or a cycle never defaults back. An explicit pre-rotation user send to C(A,B0) after verified replacement by B1 is permitted subject to ordinary denial, conflict, key/route and other send restrictions. New automatic work from B0 input is refused, including creation of a requested ACK or Ping reply for a delayed message, whether automatic or manually completed. Receipt still commits; an already committed old-peer intent keeps its original channel and may be manually dispatched when otherwise eligible. Import order changes none of these saved endpoints.
+- <a id="ch-54"></a> **CH-54.** Consumption requires already committed disclosure and source references, not same-batch prerequisites. After a crash before consumption commit, recovery automatically records the first currently eligible retained source; after commit, recovery preserves that consumer even if an earlier receipt is imported. Erased or currently refused input starts no consumption. Neither crash prefix dispatches a reply or disables the disclosed DID. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
+- <a id="ch-55"></a> **CH-55.** A selected C(A0,B0) with verified local and peer replacements defaults to the unique joined head C(A1,B1), including when contact.useDid still names A0. No ineligible head, conflict or cycle falls back to a predecessor. Explicit pre-rotation sends, queued preparation and manual retries on replaced endpoints are refused. Old-peer receipt still commits and pickup-ACKs, but no new admission, ACK attribution, profile update or reply is allowed. Previously admitted history and recorded submissions remain, and import order never retargets an intent.
 
-- <a id="ch-56"></a> **CH-56.** Repeated rotation work reuses the decision from the same local predecessor throughout its verified peer-only context, before and after successor confirmation. After (A0,B0) selects A1, a valid B0-to-B1 carrier at A0 cannot select A2 or another notification; new user sends default to C(A1,B1). If a crash left the notification intent missing, supersession of its source peer B0 prevents manual creation; an already committed notification remains eligible for manual dispatch subject to ordinary restrictions. A source-free manual decision has no source-peer eligibility check. Extending A1 to A2 requires independent exact-address confirmation of A1. A newly allocated successor and its decision commit atomically; evidence learned later can still expose competing decisions without choosing a winner.
+- <a id="ch-56"></a> **CH-56.** Repeated rotation work reuses the decision from the same local predecessor throughout its verified peer-only context. After (A0,B0) selects A1, a valid B0-to-B1 carrier cannot select A2 or another notification; new sends default to C(A1,B1). Supersession of source B0 prevents creating a missing notification; replacement of its fixed peer recipient prevents dispatch of an existing one. Source-free decisions also obey endpoint restrictions. Extending A1 needs independent admitted exact-address confirmation. Successor allocation and its decision commit atomically; later competing evidence exposes a conflict without choosing a winner.
+
+- <a id="ch-57"></a> **CH-57.** B0 sends an admitted chat/ACK, then a verified B0-to-B1 proof is learned. A later B0 chat/ACK is stored and pickup-ACKed but stays ignored-superseded: no chat notification, profile update, ACK attribution/timing, invitation consumption, address confirmation or response. Prior admitted history remains. The sender's earlier created_time/iat does not bypass the restriction.
+- <a id="ch-58"></a> **CH-58.** Crash after receipt but before message.admitted produces no application effect. Recovery with a newly known replacement leaves that old source ignored; without supersession and with complete current evidence it may commit admission now, never dispatch. Crash after admission preserves accepted history. Uncertain commits are resolved before another admission or application effect.
+- <a id="ch-59"></a> **CH-59.** message.admitted has exactly non-null sourceEventId referencing message.in and empty roots. Missing exact evidence stays pending; invalid evidence or logical conflict grants no authority. Multiple admissions of one source are idempotent. An admitted duplicate cannot authorize a late duplicate's headers or change ACK timing through that unadmitted duplicate. A conflicting unadmitted old-peer payload cannot poison admitted chat or ACK history; conflicting independent admissions do expose an application conflict.
+- <a id="ch-60"></a> **CH-60.** Every permutation of the same event union yields the same admissions, accepted history and current restrictions. Importing a rotation never fabricates a receipt cutoff or deletes a valid prior admission. A valid admission from independently run history remains evidence, without claiming the other runtime knew the rotation or undoing effects already sent.
+- <a id="ch-61"></a> **CH-61.** A proof pending for issuer material does not admit its carrier. Restoring the material derives continuity independently of admission; new admission/effects recheck the full graph. Unadmitted old-peer input cannot newly confirm a local address; admitted historical confirmation remains available without introducing a self-supporting rotation cycle.
+- <a id="ch-62"></a> **CH-62.** Old snapshots and legacy receipts without admissions do not prove historical acceptance. Reconciliation can only admit currently eligible sources now. Known replacements forbid manual old-address sends; missing rotation history is an explicit rollback limitation, not reconstructed from a seed, receipt ordinal, UUID or wall clock. Erasure retains admission metadata but restores no content.
+- <a id="ch-63"></a> **CH-63.** A queued or prepared old-endpoint intent cannot dispatch or retry once its endpoint is replaced, including manual actions. Its fixed bytes and history remain. A transport call authorized before replacement may complete and record its actual outcome; no subsequent call is authorized. Independent contexts sharing the DID remain usable.

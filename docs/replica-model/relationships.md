@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **phase 1, implemented** — ordinary DIDComm channels, discovery and
+Status: **phase 1; application-admission and rotation restrictions specified, implementation pending** — ordinary DIDComm channels, discovery and
 early private-address allocation for one active writable vault runtime.
 Phase-1 channel endpoints support only `did:peer:4`; mediator DID resolution
 is independent of that restriction.
@@ -353,7 +353,8 @@ state. Snapshot restore can cause these conditions under
 
 Commit the authenticated observation before source-derived work. Validate each
 consumer under [operation eligibility](channels.md#operation-eligibility),
-including carried proof and current policy where required. Later rotation or
+including durable application admission, carried proof and current policy
+where required. Raw observation alone cannot update chat/profile/ACK state. Later rotation or
 blocking preserves earlier facts; duplicates follow
 [the duplicate receipt rules](distributed-delivery.md#duplicate-receipt-handling).
 
@@ -586,8 +587,9 @@ Create or reuse the dedicated notification under
 preserving the decision's source, successor and proof. Existing replies neither
 move to the successor nor suppress the notification; historical work requires
 manual completion subject to current source eligibility. A superseded source
-peer prevents creation of a missing notification intent, but does not by itself
-prevent manual dispatch of an already committed intent.
+peer prevents creation of a missing notification intent. A replaced sender or
+peer recipient also prohibits preparation and manual dispatch of an already
+committed intent; retaining its history is not permission to send.
 
 <a id="automatic-response-selection"></a>
 
@@ -637,7 +639,13 @@ evidence is missing. Derive its issuer document under
 [predecessor resolution](#predecessor-resolution), then derive links, joins and
 supersession under [continuity](channels.md#continuity). Show the resulting
 [verification status](channels.md#verification-status). Superseded peer input
-remains receivable but cannot start new application work.
+remains receivable but cannot acquire new application admission or start new
+application work. Preserve previously admitted history and expose unadmitted
+old-peer observations as ignored diagnostics under
+[application admission](channels.md#application-admission). Ordinary chat,
+profile, received ACK/error state and address confirmation require that
+admission. Explicit old-address sending and retry are prohibited in the
+affected context, without globally disabling a shared DID or deleting its keys.
 
 <a id="remote-errors-and-integrity-failures"></a>
 
@@ -771,7 +779,7 @@ roll back; explicit new communication is a new channel and new message.
 
 - <a id="rz-31"></a> **RZ-31.** Missing required source/endpoint records or issuer material defer derived continuity while authenticated receipt still commits and pickup-ACKs; UI distinguishes missing proof material from missing history. Invitation state is separate and cannot defer an otherwise complete link.
 
-- <a id="rz-33"></a> **RZ-33.** Verified peer supersession refuses new old-peer work through its local-only context, preserves prior receipts and decisions, and leaves unrelated public-DID channels unaffected.
+- <a id="rz-33"></a> **RZ-33.** Verified peer supersession refuses new old-peer application admission and work through its local-only context, prohibits preparation/dispatch to that peer including manual retries, preserves raw receipts and prior admitted history/decisions, and leaves unrelated public-DID contexts unaffected.
 
 - <a id="rz-34"></a> **RZ-34.** A matching invitation.consumed assigns a one-use disclosure to its proof-free source's canonical peer; plain receipt, continuation and pthid alone do not.
 

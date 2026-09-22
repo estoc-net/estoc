@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **phase 1, implemented** — phase-1 delivery profile for one active full vault
+Status: **phase 1; application-admission and rotation restrictions specified, implementation pending** — phase-1 delivery profile for one active full vault
 runtime.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
@@ -288,13 +288,17 @@ or not transport was called; reopen cannot replay it. Further calls follow
    this carrier's original JWT under [predecessor resolution](relationships.md#predecessor-resolution).
    Fold proof status and continuity without appending an event,
    showing missing evidence as pending.
-6. For each consumer, validate exact source/proof evidence and its required
-   target or protocol fields. Before new work, recheck supersession, denial
-   and that operation's current policy. Commit the concrete intent or local
-   result with already committed references. Automatic invitation consumption
-   follows [channels.md](channels.md#invitation-consumed)
-   independently of those consumers.
-7. Process valid explicit peer ACKs and local display views of retained messages.
+6. Under the lock, fold all available evidence and reconcile
+   [application admission](channels.md#application-admission) for this exact
+   source. Recheck supersession, denial, conflicts and receive policy before
+   committing `message.admitted`. Missing proof remains pending; an unadmitted
+   old-peer source remains `ignored-superseded`. Neither changes pickup ACK.
+   For each consumer, validate the admitted source and its required target or
+   protocol fields, then current operation policy. Commit its concrete intent
+   or local result with already committed references. Invitation consumption
+   also requires admission but stays independent of other consumers.
+7. Process explicit peer ACKs and ordinary local display views only from
+   admitted sources. Unadmitted observations may appear as diagnostics.
    The sole active executor may independently create an eager ACK, a Ping reply
    and a rotation notification when their individual policies permit. Each
    output commits its fixed-channel intent before dispatch.
@@ -503,7 +507,9 @@ stopping pending work without claiming nondelivery.
 Valid expiry or cancellation terminates the entire intent without depending
 on preparation evidence. Complete submission still takes precedence.
 Erasure, security denial, key/route retirement and missing exact bytes separately
-govern manual retry. Ordinary address rotation selects new messages only.
+govern manual retry. Known endpoint replacement also prohibits preparation
+or transport on the old channel under [dispatch policy](channels.md#fixed-outbound-channel),
+including queued work and manual retries; it never rewrites their packages.
 
 Prepared-envelope retention is owned solely by
 [vault-events.md](vault-events.md#held-roots). A paused/unconfirmed eligible
@@ -519,7 +525,7 @@ be recreated for a duplicate input or manual "send again" with a new ID.
 
 ### 8.1 Freezing an ACK target set
 
-Before creating an ACK intent, require an eligible complete source witness
+Before creating an ACK intent, require an admitted eligible complete source witness
 and choose its exact sender/recipient under
 [the built-in operation rule](#built-in-independent-operations). An unrelated
 channel in the same contact is never a substitute. If no eligible sender exists,
@@ -539,14 +545,14 @@ Whether to honor `pleaseAck` is local policy, not a durable reply obligation.
 If it is null/empty this profile creates no requested-ACK work. Otherwise
 expand `""` to the carrier's wire ID, ignore later duplicate requests for
 selection and preserve the original stored wire array. A named target must
-have complete source-witness evidence from the same peer direction in this
+have admitted complete source-witness evidence from the same peer direction in this
 channel or a verified role-preserving predecessor channel. Validate the exact path,
 authentication and requesting peer; no vault-global wire-ID match or display
 group grants a target.
 If multiple otherwise eligible channel inputs with that wire ID are ambiguous,
 omit it. The current carrier can identify itself by its exact source.
 
-Sort eligible targets by their minimum complete receipt key, then freeze their
+Sort eligible targets by their minimum admitted complete receipt key, then freeze their
 wire IDs in one output. Unknown, conflicted or unauthorized targets are
 omitted and later discovery cannot change the saved array. Generic replies use
 `thid = carrier.thid ?? carrier.wireMessageId`, copy nullable `pthid`, and follow
@@ -592,14 +598,16 @@ algorithm below.
 
 ### 8.3 Applying `ack`
 
-Require an explicit wire ID and one complete source witness. Find the exact
+Require an explicit wire ID and one admitted complete source witness. Find the exact
 outbound intent/package, then verify that the carrier's channel is the same
 or an authorized role-preserving successor of its fixed channel. The carrier's
 sender must be the original peer or its verified replacement and its recipient
 the original local endpoint or its verified local successor. Undirected graph
 connectivity, group membership, threads and ordinary responses are insufficient.
 
-All redundant witness fields must come from one complete source row. Missing
+All redundant witness fields must come from one admitted complete source row.
+An ignored old-peer carrier cannot acknowledge an outbound or change ACK timing.
+An admission recorded before supersession remains historical ACK evidence. Missing
 path/authentication/package references defer the acknowledgment. The carrier's
 key need not equal the old package's recipient key: validate it against the
 carrier's own immutable DID document and any required successor path. The
@@ -719,7 +727,8 @@ Address selection and optional early privacy rotation follow
 An automatic DIDComm output is identified by `(executionId, effectType)`.
 `executionId` MUST derive from a complete, conflict-free logical carrier under
 [the input fold](vault-events.md#inbound-message-and-execution-fold).
-An authenticated intent conflict suppresses all automatic work for that execution;
+An intent conflict between independently admitted observations suppresses all
+automatic work for that execution;
 making a disagreeing group ineligible cannot clear the conflict.
 
 Each protocol MUST assign a fixed `effectType` URI to each operation and define
@@ -794,14 +803,20 @@ operations independent for one execution.
 
 Before selecting addresses for a built-in ACK or Ping reply, reuse an existing
 intent for its tuple. For a new intent, use the carrier's actual channel when
-its local DID remains eligible for sending there. Otherwise use the unique
+its local DID remains eligible for sending there, including no replacement
+of that local sender in this context. Otherwise use the unique
 non-conflicted verified local-only successor head that retains the carrier's
 canonical peer DID, if eligible; otherwise create no automatic intent.
 `recipientDid` is the source's canonical `did`, never its `presentedDid` spelling.
 Temporary network unavailability or pending recipient registration delays
 dispatch without changing the selected channel. This is a producer selection
 rule; import validates the saved intent's evidence, not the producer's then-visible
-lifecycle state. A later rotation or retirement never reselects a committed intent.
+lifecycle state. A later rotation or retirement never reselects a committed intent;
+it can prohibit dispatch. Every dispatch rechecks current endpoint restrictions.
+If a local rotation commits before response selection, choose the eligible
+local successor; if it commits after an old-channel intent was selected,
+retain that intent but do not dispatch it or create a second tuple to bypass
+the restriction. Handler order never grants an old-endpoint exception.
 
 A Ping reply requires `response_requested != false` and current protocol/policy
 eligibility. It uses type `https://didcomm.org/trust-ping/2.0/ping-response`,
@@ -845,6 +860,7 @@ delivery.submitted         observed transport acceptance of the fixed package
 delivery.failed            terminal failure or message cancellation
 delivery.acknowledged      exact authorized peer receipt observation
 message.in                 independent authenticated channel receipt
+message.admitted           durable application acceptance of one exact receipt
 did.rotationSelected       local successor and frozen proof selected before sending
 invitation.consumed        exact one-use disclosure and source-backed consumer
 channel.blocked            local channel/successor denial
@@ -870,8 +886,11 @@ are owned by [vault events](vault-events.md) and [channels](channels.md).
   channel becomes unusable, a deliberate new send has a new wire ID.
 - After receipt but before pickup ACK, redelivery is another same-channel
   observation. Receipt commit still permits pickup ACK independently of policy.
-- After receipt but before consumption, recovery automatically completes that
-  local record when its retained source and current policy remain eligible.
+- After receipt but before admission, no application effect is authorized.
+  Recovery first folds the full graph, then may admit an eligible source now;
+  an unadmitted superseded source stays ignored, even if received earlier.
+- After admission but before consumption, recovery automatically completes that
+  local record when its admitted retained source and current policy remain eligible.
   Before a reply, recovery preserves local state and pending work without
   automatically sending ACKs, replies or notifications.
 - After erasure, no new content-derived effect is reconstructed.
@@ -927,7 +946,7 @@ or mediator-visible IDs.
 - <a id="dd-11"></a> **DD-11.** Rotation cannot change an existing message's channel or committed package. Cancellation or terminal failure permits no replacement, even before its first send; changing the package requires a new message ID.
 
 - <a id="dd-12"></a> **DD-12.** Body, type, thread, attachment, timing, ACK policy or additional-header
-    changes under one wire ID produce an intent conflict.
+    changes under one wire ID in independently admitted observations produce an intent conflict.
 
 <a id="submission-and-acknowledgment-dd-13-dd-22"></a>
 
@@ -960,7 +979,7 @@ or mediator-visible IDs.
 
 ### Channel observations and conflicts (DD-23–DD-30)
 
-- <a id="dd-23"></a> **DD-23.** Authorized key variants within one sender/recipient/wire-ID input converge; inconsistent authenticated intent conflicts.
+- <a id="dd-23"></a> **DD-23.** Authorized key variants within one sender/recipient/wire-ID input converge when independently admitted and consistent. Contradictory admitted claims conflict; a refused or ignored raw duplicate cannot change accepted content or create an application intent conflict.
 
 - <a id="dd-24"></a> **DD-24.** Equal wire IDs in different channels do not merge, even through verified links. Same-channel authorized variants share one execution.
 
@@ -1043,7 +1062,7 @@ or mediator-visible IDs.
 
 - <a id="dd-52"></a> **DD-52.** Saved `(executionId, effectType)` tuples and intents remain immutable across restore and handler refactoring; neither changes their effect keys or message IDs. Historical input creates no new dispatch action or replacement response channel.
 
-- <a id="dd-53"></a> **DD-53.** Ordinary content, errors and pure ACKs use channel-local identity and their protocol-specific response rules; continuity authorizes exact paths only.
+- <a id="dd-53"></a> **DD-53.** Ordinary content, errors and pure ACKs use channel-local identity and their protocol-specific response rules; continuity authorizes exact paths only. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="dd-54"></a> **DD-54.** Equal-intent observations at different local DIDs have different channels and execution IDs; later links never merge or replay them.
 
@@ -1069,7 +1088,7 @@ or mediator-visible IDs.
 
 - <a id="dd-64"></a> **DD-64.** Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
 
-- <a id="dd-65"></a> **DD-65.** ACK authorization uses the outbound fixed oriented channel and exact package/path evidence; display preferences never reassign it.
+- <a id="dd-65"></a> **DD-65.** ACK authorization uses the outbound fixed oriented channel and exact package/path evidence; display preferences never reassign it. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="dd-66"></a> **DD-66.** Opposite-side links justify their evidence-backed join. Existing queued, prepared and submitted messages all keep their original channels.
 
@@ -1081,7 +1100,7 @@ or mediator-visible IDs.
 
 ### Group waits and transition validity (DD-70–DD-71)
 
-- <a id="dd-70"></a> **DD-70.** Incomplete consistent same-channel siblings do not erase a complete witness. A complete observation may witness continuity/confirmation without any handler decision or output intent.
+- <a id="dd-70"></a> **DD-70.** Incomplete consistent same-channel siblings do not erase a complete witness. A complete observation may witness continuity/confirmation without any handler decision or output intent. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
 
 - <a id="dd-71"></a> **DD-71.** Complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution for every effect type; submission remains complete and different channels are never execution aliases.
 
@@ -1091,12 +1110,12 @@ or mediator-visible IDs.
 
 - <a id="dd-73"></a> **DD-73.** Missing optional successor registration or notification preparation does not block an eligible ACK or Ping reply on an authorized usable channel. Their committed channels remain fixed when notification work later completes.
 
-- <a id="dd-74"></a> **DD-74.** Crash after a rotation decision but before notification intent leaves manual work only while the source remains eligible. Supersession of the trigger's peer prevents creating the missing intent; an already committed intent may still be manually dispatched under ordinary restrictions. A source-free manual decision remains subject to send restrictions without a source-peer check. Completion reuses the original trigger, successor and proof; a later input cannot change the notification tuple or allocate another successor.
+- <a id="dd-74"></a> **DD-74.** Crash after a rotation decision but before notification intent leaves manual work only while its admitted source remains eligible. A superseded source prevents creation; a replaced fixed sender or recipient also prevents preparation and dispatch of a committed intent. A source-free manual decision obeys send restrictions. Completion never changes the trigger, successor, proof or notification tuple.
 
 - <a id="dd-75"></a> **DD-75.** Notification submission does not confirm successor knowledge. Other new successor messages still carry the same proof until exact-address confirmation; committed packages never change afterward.
 
 ### Built-in response address selection (DD-76–DD-77)
 
-- <a id="dd-76"></a> **DD-76.** With an eligible carrier local DID, an ACK or Ping reply uses the carrier channel even when a privacy successor already exists. A no-longer-eligible local DID selects only its unique eligible verified local-only successor head; ambiguous or unusable successors create no automatic intent. All equivalent long/short source spellings produce the canonical recipientDid. Handler order, pending registration and temporary network outage do not choose different addresses; existing intents are reused after lifecycle changes.
+- <a id="dd-76"></a> **DD-76.** An ACK or Ping reply uses the carrier channel only while that local sender is still eligible and unreplaced in this context. Otherwise select its unique eligible verified local-only successor head; ambiguous or unusable successors create no automatic intent. Canonical peer spelling is used. A committed rotation affects future selection and can stop an earlier fixed intent from dispatching; neither handler order nor manual action retargets that intent or bypasses endpoint restrictions.
 
-- <a id="dd-77"></a> **DD-77.** Body erasure leaves complete retained receipt/header evidence eligible for ACK source and target selection. It cannot justify a new Ping reply whose response_requested field is unavailable. Manual completion still requires an explicit action and current policy; erasure or recovery alone dispatches neither output.
+- <a id="dd-77"></a> **DD-77.** Body erasure leaves complete retained receipt/header evidence eligible for ACK source and target selection. It cannot justify a new Ping reply whose response_requested field is unavailable. Manual completion still requires an explicit action and current policy; erasure or recovery alone dispatches neither output. Application use requires effective admission of its exact source; cryptographic continuity inspection alone does not.
