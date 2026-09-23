@@ -29,9 +29,8 @@ Authenticated receipt and application admission are separate facts; ignored
 old-peer observations remain available as explicitly labelled diagnostics.
 Admission is required for new source-derived operations and application views.
 Existing rotation, consumption, outbound and submission records retain their
-own validity without it. Legacy receipts can therefore preserve recorded
-operations while lacking accepted conversation or ACK state; see
-[legacy history and admission](channels.md#application-admission).
+own validity without it. A saved operation cannot supply missing admission for
+its source; see [application admission](channels.md#application-admission).
 
 An outbound fixes its channel at intent commit; rotation never retargets it
 and can prohibit its preparation or dispatch, including manual retries. Preparation commits one fixed package. Every transport call requires that

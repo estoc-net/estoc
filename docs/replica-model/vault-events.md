@@ -2037,8 +2037,8 @@ Receipt order and admission are independent facts. An earlier `receiptOrdinal`
 does not prove acceptance before rotation; use the durable admission record.
 Imported historic admissions preserve the originating runtime's decisions,
 subject to their exact cryptographic evidence, not today's supersession policy.
-New local admissions always check the complete current graph. Legacy receipts
-without admissions follow the migration rules in the linked section.
+New local admissions always check the complete current graph, including when
+reconciling restored or imported receipts without admissions.
 
 <a id="duplicate-transition-and-conflict-rules"></a>
 
@@ -2115,7 +2115,8 @@ because the candidate cannot yet enter the witness set.
 
 Subject to those checks, an existential claim requires at least one complete
 witness. Aggregates use all qualifying witnesses; [section 9.7](#outbound-message-and-delivery-fold)
-therefore computes ACK receipt time across duplicates and distinct carriers.
+computes ACK receipt time across all qualifying admitted witnesses, including
+duplicates and distinct carriers.
 
 Admission is a prerequisite for producing a new source-derived rotation decision,
 invitation consumption or outbound intent, and for new address confirmation.

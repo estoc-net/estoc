@@ -655,10 +655,10 @@ affected context, without globally disabling a shared DID or deleting its keys.
 ## 13. Remote errors and integrity failures
 
 A Report Problem is a display diagnostic beside a uniquely correlated outbound
-only when its carrier has a complete source witness, the same channel or a
-verified role-preserving successor path, and the required protocol thread
+only when its carrier is an admitted complete source witness in the same channel
+or a verified role-preserving successor channel, with the required protocol thread
 correlation. Keep its body available for display. It does not prove submission
-failure, retract a link or authorize replay. A normal authenticated observation may
+failure, retract a link or authorize replay. Its admitted complete carrier may
 separately prove exact-address knowledge.
 
 Missing source/verification evidence defers attribution; inconsistent evidence exposes

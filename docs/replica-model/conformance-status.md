@@ -26,8 +26,8 @@ specification-only revision.
 
 | Cases | Status after this revision | Remaining work |
 | --- | --- | --- |
-| CH-57–CH-66 | `missing` | Durable admission schema, producer/recovery, projections, legacy history, import-order/crash/duplicate checks, saved-record validity, disposition precedence, pickup ordering and endpoint dispatch checks |
-| CH-7, CH-19, CH-49, CH-51, CH-52, CH-54–CH-56 | `partial` | Preserve existing evidence checks; add admission and remove pre-rotation send/retry exceptions |
+| CH-57–CH-66 | `missing` | Durable admission schema, producer/recovery, projections, import-order/crash/duplicate checks, saved-record validity, disposition precedence, pickup ordering and endpoint dispatch checks |
+| CH-7, CH-13, CH-19, CH-49, CH-51, CH-52, CH-54–CH-56 | `partial` | Preserve existing evidence checks; add admission and invitation skip/defer checks, and remove pre-rotation send/retry exceptions |
 | VE-32, VE-60, VE-61, VE-78, VE-97, VE-109, VE-115, VE-126, VE-133, VE-139, VE-141, VE-142, VE-144, VE-151 | `partial` | Admission-aware application witnesses, ACK/profile/confirmation views and current endpoint restrictions |
 | DD-12, DD-23, DD-26, DD-27, DD-44, DD-65, DD-70, DD-71, DD-74, DD-76, DD-77; RZ-33 | `partial` | Admission-aware intent conflicts and ACK witnesses/order, and strict dispatch eligibility |
 
