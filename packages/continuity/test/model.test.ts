@@ -116,6 +116,15 @@ describe("local rotation and confirmation", () => {
     expect(notAnObservation.status("d1")).toEqual({ status: "invalid", because: expect.stringContaining("no address observation") });
   });
 
+  it("takes a second decision for the same successor as provenance, not as a waiting fork", () => {
+    const named = decide("d2", A0B0, "A1", "o-missing");
+    const model = deriveContinuity([d1, o0, named]);
+    expect(model.conflicts()).toEqual([]);
+    expect(model.head(A0B0)).toEqual({ status: "head", channel: A1B0, support: ["d1", "o0"] });
+    expect(model.status("d2")).toEqual({ status: "unresolved", missing: ["o-missing"] });
+    expect(deriveContinuity([d1, named]).head(A0B0)).toEqual({ status: "unresolved", waiting: ["d1", "d2"], missing: ["o-missing"] });
+  });
+
   it("confirms the predecessor through a usable peer successor", () => {
     const p1 = rotate("p1", A0B0, "B1", "receipt-1");
     const o1 = observe("o1", A0B1, "p1", "receipt-1");
@@ -376,6 +385,56 @@ describe("identity conflicts", () => {
     expect(model.status("p2")).toEqual({ status: "usable", support: ["p2"] });
   });
 
+  it("lets independent support for the same local rotation or ending establish the head, the collision kept as a diagnostic", () => {
+    const d1 = decide("d1", A0B0, "A1");
+    const twin = { ...d1, decision: "decision-other" };
+    const o0 = observe("o0", A0B0);
+    const independent = decide("independent", A0B0, "A1");
+    const rotated = deriveContinuity([o0, d1, twin, independent]);
+    expect(rotated.head(A0B0)).toEqual({ status: "head", channel: A1B0, support: ["independent", "o0"] });
+    expect(rotated.head(A1B0)).toEqual({ status: "head", channel: A1B0, support: [] });
+    expect(rotated.path(A0B0, A1B0)).toEqual({ status: "path", channels: [A0B0, A1B0], support: ["independent", "o0"] });
+    expect(rotated.status("d1")).toEqual({ status: "identity-conflict", variants: [d1, twin] });
+    expect(rotated.status("independent")).toEqual({ status: "usable", support: ["independent", "o0"] });
+    expect(rotated.history(A0B0).links).toEqual([{ from: A0B0, to: A1B0, replaces: "local", support: ["d1", "independent", "o0"], derived: false, usable: true }]);
+    expect(deriveContinuity([o0, d1, twin, decide("independent", A0B0, "A2")]).head(A0B0)).toEqual({ status: "conflict", facts: ["d1", "independent"] });
+    sameWhateverTheOrder([o0, d1, twin, independent], [A0B0, A1B0]);
+    for (const [end, variant] of [
+      [localEnd("e1", A0B0), { ...localEnd("e1", A0B0), decision: "decision-other" }],
+      [peerEnd("e1", A0B0), { ...peerEnd("e1", A0B0), receipt: "receipt-other" }],
+    ] as const) {
+      const alone = deriveContinuity([end, variant]);
+      expect(alone.head(A0B0)).toEqual({ status: "conflict", facts: ["e1"] });
+      const ended = deriveContinuity([end, variant, { ...end, id: "independent" }]);
+      expect(ended.head(A0B0)).toEqual({ status: "ended", endings: ["independent"] });
+      expect(ended.status("e1")).toEqual({ status: "identity-conflict", variants: [end, variant] });
+      expect(ended.status("independent")).toEqual({ status: "usable", support: ["independent"] });
+      const otherSide = end.kind === "local-decision" ? peerEnd("independent", A0B0) : localEnd("independent", A0B0);
+      expect(deriveContinuity([end, variant, otherSide]).head(A0B0)).toEqual({ status: "conflict", facts: ["e1"] });
+    }
+  });
+
+  it("scopes a fork by the claims made in its context, not by every variant of an ID involved", () => {
+    const X0Y0 = C("X0", "Y0");
+    const X0Y1 = C("X0", "Y1");
+    const here = rotate("p", A0B0, "B1");
+    const elsewhere = rotate("p", X0Y0, "Y1");
+    const fork = rotate("fork", A0B0, "B2");
+    const independent = rotate("independent", X0Y0, "Y1");
+    const model = deriveContinuity([here, elsewhere, fork, independent]);
+    expect(model.conflicts()).toEqual([
+      { kind: "competing-changes", side: "peer", context: [A0B0], changes: [{ change: { kind: "rotate", successor: "B1" }, facts: ["p"] }, { change: { kind: "rotate", successor: "B2" }, facts: ["fork"] }] },
+      { kind: "identity-conflict", id: "p", variants: [here, elsewhere] },
+    ]);
+    expect(model.head(A0B0)).toEqual({ status: "conflict", facts: ["fork", "p"] });
+    expect(model.head(A0B1)).toEqual({ status: "conflict", facts: ["fork", "p"] });
+    expect(model.head(X0Y0)).toEqual({ status: "head", channel: X0Y1, support: ["independent"] });
+    expect(model.path(X0Y0, X0Y1)).toEqual({ status: "path", channels: [X0Y0, X0Y1], support: ["independent"] });
+    expect(model.status("independent")).toEqual({ status: "usable", support: ["independent"] });
+    expect(deriveContinuity([here, elsewhere, fork]).head(X0Y0)).toEqual({ status: "conflict", facts: ["p"] });
+    sameWhateverTheOrder([here, elsewhere, fork, independent], [A0B0, A0B1, X0Y0, X0Y1]);
+  });
+
   it("cannot hide an alternative a variant creates", () => {
     const p2 = rotate("p2", A0B0, "B1", "receipt-2");
     const model = deriveContinuity([p1, p1other, p2]);
@@ -439,6 +498,19 @@ describe("convergence and monotonicity", () => {
     expect(view(deriveContinuity(mergeFacts(replicaB, replicaA).facts), channels, ids)).toEqual(view(deriveContinuity(merged.facts), channels, ids));
     expect(deriveContinuity(replicaA.facts).head(A0B0)).toEqual({ status: "head", channel: A1B1, support: ["d1", "o0", "p1"] });
     expect(deriveContinuity(merged.facts).head(A0B0)).toEqual({ status: "conflict", facts: ["p1", "p2"] });
+  });
+
+  it("answers over a long rotation history", () => {
+    const length = 3000;
+    const facts: ContinuityFact[] = [];
+    for (let i = 0; i < length; i++) facts.push(rotate(`p${String(i).padStart(4, "0")}`, C("A0", `B${i}`), `B${i + 1}`));
+    const model = deriveContinuity(facts);
+    const last = C("A0", `B${length}`);
+    expect(model.head(A0B0)).toEqual({ status: "head", channel: last, support: facts.map((fact) => fact.id) });
+    expect(model.path(A0B0, C("A0", "B1"))).toEqual({ status: "path", channels: [A0B0, C("A0", "B1")], support: ["p0000"] });
+    const path = model.path(A0B0, last);
+    expect(path.status === "path" && path.channels.length).toBe(length + 1);
+    expect(model.confirmation("A0", "B0")).toEqual({ status: "unconfirmed", unusable: [] });
   });
 
   it("refuses a malformed fact without deriving anything", () => {

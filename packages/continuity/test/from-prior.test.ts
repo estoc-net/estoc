@@ -140,6 +140,20 @@ describe("verify", () => {
     expect((await verifyFromPrior(jwt, b0.document)).iat).toBe(IAT);
   });
 
+  it("takes typ as the optional media type it is, and creates the short spelling", async () => {
+    const [h, p, s] = segments(await rotation(b0, b1));
+    const header = JSON.parse(new TextDecoder().decode(base64urlnopad.decode(h))) as Record<string, unknown>;
+    expect(header["typ"]).toBe("JWT");
+    const resigned = (hdr: Record<string, unknown>) => new SignJWT(JSON.parse(new TextDecoder().decode(base64urlnopad.decode(p))) as Record<string, unknown>).setProtectedHeader(hdr as never).sign(b0.privateKey);
+    for (const typ of [undefined, "JWT", "jwt", "application/jwt", "Application/JWT"]) {
+      await expect(verifyFromPrior(await resigned({ alg: "EdDSA", kid: b0.kid, ...(typ === undefined ? {} : { typ }) }), b0.document), typ ?? "omitted").resolves.toMatchObject({ iat: IAT });
+    }
+    for (const typ of ["JWS", "application/jose", "JWT ", "application/jwt; charset=utf-8"]) {
+      expect((await failure(verifyFromPrior(await resigned({ alg: "EdDSA", typ, kid: b0.kid }), b0.document))).failure, typ).toBe("profile");
+    }
+    expect((await failure(verifyFromPrior(`${encode({ alg: "EdDSA", typ: 7, kid: b0.kid })}.${p}.${s}`, b0.document))).failure).toBe("form");
+  });
+
   it("verifies an ending and retains its audience", async () => {
     const proof = await verifyFromPrior(await ending(b0, a0), b0.document);
     expect(proof.change).toEqual({ kind: "end", audience: { presented: a0.longForm, canonical: a0.shortForm } });
@@ -163,7 +177,7 @@ describe("verify", () => {
 
     expect((await failure(verifyFromPrior("nope", b0.document))).failure).toBe("form");
     expect((await failure(verifyFromPrior(`${encode({ ...header, alg: "none" })}.${p}.${s}`, b0.document))).failure).toBe("profile");
-    expect((await failure(verifyFromPrior(await resigned({ alg: "EdDSA", kid: b0.kid }, payload), b0.document))).failure).toBe("profile");
+    expect((await failure(verifyFromPrior(await resigned({ alg: "EdDSA", typ: "JWS", kid: b0.kid }, payload), b0.document))).failure).toBe("profile");
     expect((await failure(verifyFromPrior(await resigned({ alg: "EdDSA", typ: "JWT", kid: `${b1.longForm}#key-1` }, payload), b0.document))).failure).toBe("profile");
     expect((await failure(verifyFromPrior(await resigned(header, { ...payload, sub: b0.shortForm }), b0.document))).failure).toBe("profile");
     expect((await failure(verifyFromPrior(await resigned(header, { ...payload, iss: "did:web:b0.example" }), b0.document))).failure).toBe("profile");

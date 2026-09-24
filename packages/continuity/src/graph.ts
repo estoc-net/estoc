@@ -25,9 +25,40 @@ export interface Link {
   readonly to: Channel;
 }
 
-export interface Reached {
-  readonly channel: Channel;
-  readonly edges: readonly Edge[];
+/**
+ * The channels a forward search reached from its start, each with the
+ * edge it was first reached by. Paths are rebuilt from those parent
+ * edges only when asked for, so a search costs one entry per channel
+ * however long the history is.
+ */
+export class Reach {
+  private readonly reached = new Map<string, { channel: Channel; via: Edge | null }>();
+
+  constructor(start: Channel) {
+    this.reached.set(channelKey(start), { channel: start, via: null });
+  }
+
+  /** whether `channel` was newly reached through `via` */
+  arrive(channel: Channel, via: Edge): boolean {
+    const key = channelKey(channel);
+    if (this.reached.has(key)) return false;
+    this.reached.set(key, { channel, via });
+    return true;
+  }
+
+  /** every channel reached, the start first, in the order they were reached */
+  *channels(): IterableIterator<Channel> {
+    for (const { channel } of this.reached.values()) yield channel;
+  }
+
+  /** the edges of the path the search took to `channel`, empty for the start, undefined when not reached */
+  pathTo(channel: Channel): readonly Edge[] | undefined {
+    const end = this.reached.get(channelKey(channel));
+    if (end === undefined) return undefined;
+    const edges: Edge[] = [];
+    for (let entry = end; entry.via !== null; entry = this.reached.get(channelKey(entry.via.from))!) edges.push(entry.via);
+    return edges.reverse();
+  }
 }
 
 export interface IdentityCollision {
@@ -121,30 +152,30 @@ export class Graph {
 
   /**
    * Every channel forward edges of the given kind reach from `start`,
-   * `start` included, each with one shortest path to it: breadth first
-   * over edges in canonical order, so the path chosen is the same
-   * whatever order the edges were added.
+   * `start` included, each by one shortest path: breadth first over
+   * edges in canonical order, so the path chosen is the same whatever
+   * order the edges were added. The search stops once it reaches
+   * `until`, when one is given.
    */
-  paths(start: Channel, replaces: Replaces | "any"): Map<string, Reached> {
-    const reached = new Map<string, Reached>([[channelKey(start), { channel: start, edges: [] }]]);
+  reach(start: Channel, replaces: Replaces | "any", until?: Channel): Reach {
+    const reach = new Reach(start);
+    const untilKey = until === undefined ? undefined : channelKey(until);
+    if (untilKey === channelKey(start)) return reach;
     const frontier = [start];
-    while (frontier.length > 0) {
-      const channel = frontier.shift()!;
-      const sofar = reached.get(channelKey(channel))!.edges;
-      for (const edge of [...this.from(channel)].sort((a, b) => compareChannels(a.to, b.to))) {
+    for (let next = 0; next < frontier.length; next++) {
+      for (const edge of [...this.from(frontier[next]!)].sort((a, b) => compareChannels(a.to, b.to))) {
         if (replaces !== "any" && edge.replaces !== replaces) continue;
-        const key = channelKey(edge.to);
-        if (reached.has(key)) continue;
-        reached.set(key, { channel: edge.to, edges: [...sofar, edge] });
+        if (!reach.arrive(edge.to, edge)) continue;
+        if (channelKey(edge.to) === untilKey) return reach;
         frontier.push(edge.to);
       }
     }
-    return reached;
+    return reach;
   }
 
   /** The shortest forward path from `from` to `to` as its edges, empty for the same channel, null when none. */
   path(from: Channel, to: Channel): readonly Edge[] | null {
-    return this.paths(from, "any").get(channelKey(to))?.edges ?? null;
+    return this.reach(from, "any", to).pathTo(to) ?? null;
   }
 
   /**

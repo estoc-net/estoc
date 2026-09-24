@@ -12,4 +12,8 @@ JWS to the library and consults no clock. A confirmation's support
 includes the peer path to the observer. A collided local decision, a
 fork's successor pair and a pair only conflicted links lead to answer
 `conflict`; a pair only a waiting decision names answers `unresolved`.
-An ending names no source.
+An ending names no source. A collided or waiting claim of a change
+that independent facts establish usably does not block the head; a
+fork's scope follows the claims made in its context, not every variant
+of an ID involved. Path searches keep one parent edge per channel and
+rebuild a path on demand. Reception takes `typ` as optional.

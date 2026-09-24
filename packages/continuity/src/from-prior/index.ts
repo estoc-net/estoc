@@ -157,20 +157,22 @@ export function inspectFromPrior(jwt: string): UnverifiedFromPrior {
   if (typeof header.alg !== "string") throw form("the protected header names an alg");
   if (typeof header.kid !== "string") throw form("the protected header names a kid");
   if (header.typ !== undefined && typeof header.typ !== "string") throw form("typ is a string");
+  return { header: { alg: header.alg, typ: header.typ, kid: header.kid }, claims: claimsOf(payload) };
+}
+
+/** The claims of a decoded payload, in the shape the profile reads them. */
+function claimsOf(payload: JWTPayload): UnverifiedFromPrior["claims"] {
   if (typeof payload.iss !== "string") throw form("iss is a string");
   if (Object.hasOwn(payload, "sub") && typeof payload.sub !== "string") throw form("sub, when present, is a string");
   if (Object.hasOwn(payload, "aud") && typeof payload.aud !== "string") throw form("aud, when present, is one string");
   if (!Number.isSafeInteger(payload.iat)) throw form("iat is an integer");
   if (Object.hasOwn(payload, "exp") || Object.hasOwn(payload, "nbf")) throw form("a from_prior has no exp or nbf; this profile evaluates no validity window");
-  return {
-    header: { alg: header.alg, typ: header.typ, kid: header.kid },
-    claims: { iss: payload.iss, sub: payload.sub, aud: payload.aud as string | undefined, iat: payload.iat as number },
-  };
+  return { iss: payload.iss, sub: payload.sub, aud: payload.aud as string | undefined, iat: payload.iat as number };
 }
 
 const decoder = new TextDecoder();
 
-/** The claims a verified signature covers, as the profile reads them. */
+/** The claims a verified signature covers: read again from the bytes the library verified, not from the pre-verification decode. */
 function verifiedClaims(payload: Uint8Array): UnverifiedFromPrior["claims"] {
   let parsed: unknown;
   try {
@@ -179,13 +181,18 @@ function verifiedClaims(payload: Uint8Array): UnverifiedFromPrior["claims"] {
     throw form("the payload is JSON");
   }
   if (!isPlainObject(parsed)) throw form("the payload is an object");
-  const claims = parsed as JWTPayload;
-  if (typeof claims.iss !== "string") throw form("iss is a string");
-  if (Object.hasOwn(claims, "sub") && typeof claims.sub !== "string") throw form("sub, when present, is a string");
-  if (Object.hasOwn(claims, "aud") && typeof claims.aud !== "string") throw form("aud, when present, is one string");
-  if (!Number.isSafeInteger(claims.iat)) throw form("iat is an integer");
-  if (Object.hasOwn(claims, "exp") || Object.hasOwn(claims, "nbf")) throw form("a from_prior has no exp or nbf; this profile evaluates no validity window");
-  return { iss: claims.iss, sub: claims.sub, aud: claims.aud as string | undefined, iat: claims.iat as number };
+  return claimsOf(parsed as JWTPayload);
+}
+
+/**
+ * RFC 7519 makes `typ` optional and its value a media type, compared
+ * case-insensitively; both spellings the RFC gives for a JWT are
+ * accepted, and creation emits the short one.
+ */
+function isJwtType(typ: string | undefined): boolean {
+  if (typ === undefined) return true;
+  const lower = typ.toLowerCase();
+  return lower === "jwt" || lower === "application/jwt";
 }
 
 type Method = { id: string; key: JWK };
@@ -304,7 +311,7 @@ function profileChange(claims: UnverifiedFromPrior["claims"], issuer: DidSpellin
 export async function verifyFromPrior(jwt: string, evidence: IssuerEvidence): Promise<VerifiedFromPrior> {
   const unverified = inspectFromPrior(jwt);
   if (unverified.header.alg !== FROM_PRIOR_ALG) throw profile(`alg is ${FROM_PRIOR_ALG}`);
-  if (unverified.header.typ !== "JWT") throw profile("typ is JWT");
+  if (!isJwtType(unverified.header.typ)) throw profile("typ, when present, is JWT or application/jwt");
   const issuer = canonicalDid(unverified.claims.iss, "iss");
   const kid = splitDidUrl(unverified.header.kid, "kid");
   if (kid.did.canonical !== issuer.canonical) throw profile("the kid names a key of iss");

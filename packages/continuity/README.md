@@ -86,6 +86,13 @@ whether or not it is confirmed yet, since two saved successors of one
 predecessor are a fork either way. Every variant of a repeated ID enters
 the positive graph when its own prerequisites hold, so the competition
 it creates is visible, but no variant links or witnesses anything usable.
+A conflict's scope is its context and the successors the claims in that
+context name; a variant of the same ID claiming something in another
+context is a different claim and stays out of it. A collided or waiting
+claim of a change that independent unambiguous facts establish anyway
+does not block the head: the same rotation reached by a usable link, or
+the same side's ending in the same context by an unambiguous ending, is
+the head, and the collision stays a diagnostic on that fact.
 
 ## from_prior
 
@@ -98,9 +105,11 @@ if (binding.status === "bound") facts.push(...binding.facts);
 ```
 
 The supported profile is did:peer:4 issuers, subjects and audiences,
-`EdDSA` over Ed25519 authentication keys, `typ: JWT`, an integer `iat`
-and no `exp` or `nbf`: the profile evaluates no validity window, and
-verification consults no clock. DID equivalence is the did:peer:4 short
+`EdDSA` over Ed25519 authentication keys, an integer `iat` and no
+`exp` or `nbf`: the profile evaluates no validity window, and
+verification consults no clock. Creation writes `typ: JWT`; reception
+takes `typ` as the optional media type it is, accepting its absence or
+`JWT` and `application/jwt` in any case. DID equivalence is the did:peer:4 short
 form; presented spellings are kept beside it. The issuer evidence is the
 issuer's long-form DID as the host retained it: a did:peer:4 is its own
 document, so the signing key is taken from the content the DID's hash
