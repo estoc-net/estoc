@@ -1,12 +1,12 @@
 # Continuity domain package design draft
 
-Status: **Exploratory proposal with a prototype. `packages/continuity` implements the model, merge contract and from-prior profile described here; the contract is not final, and the vault does not consume it yet. The current phase-1 contract is unchanged.**
+Status: **Exploratory proposal with a prototype in `packages/continuity`. This document defines the intended contract; the prototype is not yet a claim of conformance, and the vault does not consume it. The current phase-1 contract is unchanged.**
 
 The proposed package, `@estoc/continuity`, provides a pure continuity model and a
 `from-prior` module for DIDComm proofs. An agent supplies receipt evidence,
-issuer documents and saved local decisions. The package verifies proofs, binds
-them to endpoint evidence, and derives continuity from normalized facts. The
-agent uses the results to conduct its own transactions and protocols.
+issuer resolution material and saved local decisions. The package verifies
+proofs, binds them to endpoint evidence, and derives continuity from normalized
+facts. The agent uses the results to conduct its own transactions and protocols.
 
 This draft defines the domain boundary, required information and available
 queries, including a [merge contract](#merge-contract) for replica histories.
@@ -38,7 +38,7 @@ flowchart LR
 
 | Question | Package responsibility | Agent or other module responsibility |
 | --- | --- | --- |
-| Is this a valid rotation or ending proof? | Parse the JWT, validate claims, check issuer key authorization and verify the signature under the supported profile | Obtain the exact issuer document and retain the original evidence |
+| Is this a valid rotation or ending proof? | Parse the JWT, validate claims, bind issuer resolution material to the DID, check key authorization and verify the signature under the supported profile | Obtain and retain the exact issuer material and original evidence |
 | Which endpoints does this receipt establish? | Bind the verified proof to supplied receipt evidence and produce scoped facts | Decrypt and authenticate the envelope; establish the actual local recipient and sender |
 | Did B0 become B1 in this relationship? | Derive links, contexts and supersession from normalized facts | Use the result under application policy |
 | What pair follows rotations by both parties? | Derive joins and a unique head | Select new message endpoints and check their operational availability |
@@ -87,6 +87,44 @@ algorithms require defined validation and document-version rules; accepting
 arbitrary keys from a caller is not a substitute for issuer authorization.
 General-purpose JWT login or authorization policy is outside this package.
 
+### Initial proof profile
+
+The initial profile has the following receiving and creation rules. These are
+package constraints; they do not describe every JWT or DIDComm implementation.
+
+| Item | Rule |
+| --- | --- |
+| Container and signature | A compact signed JWT with a base64url-encoded JSON payload; `alg` is `EdDSA`, using an Ed25519 key authorized for issuer authentication. Detached or unencoded payloads, nested tokens and unsupported critical headers are not supported. |
+| `kid` | Required; its DID portion identifies the issuer and its fragment selects an authorized verification method from the validated issuer material. |
+| `iss` and `sub` | `iss` identifies the predecessor. Rotation has a distinct DID in `sub`; ending omits `sub`. Null and empty strings are not omission. |
+| `aud` | The ending extension accepts one recipient DID string. A standard basic ending can omit it and still verify. This initial profile does not accept `aud` on rotations or an audience array. Binding is defined under [relationship ending](#ending). |
+| `iat` | Required as an integer exactly representable by the API. It records the issuer's declared rotation or ending time, without selecting a branch or proving when a replica learned the claim. |
+| `typ` | Creation emits `JWT`. Reception accepts omission, or the case-insensitive values `JWT` and `application/jwt`. Other values are refused. |
+| `exp` and `nbf` | Unsupported in this initial profile and refused when present. The verifier neither ignores them nor evaluates a validity window. |
+| Repeated JSON member names | Use the last member value consistently in inspection and verified-claim interpretation, as permitted by [RFC 7519](https://www.rfc-editor.org/rfc/rfc7519.html#section-4). Signature verification still covers the original bytes. |
+
+Endpoint comparisons use the validated `did:peer:4` short-form identity. A
+presented long form must pass the method's encoded-document hash check before
+being equated with its short form. Preserve each original spelling. This rule
+applies to issuer, subject, receipt sender and recipient, and ending audience;
+it grants no equivalence through shared keys, services, arbitrary `alsoKnownAs`
+entries or another DID method. Verification-method fragments remain exact.
+
+The first profile deliberately leaves time-limited proof acceptance outside its
+API. This is an interoperability limitation, not a consequence of purity: a
+future profile can accept `exp` and `nbf` using a host-supplied evaluation time,
+fixed tolerance and maintained JWT validation APIs. That extension must retain
+the evaluation context and distinguish accepting a proof on receipt from
+preserving previously accepted history. Neither proof verification, creation
+nor model derivation reads the current clock implicitly. Historical continuity
+uses [an explicit evidence snapshot](#historical-queries), not JWT expiry.
+
+Profile identifiers cover these acceptance rules as well as normalization and
+derivation. Changes to a published profile require a new version and explicit
+cache/projection migration; a matching version string cannot conceal different
+validation behavior. The prototype must match this contract before its initial
+profile is treated as stable.
+
 ### Parse and verify a proof
 
 The proof module owns JWT form and encoding checks, supported protected-header
@@ -111,6 +149,16 @@ fetch missing material and retry; the pure model does not perform that work.
 A verified proof establishes the issuer's declaration, before any receipt
 binding or graph conflict analysis.
 
+For this profile, issuer evidence is `{ ref, longForm }`: the retained
+long-form `did:peer:4` and its immutable source reference. The package validates
+and resolves that long form through the DID library, compares its short-form
+identity to `iss`, and takes the authorized signing key from that same resolved
+content. A caller-assembled document with a matching `id` is insufficient.
+Short-form `iss` and `kid` are accepted with the corresponding long-form
+material; a short form alone does not supply a verification key. Missing issuer
+material remains a host material gap rather than an invitation to substitute a
+key or reconstruct a hash from a reordered resolved document.
+
 ### Bind a proof to receipt evidence
 
 Binding is part of the package's `from-prior` module. The host supplies the
@@ -118,6 +166,10 @@ exact receipt reference, its unchanged carried token, actual local recipient,
 and authenticated sender when present. It preserves the presented DID spelling
 as well as its validated canonical identity for profile-specific comparisons.
 These are results of envelope verification, not unchecked plaintext headers.
+The host also establishes consistency between the plaintext sender and the
+authenticated envelope. A null sender is valid ending evidence only when the
+host established both an anonymous envelope and the absence of plaintext
+`from`; absence of an authenticated sender alone is insufficient.
 
 For rotation, binding checks that the verified token is the receipt's own token
 and that its subject matches the authenticated sender under the profile. It
@@ -165,8 +217,12 @@ The signing capability must correspond to a key authorized by the issuer's
 profile. Validate the returned proof against the requested claims and issuer
 evidence before returning it for persistence. Cryptographic operations use
 maintained libraries or the supplied signing provider; the package never reads
-a vault seed or manages key storage. The precise signer interface remains an
-API design choice, including how to support non-exportable keys.
+a vault seed or manages key storage. The initial signer interface names its
+verification method and signs supplied JWS signing-input bytes. This permits
+hardware or keystore providers that expose no key object. Manual JWS framing
+is limited to supporting that callback; use standard encoding libraries and
+the maintained verifier for the resulting token. Non-exportability alone is
+not a reason to replace a library that already supports non-exportable keys.
 
 The host saves the chosen proof with its local decision, commits any dependent
 notification, and controls dispatch. Generating a proof neither creates a
@@ -280,9 +336,17 @@ remain outside it.
 
 A local rotation is a candidate link until the model finds independent
 confirmation of its exact predecessor address. Without that confirmation it
-retains the candidate and its waiting reason. This draft proposes no address
-confirmation prerequisite for an ending, which establishes no successor;
-permission to create that local decision remains host operation policy.
+retains the candidate and its waiting reason. For a rotation, `source: null`
+allows the model to find a qualifying observation; a named source must itself
+qualify and cannot be silently replaced. An ending has no address confirmation
+prerequisite and must use `source: null`; a non-null ending source is invalid
+input. Permission to create that local decision remains host operation policy.
+
+Every normalized saved choice participates in competition analysis, even when
+its rotation is still waiting for confirmation or an exact dependency. This
+does not admit that candidate as a link. Two different saved successors of the
+same endpoint in one opposite-side context are a fork before either is sent;
+repeated choices of the same successor add provenance rather than competition.
 
 The host allocates the successor, invokes proof creation and atomically saves
 the relevant records. The model consumes saved decisions and allocates nothing.
@@ -336,8 +400,8 @@ not authorize allocating another successor when a saved choice lacks evidence.
 
 The model is designed for CRDT-like convergence: replicas with the same
 normalized fact variants and model profile derive the same continuity state,
-including domain conflicts. This section defines the proposed merge semantics;
-the package and its integration with replica synchronization remain unimplemented.
+including domain conflicts. This section defines the merge semantics targeted
+by the prototype; integration with replica synchronization remains unimplemented.
 
 ### 5.1 Scope and compatibility
 
@@ -437,15 +501,30 @@ and an observation's `carriedTransition`, report conflict rather than choosing
 a value or treating the reference as merely absent.
 
 Retain every variant's endpoint claims for diagnostics and conflict scoping.
-Include their independently established changes in positive conflict analysis,
-without resolving an ambiguous reference to a chosen variant. Any join,
-confirmation or path relying on that identity loses that support. A head query
-must not hide a collided forward change and fall back to the predecessor.
-Independent, unambiguous support for the same change may remain usable when no
-alternative creates a competing continuation or other context conflict; it
-cannot hide such an alternative. Queries whose continuation remains ambiguous
-report conflict, while unrelated contexts remain usable. The input-conflict
-representation retains variant values, not just their shared ID.
+Evaluate variants as distinct values, identified by the fact ID and canonical
+value together. A peer-transition variant already carries its independent
+verification and binding evidence. A local-rotation variant enters positive
+closure only when its own exact references resolve and its predecessor is
+independently confirmed without that candidate. Until then its saved choice
+still participates in competition, but creates no link. A reference naming a
+multi-value ID resolves to no variant, even if one would satisfy the caller.
+
+These variants may contribute diagnostic positive links and joins; none is a
+usable witness. Any usable join, confirmation or path relying on the ambiguous
+identity loses that support. A head query must not hide a collided forward
+change and fall back to the predecessor. Independent, unambiguous support for
+the same uncontested change can still establish a usable result. This rule
+applies equally to peer rotations, confirmed local rotations and endings.
+The collided fact's status remains an identity conflict, and exact references
+to it remain unusable; an independent result does not repair that identity.
+It also cannot conceal any variant declaring a different continuation.
+
+Scope a domain conflict using the actual variant claims and their opposite-side
+context. An ID appearing in a conflict does not make all other variants' pairs
+members of that domain conflict. An identity conflict is retained globally by
+ID, while its effect on a query follows the claims or dependencies relevant to
+that query. Unrelated contexts with independent support remain usable. Expose
+the variant values so diagnostics do not confuse this with choosing a winner.
 
 Different IDs declaring A0-to-A1 and A0-to-A2 in one local rotation context are
 instead a **domain conflict**. Both facts may have valid independent evidence.
@@ -518,6 +597,8 @@ Merge itself creates no admission, ACK, notification, dispatch or replay action.
 
 ### 5.7 Replica-local history
 
+<a id="historical-queries"></a>
+
 The merged present does not reconstruct what each replica knew in the past.
 Historical queries use a host-selected snapshot identified by that replica's
 revision or another explicit evidence cut. Retain the verification/binding
@@ -529,6 +610,14 @@ knowledge gained through a later import or verification. A new merge creates a
 new current view; it does not rewrite an earlier replica snapshot or recorded
 admission. There is no global wall-clock ordering in this contract. The core
 continues to evaluate the facts supplied for the chosen snapshot.
+
+To ask whether a message had usable continuity at an earlier operation, the
+host supplies the normalized snapshot visible to that replica then and queries
+the message's fixed endpoint pair against it. This answers a continuity
+prerequisite only. Message expiry, admission and protocol validity remain host
+decisions, using their own explicit evaluation time. The package has no
+`validMessageAt(time)` query and cannot reconstruct past knowledge by filtering
+the current fact set on `iat`.
 
 ### 5.8 Existing vault integration
 
@@ -542,13 +631,14 @@ This draft does not change current vault import behavior.
 
 ### 5.9 Acceptance cases
 
-Future implementation checks must cover:
+Implementation and integration checks must cover:
 
 - The three merge laws and arbitrary delivery order/batching, including snapshots with identity conflicts and an empty compatible snapshot.
 - Stable source/projection IDs across replicas and rebuilds; repeated carrier evidence adds no new successor, while independent receipt provenance remains distinct.
 - Canonical equality with reordered object properties; malformed or unknown-version input is refused without a partial mutation.
 - Same-ID variants arriving in either order or through a third replica; all variants and conflict results survive retransmission, with no target preference.
 - Collision propagation through exact source references, observations and joins; independent support for an uncontested change remains usable, without predecessor fallback or hidden alternatives.
+- Independently supported local rotations and endings surviving an equivalent collided claim; distinct variants in unrelated contexts cannot spread one context's fork into the other.
 - Separate material arrival, pending dependencies and newly contradicted sources; cached verification results cannot conceal the merged evidence.
 - Opposite-side rotations forming a supported join, concurrent same-side rotations producing conflict, and ending competing with rotation regardless of arrival order.
 - Equal final views after hosts have the same accepted sources, evidence and profile, while preserving their different historical snapshots and recorded decisions.
@@ -562,7 +652,7 @@ Derivation follows the evidence dependency direction:
 
 1. **Input consistency.** Check pairs, successors, IDs and references under the [merge contract](#merge-contract). Retain same-ID variants and propagate their identity conflict; missing referenced facts remain unresolved.
 2. **Positive closure.** Start with verified peer rotations and local rotations with independently confirmed predecessors, then compute the least closure of supported joins. Retain all independently supported branches. Endings remain terminal assertions scoped through opposite-side links, without an empty-endpoint edge.
-3. **Contexts and conflicts.** Over the full positive closure, detect competing same-side successors, cycles, a local/peer identity collision, and ending competing with a successor of the same endpoint. Event time and JWT `iat` select no winner.
+3. **Contexts and conflicts.** Derive opposite-side contexts from the full positive closure. Within them, compare all normalized saved local decisions and independently verified peer changes, including local choices not yet admitted as links. Detect different same-side successors, ending versus rotation of the same endpoint, cycles and local/peer identity collisions. Repeated declarations of the same change do not compete. Event time and JWT `iat` select no winner.
 4. **Usable continuity.** Exclude conflict-affected derivations and recompute closure with exact source and confirmation support. Links and joins losing their required support provide no usable path. Usability here concerns continuity alone.
 
 For a proof-bearing observation, positive support requires its own independently
@@ -606,21 +696,56 @@ type HeadResult =
   | { status: "no-evidence" };
 ```
 
-A head may be the original pair when it is known and has no established forward
-change. `no-evidence` means there are no facts or derivable history for the pair.
-A known forward change without usable continuation does not fall back to the
-old pair. A local decision waiting for confirmation is explicitly unresolved,
-so the host cannot mistake it for an absence of a selected successor.
+A head may be the original pair when it is independently established and has
+no known forward choice requiring resolution. Resolve head outcomes in this
+order: relevant conflict, an established ending, unresolved forward choices,
+then a unique usable head. An equivalent ambiguous claim does not prevent a
+head or ending supported entirely by independent unambiguous facts, but a
+competing change still does. Waiting and identity diagnostics remain available
+through decision and fact queries when another result has precedence.
+
+`no-evidence` is reserved for a pair neither mentioned by any fact, including
+a declared successor, nor covered by derived history or conflict scope. A pair
+mentioned only as a waiting local decision's successor is `unresolved`; a fork
+successor is `conflict`, even without a positive link. If only ambiguous
+positive links establish a pair and no independent evidence establishes it,
+its head is `conflict`. A known forward choice without usable continuation
+never falls back to the old pair. These diagnostic rules add no usable edge or
+address confirmation, and `no-evidence` never authorizes successor allocation.
+
+An ending and rotation of the same side in one context are competing choices,
+including an unconfirmed local rotation. A valid ending can take precedence
+over a waiting opposite-side rotation: there is no continuing joined head.
 
 Model-level unresolved results describe reference or confirmation gaps visible
 to the core. Material and proof-verification gaps remain separate diagnostics
 outside that input. Every result may change with the next snapshot.
 
-Queries preserve support rather than only a Boolean. If an agent additionally
-requires an admitted confirmation observation, it must be able to inspect
-alternative observations and their paths. Filtering all unadmitted facts out
-of the graph could hide real rotation or conflict. Policy may choose qualifying
-support, but cannot combine individually incomplete sources into one witness.
+Queries preserve support rather than only a Boolean. The initial API returns
+one deterministic usable path and a complete supporting fact set for it;
+confirmation lists the eligible observations, with one complete witness for
+each. A confirmation witness includes the exact observation, its own carried
+transition when present, the peer-only path from the queried pair to that
+observer, and all recursive prerequisites of that path. Local-link support
+also includes the decision and its independent predecessor confirmation.
+Those facts must suffice to rederive the asserted links or confirmation under
+the same profile. Sorting, shortest-path selection or combining provenance
+must not discard a prerequisite. Support need not be a minimal fact set.
+
+This API does not enumerate every alternative route or every minimal witness.
+The support of positive diagnostic history can include conflicted identities;
+it is provenance for analysis, not a usable witness. A usable witness proves
+its affirmative links or observations, not the absence of conflicting or
+missing evidence outside the snapshot. An unchanged head and a zero-step path
+do not themselves prove an address observation or any rotation.
+
+If an agent additionally requires an admitted confirmation observation, it
+can inspect the returned observations and their witnesses. Failure of one
+selected route to meet further host policy does not prove that no qualifying
+route exists. A policy needing exhaustive alternatives requires a richer
+support query before integration. Do not filter unadmitted facts out of the
+model to search for a preferred result: that could hide rotation or conflict.
+No policy may combine incomplete carriers into one complete receipt witness.
 
 The same fact set produces the same semantic result regardless of enumeration
 order or storage backend. Additional facts may expose conflict and invalidate
@@ -726,20 +851,33 @@ from its carrier. Absence is distinct from a null or empty-string subject. The
 proof module recognizes the ending claim shape; the model represents it as
 `change: { kind: "end" }` without creating `C(A,null)`.
 
-**The package must define an explicit context-binding rule for received
-endings.** Rotation can compare the subject to an authenticated current sender;
-ending lacks that sender. A valid signature establishes the issuer's declaration,
-without by itself proving a recipient-specific relationship scope. The standard's
-basic ending form does not require a signed recipient or audience binding.
-This leaves a profile design question when an issuer DID serves multiple
-relationships.
+Rotation can compare the subject to an authenticated current sender; ending
+lacks that sender. A valid signature establishes the issuer's declaration,
+without by itself proving a recipient-specific relationship scope. The
+standard's basic ending form does not require a signed recipient or audience.
 
-The proof module must not bind an ending to every pair containing its issuer,
-or accept an arbitrary caller-selected pair solely because the JWT verifies.
-The supported profile still needs to define which retained receipt evidence,
-DID usage constraints or mutually supported additional binding can establish
-a scoped ending. The host supplies that evidence; the package owns its binding
-checks. Adding graph fields cannot supply missing evidence.
+The initial package profile separates verification from binding:
+
+- An otherwise valid basic ending without `aud` verifies and is retained as an issuer declaration. Binding returns `unbound` and produces no `peer-transition` fact.
+- The recipient-binding extension requires one signed DID in `aud`, the exact JWT from the retained receipt, an actual recipient canonically equal to that audience, an anonymous envelope and an absent plaintext `from`. The recipient and issuer must differ. Successful binding yields an ending at `C(recipient, issuer)`.
+- A token mismatch, authenticated sender on an ending receipt, or nonmatching audience is a binding mismatch. Missing audience is insufficient context, not a bad signature.
+- Proof creation for an ending requires its recipient audience in this initial API. The host supplies that selected recipient; the package validates the returned proof and leaves packaging and dispatch to the host.
+
+The signed audience is a package extension, not a DIDComm requirement. Basic
+endings from agents without this extension are verifiable but cannot
+automatically terminate a scoped relationship under this profile. Retention
+and diagnostics for those unbound proofs remain host responsibilities. The
+package must not claim complete interoperability for received basic endings.
+
+This boundary preserves the model's allowance for one DID in multiple
+independent pairs. Our threat model includes a recipient reusing a valid token
+in a new anonymous envelope to another recipient; decryption alone does not
+bind the issuer's declaration to that second relationship. Seeing only one
+local relationship does not establish that the remote DID is globally
+pairwise. Supporting automatic binding of the basic form therefore needs a
+separate profile with justified DID usage constraints, independent context
+evidence, or an explicitly weaker transfer guarantee. A caller-selected pair
+or added graph field supplies none of that evidence.
 
 Proposed model semantics, separate from the standard's wire representation:
 
@@ -749,10 +887,10 @@ Proposed model semantics, separate from the standard's wire representation:
 - If one side ends while the other rotates, the ending extends with the opposite-side context and supplies no continuing joined head. Two endings do not create an empty pair.
 - An ending carrier supplies neither successor-address confirmation nor evidence that an application message was processed.
 
-The types can accommodate ending now, but received-ending binding remains
-unresolved. Recognizing and verifying its JWT form does not complete that
-integration. Choosing to end locally, notifying the peer, handling delayed
-messages and governing existing outbound dispatch remain agent operations.
+The extension's proof and binding contract is defined here; its agent flow and
+basic-form interoperability still require integration work. Choosing to end
+locally, notifying the peer, handling delayed messages and governing existing
+outbound dispatch remain agent operations.
 
 <a id="extraction"></a>
 
@@ -772,30 +910,36 @@ encoding helpers must not pull vault or event-store runtime dependencies into
 the package. Fact IDs impose no storage format. The host need not use event
 sourcing, but must supply a consistent snapshot with traceable evidence.
 
-First extract existing rotation verification, binding and derivation behavior
-through the minimal inputs. Then settle received-ending context binding and
-its agent flow. The initial objective is equivalent continuity results and
-shared proof rules, before designing further command or transaction abstractions.
+First align the prototype's proof processing and derivation with these minimal
+inputs and query contracts. Then implement the vault projection and the agent
+flow for the defined ending extension, preserving diagnostics for basic unbound
+endings. The initial objective is shared continuity and proof rules, before
+designing further command or transaction abstractions.
 
 Implementation acceptance should cover malformed tokens, unsupported headers
 or algorithms, unauthorized keys, wrong issuer documents, altered signed bytes,
 carrier/subject mismatch, signer/request mismatch, and rotation/ending claim
-shapes. Model cases include input permutations and rebuilding, multiple
-carriers, independent contexts, joins without fabricated confirmation,
+shapes. It also covers short-form issuers with retained long-form evidence,
+key substitution, omitted and media-type-equivalent `typ`, repeated JSON
+members, unsupported time claims, absence of clock reads, unbound basic endings
+and the recipient-binding extension. Model cases include input permutations
+and rebuilding, multiple carriers, independent contexts, joins without fabricated confirmation,
 proof-free confirmation, exact-source dependencies, missing references,
 self-supporting or cyclic decisions, conflicting IDs, competing successors,
 cycles and ending/rotation interactions. The merge contract adds replica union,
-identity-conflict preservation and convergence cases. This draft adds no
+identity-conflict preservation and convergence cases. Returned link and
+confirmation witnesses must replay from their complete support, including
+multi-hop and derived-join prerequisites. This draft changes no current vault
 runtime behavior.
 
 <a id="open-questions"></a>
 
 ## 11. Remaining design questions
 
-1. **Ending context binding.** Define a concrete interoperable acceptance rule before implementing received endings. This belongs to the package profile, with evidence supplied by the host.
-2. **Support representation.** Preserve alternative observations and paths without expanding exponentially many paths. A traceable support graph is a candidate; the query API needs a prototype.
+1. **Basic ending interoperability.** The initial signed-audience extension is defined; automatic binding of basic endings without it remains unsupported. Any additional profile must state its DID usage assumptions, evidence and transfer guarantees before adding an acceptance path.
+2. **Alternative support.** The initial API supplies complete deterministic witnesses and alternative observations. An integration requiring policy-specific route selection needs a richer query or traceable support graph, without enumerating exponentially many paths or removing conflicts from its input.
 3. **Combined diagnostics.** Integrate core unresolved results with missing-material, verification and binding results so a temporary unique head is not mistaken for complete operation evidence.
-4. **Signing capability.** Choose an interface that supports the host's non-exportable keys while keeping claim construction, authorization checks and returned-proof validation in the package.
+4. **Time-limited proof profile.** The initial profile refuses `exp` and `nbf`. Supporting them later requires explicit evaluation time, retained validation context, profile migration and a separate rule for historical accepted evidence.
 5. **Vault conflict retention.** Design storage and interchange for all colliding source variants before claiming that the existing vault adapter satisfies the merge contract.
 
 <a id="references"></a>
@@ -808,3 +952,6 @@ runtime behavior.
 - [RFC 8785 JCS](https://www.rfc-editor.org/rfc/rfc8785.html): canonical encoding for normalized fact equality.
 - [DIDComm DID Rotation](https://identity.foundation/didcomm-messaging/spec/v2.1/#did-rotation): wire proofs and address confirmation.
 - [DIDComm Ending a Relationship](https://identity.foundation/didcomm-messaging/spec/v2.1/#ending-a-relationship): the ending wire representation.
+- [Peer DID method 4](https://identity.foundation/peer-did-method-spec/#method-4-short-form-and-long-form): document-bound identity and short/long-form equivalence.
+- [RFC 7519](https://www.rfc-editor.org/rfc/rfc7519.html): JWT claim interpretation and the optional `typ` header.
+- [RFC 7797](https://www.rfc-editor.org/rfc/rfc7797.html#section-1): JWTs do not use the JWS unencoded-payload option.
