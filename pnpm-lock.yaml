@@ -158,6 +158,31 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@26.6.2)(terser@5.50.0)
 
+  packages/continuity:
+    dependencies:
+      '@estoc/did-peer':
+        specifier: workspace:^
+        version: link:../did-peer
+      '@scure/base':
+        specifier: ^1.2.0
+        version: 1.2.6
+      canonicalize:
+        specifier: ^5.1.0
+        version: 5.1.0
+      jose:
+        specifier: ^6.0.0
+        version: 6.2.9
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.2
+        version: 26.6.2
+      typescript:
+        specifier: ~5.8.0
+        version: 5.8.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@26.6.2)(terser@5.50.0)
+
   packages/daemon:
     dependencies:
       '@estoc/agent-core':
