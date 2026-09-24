@@ -9,8 +9,8 @@ them to endpoint evidence, and derives continuity from normalized facts. The
 agent uses the results to conduct its own transactions and protocols.
 
 This draft defines the domain boundary, required information and available
-queries. Types and function names illustrate that boundary; they are not a
-frozen API.
+queries, including a [merge contract](#merge-contract) for replica histories.
+Types and function names illustrate that boundary; they are not a frozen API.
 
 The domain is **continuity between oriented DID pairs**: rotation, ending,
 joins when both endpoints rotate, address confirmation and evidence conflicts.
@@ -72,7 +72,7 @@ Two public entry points separate proof processing from graph derivation:
 
 | Entry point | Input | Output and responsibility |
 | --- | --- | --- |
-| `@estoc/continuity` | A snapshot of normalized facts | Synchronous, deterministic continuity queries without JWT parsing, cryptography or I/O |
+| `@estoc/continuity` | Compatible snapshots of normalized facts | Pure fact merging and synchronous, deterministic continuity queries without JWT parsing, cryptography or I/O |
 | `@estoc/continuity/from-prior` | Original JWTs, issuer evidence, receipt context, or a proof creation request with a signer | Parsing, verification, context binding and proof creation under the package's supported profile |
 
 The proof module depends on shared domain types and maintained JOSE/DID
@@ -201,9 +201,11 @@ processing requirements. Those scopes remain separately documented.
 
 The model receives a snapshot of facts. `FactId` and `EvidenceRef` are stable
 opaque references that the host can map to original records; the model does not
-dereference evidence. Fact IDs are unique across the combined snapshot and
-stable across rebuilding. Evidence references identify exact immutable sources.
-Different carriers of one proof retain their separate provenance.
+dereference evidence. Each fact ID is intended to identify one immutable value
+across replicas and remains stable across rebuilding. Conflicting values under
+one ID are retained under the merge contract rather than overwritten. Evidence
+references identify exact immutable sources. Different carriers of one proof
+retain their separate provenance.
 
 Event timestamps, receipt order and authors are unnecessary for graph
 selection. The proof module validates JWT `iat`; it does not use it to choose
@@ -328,13 +330,237 @@ Before allocating a successor, the host must also inspect all saved decisions,
 including ones that cannot yet be projected. An empty model decision query does
 not authorize allocating another successor when a saved choice lacks evidence.
 
+<a id="merge-contract"></a>
+
+## 5. Merge contract
+
+The model is designed for CRDT-like convergence: replicas with the same
+normalized fact variants and model profile derive the same continuity state,
+including domain conflicts. This section defines the proposed merge semantics;
+the package and its integration with replica synchronization remain unimplemented.
+
+### 5.1 Scope and compatibility
+
+A merge operates within one logical local identity, with the same local/peer
+orientation and evidence trust policy. It does not combine the opposite
+perspectives of two communicating agents. A host supplies an identity namespace
+and a versioned profile identifying the fact schema, normalization, proof rules
+and derivation rules. These tags are compatibility checks, not credentials.
+The host authenticates imported source records under its replication trust model;
+possession of a replica ID does not authenticate a receipt or local decision.
+This source acceptance concerns provenance and integrity, independently of
+application admission or current denial policy.
+
+Merge rejects incompatible namespaces or profiles without changing either
+input. Unknown versions require an explicit conversion before merging; a
+consumer must not drop unknown fields to make a newer fact appear compatible.
+
+The core can expose this shape without learning any storage or transport API:
+
+```ts
+type FactSnapshot = Readonly<{
+  identityNamespace: string;
+  profileVersion: string;
+  facts: readonly ContinuityFact[];
+}>;
+
+declare function mergeFacts(
+  left: FactSnapshot,
+  right: FactSnapshot,
+): FactSnapshot;
+
+const merged = mergeFacts(left, right);
+const view = deriveContinuity(merged.facts);
+```
+
+The matching model implementation interprets the profile. Scope/version tags
+do not change fact meaning or authorize a caller to relabel another identity's
+history. Direct model calls follow the same compatibility and evidence contract.
+
+### 5.2 Identity and equality
+
+The host allocates globally unique, persisted fact IDs in the namespace. An
+imported source retains its IDs; an independently recorded receipt has its own
+ID even if it carries the same JWT. Projection IDs can be derived from a stable
+source ID and fact kind, or saved with that source. Rebuilding must not allocate
+new IDs. Local row positions, wall-clock time alone and import order are not
+identity schemes.
+
+Within one profile, exact equality means identical canonical bytes for the
+entire schema-valid fact, including its ID, kind, endpoints and references.
+Use [RFC 8785 JCS](https://www.rfc-editor.org/rfc/rfc8785.html) through a maintained
+implementation. Required nulls are explicit; missing required fields and extra
+fields fail the version's schema. Object property order is irrelevant, while
+string values and source references remain exact. This encoding is for fact
+comparison; it does not canonicalize or rewrite a signed JWT.
+
+Local receipt positions, verification-cache timestamps and diagnostic display
+text are outside fact equality. Evidence references are also stable across
+replicas and identify immutable material. A host must not resolve the same
+reference to whichever local document happens to be available.
+
+### 5.3 Union and merge laws
+
+Logically, a snapshot maps each fact ID to a set of distinct canonical values.
+The public facts array can represent these values without introducing a new
+stored event type. A bucket with multiple values is retained in full.
+
+```text
+merge(A, B)[id] = A[id] union B[id]
+
+merge(A, B) = merge(B, A)
+merge(merge(A, B), C) = merge(A, merge(B, C))
+merge(A, A) = A
+```
+
+These laws apply to compatible, schema-valid inputs and compare retained
+values, independent of array enumeration order. Merge returns a new snapshot;
+it does not mutate an input. Exact duplicates add nothing. Different IDs retain
+their distinct provenance even when they establish the same graph edge.
+
+No last-writer-wins rule, replica priority, JWT time or delivery order selects a
+value. For reproducible serialization and diagnostics, enumerate IDs and then
+canonical values in UTF-8 byte order; this order grants no domain precedence.
+
+There is no deletion, replacement or conflict-clearing merge operation in this
+version. A transport may send deltas, but omission from a partial transfer never
+deletes a retained value. Local cache eviction is not evidence deletion. Any
+future compaction must preserve the information required to reproduce identity
+conflicts, dependencies and query results before it can replace this full set.
+
+### 5.4 Collisions and domain conflicts
+
+Two values under one fact ID are an **identity conflict**. Keep both, expose the
+variants, and make no selection between them. The conflicting identity supplies
+no usable witness or link. References to it, including a decision's `source`
+and an observation's `carriedTransition`, report conflict rather than choosing
+a value or treating the reference as merely absent.
+
+Retain every variant's endpoint claims for diagnostics and conflict scoping.
+Include their independently established changes in positive conflict analysis,
+without resolving an ambiguous reference to a chosen variant. Any join,
+confirmation or path relying on that identity loses that support. A head query
+must not hide a collided forward change and fall back to the predecessor.
+Independent, unambiguous support for the same change may remain usable when no
+alternative creates a competing continuation or other context conflict; it
+cannot hide such an alternative. Queries whose continuation remains ambiguous
+report conflict, while unrelated contexts remain usable. The input-conflict
+representation retains variant values, not just their shared ID.
+
+Different IDs declaring A0-to-A1 and A0-to-A2 in one local rotation context are
+instead a **domain conflict**. Both facts may have valid independent evidence.
+They remain in positive history and produce the same conflict on every replica
+that has them. Different IDs supporting A0-to-A1 again add provenance without
+creating a competing successor or authorizing another notification.
+
+Neither kind of conflict is cleared by replaying one preferred value or by
+omitting the other from a later transfer. Branch reconciliation and repairing
+ambiguous identities require a separately specified operation; this draft
+defines neither as an implicit consequence of merge.
+
+### 5.5 Evidence, missing dependencies and projection
+
+The merge helper operates on normalized facts satisfying the input evidence
+contract. It is not an import verifier. A host integrating replica histories
+must first retain the union of original source variants and their evidence,
+then verify and project against that combined source snapshot. Material may
+arrive separately, but the host must retain pending records for reevaluation.
+
+Do not merge cached heads, confirmation Booleans or `verified` flags. Reuse a
+verification cache only while its exact token, document, source bindings and
+profile remain valid in the combined evidence. If a newly learned source
+contradiction invalidates a prior projection, rebuild the normalized input;
+blindly unioning yesterday's verified-fact caches does not meet this contract.
+The retained source inventory and the currently usable projection are different
+layers; only the retained inventory is required to grow by union.
+
+An evidence-reference collision must preserve all conflicting source values
+and prevent the affected sources from being treated as complete. The host
+reports this as an integrity diagnostic and blocks operations depending on
+that reference. If the contradiction has projected fact variants, pass all
+variants to the core so it can report their identity conflict. Missing or
+invalid raw sources that cannot be projected remain host diagnostics; their
+absence from the core is never a positive completeness assertion.
+
+Inside a fact snapshot, a missing referenced fact is unresolved. Another
+replica may supply that exact dependency and permit a new result. Two different
+receipts still cannot contribute separate halves of one complete witness.
+Verification or binding failures do not become valid because another replica
+reported success. Hosts preserve the minimal source and proof material needed
+to reproduce validation; transport and evidence retention remain their duties.
+
+Publish a model view from one complete projection of the selected merged
+snapshot. An intermediate input prefix cannot authorize an operation merely
+because the conflicting branch has not been projected yet. This requirement
+does not claim that a replica can detect all evidence still unknown to it.
+
+### 5.6 Convergence and operation boundaries
+
+The fact union is commutative, associative and idempotent. Deterministic
+derivation over the same fact variants and model profile gives strong
+convergence of query results. Usable heads and paths need not grow monotonically:
+more retained evidence may reveal conflict and remove previously usable support.
+An identical conflict result is a converged state.
+
+An integrated system can claim strong eventual consistency only when its hosts
+also converge on source acceptance and evidence validation, relevant source
+variants and material eventually reach every participating replica, and
+validation and derivation terminate for finite supported inputs. The package
+does not provide that dissemination or membership protocol. Equal metadata
+tags alone do not establish equal evidence, verifier behavior or completeness.
+
+Convergence provides no coordination for concurrent operations. Two offline
+replicas may each allocate a different successor from A0 and send its proof
+before learning the other's decision. Merge exposes the fork without undoing
+those sends. A unique active writer or another operation-coordination mechanism
+belongs to the host. Local locking alone does not coordinate remote replicas.
+Merge itself creates no admission, ACK, notification, dispatch or replay action.
+
+### 5.7 Replica-local history
+
+The merged present does not reconstruct what each replica knew in the past.
+Historical queries use a host-selected snapshot identified by that replica's
+revision or another explicit evidence cut. Retain the verification/binding
+state and profile needed for that interpretation, or retain the actual decision
+and its supporting evidence when auditing an operation.
+
+Event creation time, JWT `iat` and a source's early receipt time cannot backdate
+knowledge gained through a later import or verification. A new merge creates a
+new current view; it does not rewrite an earlier replica snapshot or recorded
+admission. There is no global wall-clock ordering in this contract. The core
+continues to evaluate the facts supplied for the chosen snapshot.
+
+### 5.8 Existing vault integration
+
+The current [vault import contract](vault-sqlite.md#import) retains the target
+row on an event-ID content collision and reports the conflict. Accepted event
+rows alone therefore cannot implement this proposal's preservation of all
+variants. A conforming future adapter must durably retain and exchange the
+conflicting source variants and their evidence, then expose ambiguity during
+projection. A local-only diagnostic or target-selected row is insufficient.
+This draft does not change current vault import behavior.
+
+### 5.9 Acceptance cases
+
+Future implementation checks must cover:
+
+- The three merge laws and arbitrary delivery order/batching, including snapshots with identity conflicts and an empty compatible snapshot.
+- Stable source/projection IDs across replicas and rebuilds; repeated carrier evidence adds no new successor, while independent receipt provenance remains distinct.
+- Canonical equality with reordered object properties; malformed or unknown-version input is refused without a partial mutation.
+- Same-ID variants arriving in either order or through a third replica; all variants and conflict results survive retransmission, with no target preference.
+- Collision propagation through exact source references, observations and joins; independent support for an uncontested change remains usable, without predecessor fallback or hidden alternatives.
+- Separate material arrival, pending dependencies and newly contradicted sources; cached verification results cannot conceal the merged evidence.
+- Opposite-side rotations forming a supported join, concurrent same-side rotations producing conflict, and ending competing with rotation regardless of arrival order.
+- Equal final views after hosts have the same accepted sources, evidence and profile, while preserving their different historical snapshots and recorded decisions.
+- Merge and rebuild producing no external operation or dispatch, and demonstrating that a local lock cannot prevent independent replica decisions.
+
 <a id="derivation"></a>
 
-## 5. Derivation responsibilities
+## 6. Derivation responsibilities
 
 Derivation follows the evidence dependency direction:
 
-1. **Input consistency.** Check pairs, successors, IDs and references. An exact duplicate is idempotent; conflicting contents under one ID are an input conflict, never last-writer-wins. Missing referenced facts remain unresolved.
+1. **Input consistency.** Check pairs, successors, IDs and references under the [merge contract](#merge-contract). Retain same-ID variants and propagate their identity conflict; missing referenced facts remain unresolved.
 2. **Positive closure.** Start with verified peer rotations and local rotations with independently confirmed predecessors, then compute the least closure of supported joins. Retain all independently supported branches. Endings remain terminal assertions scoped through opposite-side links, without an empty-endpoint edge.
 3. **Contexts and conflicts.** Over the full positive closure, detect competing same-side successors, cycles, a local/peer identity collision, and ending competing with a successor of the same endpoint. Event time and JWT `iat` select no winner.
 4. **Usable continuity.** Exclude conflict-affected derivations and recompute closure with exact source and confirmation support. Links and joins losing their required support provide no usable path. Usability here concerns continuity alone.
@@ -357,7 +583,7 @@ model neither stores blocks nor decides their policy.
 
 <a id="outputs"></a>
 
-## 6. Available information
+## 7. Available information
 
 | Query | Domain result | Boundary |
 | --- | --- | --- |
@@ -367,7 +593,7 @@ model neither stores blocks nor decides their policy.
 | `confirmation(localDid, peerDid)` | Whether that peer or a usable peer successor wrote to the exact local DID, with observations and paths | Confirms no other local address, wire ID or application admission |
 | `history(channel)` | Positive links, joins, endings, contexts and provenance | Historical connectivity establishes neither current usability nor contact identity |
 | `localDecisions(channel)` | Supplied local decisions and their status in the relevant peer context | Excludes saved decisions not yet projected; insufficient on its own for successor allocation |
-| `conflicts()` / `status(factId)` | Affected scope, supporting facts, missing dependencies and contradictions | Selects no winner, deletes no history and creates no repair operation |
+| `conflicts()` / `status(factId)` | Identity-conflict variants, affected scope, supporting facts, missing dependencies and domain contradictions | Selects no winner, deletes no history and creates no repair operation |
 
 Head results distinguish different conditions instead of returning one `null`:
 
@@ -400,11 +626,12 @@ The same fact set produces the same semantic result regardless of enumeration
 order or storage backend. Additional facts may expose conflict and invalidate
 a previously usable head or path. Query authority is therefore not monotonic.
 Complete snapshot derivation is sufficient initially; incremental indexing is
-a later performance choice.
+a later performance choice. The [merge contract](#merge-contract) defines the
+scope of convergence and its host integration prerequisites.
 
 <a id="examples"></a>
 
-## 7. Concrete data flows
+## 8. Concrete data flows
 
 A and B below stand for validated canonical DIDs.
 
@@ -491,7 +718,7 @@ an integration contract for using the model.
 
 <a id="ending"></a>
 
-## 8. Relationship ending
+## 9. Relationship ending
 
 [DIDComm v2.1 Ending a Relationship](https://identity.foundation/didcomm-messaging/spec/v2.1/#ending-a-relationship)
 expresses ending by omitting `sub` from the `from_prior` JWT and omitting `from`
@@ -529,7 +756,7 @@ messages and governing existing outbound dispatch remain agent operations.
 
 <a id="extraction"></a>
 
-## 9. Extraction from the existing implementation
+## 10. Extraction from the existing implementation
 
 | Existing location | Extraction direction |
 | --- | --- |
@@ -557,22 +784,27 @@ shapes. Model cases include input permutations and rebuilding, multiple
 carriers, independent contexts, joins without fabricated confirmation,
 proof-free confirmation, exact-source dependencies, missing references,
 self-supporting or cyclic decisions, conflicting IDs, competing successors,
-cycles and ending/rotation interactions. This draft adds no runtime behavior.
+cycles and ending/rotation interactions. The merge contract adds replica union,
+identity-conflict preservation and convergence cases. This draft adds no
+runtime behavior.
 
 <a id="open-questions"></a>
 
-## 10. Remaining design questions
+## 11. Remaining design questions
 
 1. **Ending context binding.** Define a concrete interoperable acceptance rule before implementing received endings. This belongs to the package profile, with evidence supplied by the host.
 2. **Support representation.** Preserve alternative observations and paths without expanding exponentially many paths. A traceable support graph is a candidate; the query API needs a prototype.
 3. **Combined diagnostics.** Integrate core unresolved results with missing-material, verification and binding results so a temporary unique head is not mistaken for complete operation evidence.
 4. **Signing capability.** Choose an interface that supports the host's non-exportable keys while keeping claim construction, authorization checks and returned-proof validation in the package.
+5. **Vault conflict retention.** Design storage and interchange for all colliding source variants before claiming that the existing vault adapter satisfies the merge contract.
 
 <a id="references"></a>
 
-## 11. References
+## 12. References
 
 - [Current channel and continuity model](channels.md#continuity): the rotation behavior baseline for extraction.
 - [Current address and contact policy](relationships.md#what-it-is-for): the boundary between continuity and application policy.
+- [Current vault import](vault-sqlite.md#import): existing event-ID collision handling and the adapter gap.
+- [RFC 8785 JCS](https://www.rfc-editor.org/rfc/rfc8785.html): canonical encoding for normalized fact equality.
 - [DIDComm DID Rotation](https://identity.foundation/didcomm-messaging/spec/v2.1/#did-rotation): wire proofs and address confirmation.
 - [DIDComm Ending a Relationship](https://identity.foundation/didcomm-messaging/spec/v2.1/#ending-a-relationship): the ending wire representation.

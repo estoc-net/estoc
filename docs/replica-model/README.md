@@ -47,7 +47,8 @@ Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 The [continuity domain package draft](continuity-domain-design.md) explores
 shared `from_prior` proof verification, creation and context binding alongside
 a pure continuity model. It defines package inputs, queries and agent
-responsibilities as an informative proposal outside the current phase-1 contract.
+responsibilities, including a [replica merge contract](continuity-domain-design.md#merge-contract),
+as an informative proposal outside the current phase-1 contract.
 
 <a id="reading-paths"></a>
 
