@@ -61,6 +61,37 @@ its status is promoted:
 | 4 | Admitted witnesses and shared send policy | Historical decisions rebuild; new confirmation needs an admitted observation; same/cross-channel ACK rules and both endpoint gates cover every dispatch path |
 | 5 | Daemon records, app views and end-to-end behavior | Accepted and diagnostic views remain separate; both pickup orders and import/reopen converge without historical dispatch; remove pre-rotation bypass parameters |
 
+<a id="implementation-composition"></a>
+
+### Implementation structure and review criteria
+
+Apply these criteria during the stages above. They guide implementation and
+review; they add no portable fields, query semantics or required package layout.
+
+- Model source storage as one inventory of canonical variants. Derive conflicts
+  from that inventory, replacing the separate accepted-value/rejected-history
+  machinery. Centralize exact reference resolution so consumers do not repeat
+  variant selection and ambiguity checks.
+- Evaluate a small pure record-set core for event-store and continuity, covering
+  canonical-value union and missing/unique/conflicting lookup. Extract a shared
+  package only if both can use it without domain-specific switches or bringing
+  storage dependencies into continuity. Otherwise prefer small internal modules.
+  Source inventories and derived fact projections retain their different
+  lifecycles: sharing collection code does not make cached projections permanent.
+- Keep source validation, continuity adaptation and admission in distinct vault
+  modules. Compose their results into operation eligibility and diagnostics;
+  daemon/app consumers should not reproduce proof, variant or revision checks.
+  Keep admission local to vault until a separate package has a useful independent
+  contract; do not introduce a generic policy framework solely to move it out.
+- Each implementation review should identify which old states, branches and
+  repeated checks the change removes, and show that consumers become simpler.
+  Test pure rules in their owning module/package and their composition at the
+  integration boundary. Package count alone is not evidence of simplification.
+
+If this work requires a different public interface, source identity, merge rule
+or observable behavior, update its owning specification before implementing
+that change. Module names and extraction choices belong to the implementation.
+
 The following summary and detailed rows are the **2026-09-21 baseline**. Their
 counts exclude all subsequently added cases, and their old evidence does not
 verify revised clauses. Both revision tables above override baseline status for
