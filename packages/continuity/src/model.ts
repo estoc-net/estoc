@@ -111,6 +111,8 @@ class Model implements Continuity {
   private readonly positiveWaiting: ReadonlySet<FactId>;
   private readonly local: Contexts;
   private readonly peer: Contexts;
+  /** the saved local rotations by the root of their positive peer-only context: the onward choices a head in that context must answer for */
+  private readonly rotationsByContext = new Map<string, { entry: Entry; successor: Did }[]>();
   private readonly domainConflicts: readonly Conflict[];
   /** the channels a query answers `conflict` for, by channel key: each domain conflict's context and the successors its own claims name */
   private readonly conflictsAt = new Map<string, Conflict[]>();
@@ -155,6 +157,13 @@ class Model implements Continuity {
     for (const entry of this.all()) this.positive.vertex(entry.fact.at);
     this.local = new Contexts(this.positive, "local");
     this.peer = new Contexts(this.positive, "peer");
+    for (const entry of this.all()) {
+      if (entry.fact.kind !== "local-decision" || entry.fact.change.kind !== "rotate") continue;
+      const root = this.peer.root(channelKey(entry.fact.at));
+      let rotations = this.rotationsByContext.get(root);
+      if (rotations === undefined) this.rotationsByContext.set(root, (rotations = []));
+      rotations.push({ entry, successor: entry.fact.change.successor });
+    }
     const found = this.findConflicts();
     this.domainConflicts = found.map(({ conflict }) => conflict);
     for (const { conflict, scope } of found) {
@@ -316,7 +325,6 @@ class Model implements Continuity {
     return (side === "peer" ? this.usableLocal : this.usablePeer).root(channelKey(channel));
   }
 
-  /** Whether a usable link makes the same change, of `side` to `successor`, at some pair of the usable context of `at`. */
   private usablyEstablished(side: Side, at: Channel, successor: Did): boolean {
     const root = this.usableContextRoot(at, side);
     for (const edge of this.usableChanges.get(changeIndexKey(side, successor)) ?? []) if (this.usableContextRoot(edge.from, side) === root) return true;
@@ -436,7 +444,11 @@ class Model implements Continuity {
    * the same side's ending in the usable context by an unambiguous
    * ending. Authority stops at usable links: a claim at a pair that
    * only diagnostic history connects to the query may or may not apply
-   * to it, and is reported as the ambiguity it is.
+   * to it, and is reported as the ambiguity it is. Saved rotations of
+   * the endpoint are answered for across the whole positive context of
+   * each usable pair, not only at the pair itself: one the same change
+   * covers is provenance, one at a pair usable links connect is still
+   * pending, and one only diagnostic history connects is that ambiguity.
    */
   head(channel: Channel): HeadResult {
     const conflict = new Set<FactId>();
@@ -478,10 +490,11 @@ class Model implements Continuity {
         for (const entry of affirmative) endings.add(entry.fact.id);
         if (affirmative.length === 0) for (const entry of found) conflict.add(entry.fact.id);
       }
-      for (const entry of this.entriesAt.get(channelKey(current)) ?? []) {
-        if (entry.fact.kind !== "local-decision" || entry.fact.change.kind !== "rotate") continue;
-        if (this.usablyEstablished("local", current, entry.fact.change.successor)) continue;
-        this.pendingDecision(entry, conflict, waiting, missing);
+      const usableRoot = this.usableContextRoot(current, "local");
+      for (const { entry, successor } of this.rotationsByContext.get(this.peer.root(channelKey(current))) ?? []) {
+        if (this.usablyEstablished("local", current, successor)) continue;
+        if (this.usableContextRoot(entry.fact.at, "local") === usableRoot) this.pendingDecision(entry, conflict, waiting, missing);
+        else conflict.add(entry.fact.id);
       }
     }
     if (conflict.size > 0) return { status: "conflict", facts: sortedIds(conflict) };

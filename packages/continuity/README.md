@@ -96,7 +96,11 @@ an unambiguous ending, is the head, and the collision stays a diagnostic
 on that fact. Authority stops at usable links: a claim at a pair that
 only diagnostic history connects to the query, such as an ending beyond
 a collided rotation, may or may not apply to it and is reported as
-`conflict`, never applied.
+`conflict`, never applied. Saved rotations of the head's endpoint are
+answered for across its whole positive context, including pairs off the
+usable forward paths: one the same usable change covers is provenance,
+one at a pair usable links connect is `unresolved`, and one only
+diagnostic history connects is `conflict`.
 
 ## from_prior
 

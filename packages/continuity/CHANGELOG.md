@@ -21,3 +21,6 @@ change made usably at any pair of the usable context covers a collided
 or waiting claim of it; an ending at another pair applies only through
 usable opposite-side links, and one reached only through diagnostic
 history answers `conflict`. A `b64` header is `true` and critical.
+A saved rotation of the head's endpoint anywhere in its positive
+context is answered for: covered by the same usable change, pending
+when usable links connect its pair, otherwise `conflict`.

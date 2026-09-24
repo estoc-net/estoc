@@ -494,6 +494,37 @@ describe("identity conflicts", () => {
     expect(deriveContinuity([p, o, waiting]).head(A0B0)).toEqual({ status: "unresolved", waiting: ["d"], missing: ["missing"] });
   });
 
+  it("answers for a saved onward rotation across the head's context, and reports one only diagnostic history scopes as an ambiguity", () => {
+    const A2B1 = C("A2", "B1");
+    const collided = decide("d", A0B0, "A1");
+    const base = [rotate("p", A0B0, "B1"), observe("o", A0B1), decide("i", A0B1, "A1"), collided, { ...collided, decision: "decision-other" }];
+    const head = { status: "head", channel: A1B1, support: ["i", "o", "p"] };
+    expect(deriveContinuity(base).head(A0B0)).toEqual(head);
+    const w = decide("w", A1B0, "A2", "missing");
+    const model = deriveContinuity([...base, w]);
+    expect(model.head(A0B0)).toEqual({ status: "conflict", facts: ["w"] });
+    expect(model.status("w")).toEqual({ status: "unresolved", missing: ["missing"] });
+    expect(model.localDecisions(A1B1).map((record) => record.id)).toEqual(["w"]);
+    for (const onward of [decide("w", A1B0, "A2"), decide("w", A1B0, "A2", "source")]) {
+      expect(deriveContinuity([...base, onward, { ...onward, decision: "decision-other" }]).head(A0B0)).toEqual({ status: "conflict", facts: ["w"] });
+    }
+    const ambiguousSource = [decide("w", A1B0, "A2", "source"), observe("source", A1B0), observe("source", A1B0, null, "receipt-other")];
+    expect(deriveContinuity([...base, ...ambiguousSource]).head(A0B0)).toEqual({ status: "conflict", facts: ["w"] });
+    const scope = rotate("scope", A1B0, "B1");
+    expect(deriveContinuity([...base, w, scope]).head(A0B0)).toEqual({ status: "unresolved", waiting: ["w"], missing: ["missing"] });
+    expect(deriveContinuity([...base, ...ambiguousSource, scope]).head(A0B0)).toEqual({ status: "conflict", facts: ["source"] });
+    expect(deriveContinuity([...base, { ...w, at: A1B1 }]).head(A0B0)).toEqual({ status: "unresolved", waiting: ["w"], missing: ["missing"] });
+    expect(deriveContinuity([...base, w, { ...collided, id: "entry" }]).head(A0B0)).toEqual({ status: "unresolved", waiting: ["w"], missing: ["missing"] });
+    expect(deriveContinuity([...base, w, observe("missing", A1B0)]).head(A0B0)).toEqual({ status: "conflict", facts: ["d", "missing", "o", "p", "w"] });
+    const complete = deriveContinuity([...base, w, observe("missing", A1B0), scope]);
+    expect(complete.head(A0B0)).toEqual({ status: "head", channel: A2B1, support: ["i", "missing", "o", "p", "scope", "w"] });
+    expect(complete.path(A0B0, A2B1).status).toBe("path");
+    expect(deriveContinuity([...base, w, observe("oh", A1B1), decide("x", A1B1, "A2", "oh")]).head(A0B0)).toEqual({ status: "head", channel: A2B1, support: ["i", "o", "oh", "p", "x"] });
+    expect(deriveContinuity([...base, w, decide("other", A1B1, "A3", "another-missing")]).head(A0B0)).toEqual({ status: "conflict", facts: ["other", "w"] });
+    expect(deriveContinuity([...base, localEnd("end", A1B0)]).head(A0B0)).toEqual({ status: "conflict", facts: ["end"] });
+    sameWhateverTheOrder([...base, w], [A0B0, A1B0, A1B1]);
+  });
+
   it("cannot hide an alternative a variant creates", () => {
     const p2 = rotate("p2", A0B0, "B1", "receipt-2");
     const model = deriveContinuity([p1, p1other, p2]);

@@ -738,6 +738,16 @@ positive history remains diagnostic and cannot override a relevant conflict
 or establish an ended result. If such scoping is the only way to resolve a
 known terminal claim, report the ambiguity rather than an affirmative ending.
 
+A saved rotation of the query's local endpoint at another pair of its
+peer-only context is answered for alike, whether or not that pair lies on a
+usable forward path of the query. The same change made by a usable link in the
+query's usable context covers it as provenance. Otherwise it is an unresolved
+forward choice when usable opposite-side links connect its pair to a usable
+forward pair of the query, and an ambiguity to report when only diagnostic
+positive history does. Neither case yields an affirmative head; a branch that
+rejoins the usable history through the joins it implies still owes an answer
+for the choices saved on it.
+
 Model-level unresolved results describe reference or confirmation gaps visible
 to the core. Material and proof-verification gaps remain separate diagnostics
 outside that input. Every result may change with the next snapshot.
