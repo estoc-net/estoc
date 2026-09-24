@@ -44,6 +44,11 @@ permits at most one compatible intent per execution.
 
 Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 
+The [continuity domain package draft](continuity-domain-design.md) explores
+the boundary between normalized endpoint evidence, pure continuity queries
+and agent operations. It is an informative proposal, outside the current
+phase-1 contract.
+
 <a id="reading-paths"></a>
 
 ## Reading paths
