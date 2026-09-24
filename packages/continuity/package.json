@@ -1,0 +1,55 @@
+{
+  "name": "@estoc/continuity",
+  "version": "0.1.0",
+  "description": "Continuity between oriented DID pairs: a pure model that merges normalized facts (peer transitions, local decisions, address observations) under a CRDT-like union and derives heads, paths, confirmation and conflicts without choosing winners; and a from-prior module that verifies, binds and creates DIDComm v2 from_prior proofs under a did:peer:4 + Ed25519 profile.",
+  "license": "Apache-2.0",
+  "author": "merely",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/estoc-net/estoc.git",
+    "directory": "packages/continuity"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./from-prior": {
+      "types": "./dist/from-prior/index.d.ts",
+      "default": "./dist/from-prior/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "prepublishOnly": "pnpm test && pnpm build",
+    "dev": "tsc --watch --preserveWatchOutput"
+  },
+  "dependencies": {
+    "@estoc/did-peer": "workspace:^",
+    "@scure/base": "^1.2.0",
+    "canonicalize": "^5.1.0",
+    "jose": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "~5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "estoc",
+    "didcomm",
+    "from_prior",
+    "did-rotation",
+    "continuity",
+    "crdt"
+  ]
+}
