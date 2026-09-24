@@ -44,11 +44,12 @@ permits at most one compatible intent per execution.
 
 Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 
-The [continuity domain package draft](continuity-domain-design.md) explores
-shared `from_prior` proof verification, creation and context binding alongside
-a pure continuity model. It defines package inputs, queries and agent
-responsibilities, including a [replica merge contract](continuity-domain-design.md#merge-contract),
-as an informative proposal outside the current phase-1 contract.
+The [`@estoc/continuity` package](../../packages/continuity/README.md)
+implements shared `from_prior` proof verification, creation and context
+binding alongside a pure continuity model. Its README defines the package
+inputs, queries, replica merge contract and host responsibilities. The
+package is not yet consumed by the vault and sits outside the current
+phase-1 contract.
 
 <a id="reading-paths"></a>
 

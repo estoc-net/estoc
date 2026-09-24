@@ -20,65 +20,134 @@ import { closure, Contexts, Graph, type Edge, type Link, type Replaces } from ".
 import { bucketsOf } from "./merge.js";
 import type { AddressObservation, Change, Channel, ContinuityFact, Did, FactId, LocalDecision, PeerTransition } from "./types.js";
 
+/** Which endpoint a change replaces: `peer` for the peer's rotation or ending, `local` for ours. */
 export type Side = Replaces;
 
 export type Conflict =
+  /** two different changes of one endpoint claimed in one context, a saved decision counted whether or not it is confirmed yet */
   | { kind: "competing-changes"; side: Side; context: readonly Channel[]; changes: readonly { change: Change; facts: readonly FactId[] }[] }
+  /** links that lead back to a pair they left */
   | { kind: "cycle"; channels: readonly Channel[]; facts: readonly FactId[] }
+  /** a join that would pair a DID with itself */
   | { kind: "identity-collision"; channels: readonly Channel[]; facts: readonly FactId[] }
+  /** one fact ID carrying more than one value; every variant is kept and none is chosen */
   | { kind: "identity-conflict"; id: FactId; variants: readonly ContinuityFact[] };
 
+/**
+ * The answer to `head`, in the order the variants take precedence: a
+ * conflict reaching the pair outranks an ending, an ending outranks
+ * choices still waiting, and only then is a unique usable forward pair
+ * the head. A known forward change without usable continuation never
+ * falls back to the old pair.
+ */
 export type HeadResult =
+  /** the unique pair the usable forward links lead to, the queried pair itself when none leads away; `support` re-derives those links */
   | { status: "head"; channel: Channel; support: readonly FactId[] }
+  /** an unambiguous ending of either side applies to the pair through usable links */
   | { status: "ended"; endings: readonly FactId[] }
+  /** saved rotations of the endpoint are not established yet: `waiting` names them, `missing` the exact references they need that are not here */
   | { status: "unresolved"; waiting: readonly FactId[]; missing: readonly FactId[] }
+  /** a conflict reaches the pair, or a claim reaches it only through history no usable link vouches for; `facts` are the claims involved */
   | { status: "conflict"; facts: readonly FactId[] }
+  /** no fact mentions the pair, not even as a successor */
   | { status: "no-evidence" };
 
+/** What a fact contributes to the snapshot; a change record and an ending record carry it beside the fact. */
 export type FactStatus =
+  /** no fact has this ID */
   | { status: "unknown" }
+  /** the ID has more than one value */
   | { status: "identity-conflict"; variants: readonly ContinuityFact[] }
+  /** the exact reference it names is of the wrong kind or the wrong pair, so it can never link */
   | { status: "invalid"; because: string }
+  /** an exact reference it names is not in the snapshot; another replica may supply it */
   | { status: "unresolved"; missing: readonly FactId[] }
+  /** its pair, its successor pair or a reference it names is in conflict */
   | { status: "conflict"; facts: readonly FactId[]; because: string }
+  /** a rotation whose predecessor address no usable observation confirms yet */
   | { status: "waiting"; because: string }
+  /** it links or witnesses with authority; `support` is the fact and everything its authority rests on */
   | { status: "usable"; support: readonly FactId[] };
 
 export type PathResult =
+  /** one directed usable path, the queried pair first; `support` re-derives every link on it */
   | { status: "path"; channels: readonly Channel[]; support: readonly FactId[] }
+  /** no usable path preserves the roles from one pair to the other */
   | { status: "none" }
+  /** a conflict reaches either end */
   | { status: "conflict"; facts: readonly FactId[] };
 
+/** One observation that confirms the address, with a complete witness: the observation, the transition it carried and the usable peer path to the observer. */
 export type Confirmation = { id: FactId; at: Channel; support: readonly FactId[] };
 
 export type ConfirmationResult =
+  /** the usable observations by which the peer, or a usable successor of it, wrote to exactly this local DID */
   | { status: "confirmed"; observations: readonly Confirmation[] }
+  /** no such observation is usable; `unusable` lists the observations that would confirm it but stand on ambiguous or conflicted evidence */
   | { status: "unconfirmed"; unusable: readonly FactId[] }
+  /** a conflict reaches the pair */
   | { status: "conflict"; facts: readonly FactId[] };
 
+/** A rotation or ending as it was claimed, `to` the successor pair it names or null for an ending. */
 export type ChangeRecord = { id: FactId; at: Channel; change: Change; to: Channel | null; status: FactStatus };
 
+/**
+ * A link of the positive graph: every rotation the evidence shows, and
+ * every join two rotations imply, whether or not an operation may rely
+ * on it. `derived` marks a join; `usable` marks a link the usable graph
+ * has too.
+ */
 export type PositiveLink = { from: Channel; to: Channel; replaces: Side; support: readonly FactId[]; derived: boolean; usable: boolean };
 
 export type EndingRecord = { id: FactId; at: Channel; side: Side; status: FactStatus };
 
+/** Everything the positive graph connects to a channel, and the two contexts the channel is in. */
 export type History = { links: readonly PositiveLink[]; endings: readonly EndingRecord[]; localContext: readonly Channel[]; peerContext: readonly Channel[] };
 
+/**
+ * Deterministic queries over one snapshot. Every answer is relative to
+ * the facts supplied: the model cannot say that unknown history does
+ * not exist, and more facts may expose a conflict that removes an
+ * answer given before. Answers preserve support rather than only a
+ * verdict, and the support of an affirmative answer re-derives it under
+ * the same profile on its own. Nothing here authorizes an operation:
+ * whether a head may be written to, or a path admits a message, is the
+ * host's decision under its own policy.
+ */
 export interface Continuity {
   /** the facts as derived over, in canonical order, every variant of a repeated ID included */
   readonly facts: readonly ContinuityFact[];
-  /** the unique usable pair forward changes lead to, the channel itself when none is established */
+  /**
+   * The unique usable pair the forward changes of `channel` lead to.
+   * Saved rotations of the endpoint anywhere in the pair's positive
+   * context are answered for: one the same usable change covers is
+   * provenance, one at a pair usable links connect is `unresolved`, and
+   * one only diagnostic history connects is `conflict`. A collided or
+   * waiting claim of a change that independent unambiguous facts
+   * establish anyway does not block the head.
+   */
   head(channel: Channel): HeadResult;
-  /** the changes of that side's endpoint in the channel's context, whatever their status */
+  /** the changes of that side's endpoint across the channel's context, whatever their status; a supersession check reads these */
   changes(channel: Channel, side: Side): readonly ChangeRecord[];
-  /** a directed usable path preserving roles, and what supports it */
+  /** one directed usable path from one pair to the other, preserving roles; alternative paths are not enumerated */
   path(from: Channel, to: Channel): PathResult;
-  /** has the peer, or a usable successor of it, written to exactly this local DID */
+  /**
+   * Whether the peer, or a usable successor of it, has written to
+   * exactly this local DID. Each observation comes with one complete
+   * witness; alternative paths to the same observation are not
+   * enumerated. Confirms nothing about any other local address.
+   */
   confirmation(localDid: Did, peerDid: Did): ConfirmationResult;
-  /** every positive link connected to the channel, the endings in its contexts and the contexts themselves */
+  /** every positive link connected to the channel, the endings in its contexts and the contexts themselves; connectivity here is history, not current usability */
   history(channel: Channel): History;
-  /** every decision rotating away from the channel's local DID, or ending there, in its peer-only context */
+  /**
+   * Every saved decision rotating away from the channel's local DID, or
+   * ending there, across its peer-only context. Only decisions in the
+   * snapshot: a saved choice the host has not projected yet is invisible
+   * here, so an empty answer alone does not clear allocating a successor.
+   */
   localDecisions(channel: Channel): readonly ChangeRecord[];
+  /** every domain conflict with its scope, then every identity conflict; none is resolved and no history is dropped */
   conflicts(): readonly Conflict[];
   status(factId: FactId): FactStatus;
 }
@@ -450,23 +519,10 @@ class Model implements Continuity {
   }
 
   /**
-   * Conflict reaching the pair outranks everything: a fork is a fork
-   * whether its branches are confirmed or not, and a pair that only a
-   * conflicted link leads to is in that conflict. Then an established
-   * ending, then decisions still waiting, then the unique end of the
-   * usable forward paths. A pair no fact establishes but a waiting
-   * decision names as its successor is unresolved, not unknown.
-   * A collided or waiting claim of a change that independent facts
-   * establish usably anyway is provenance, not an obstacle: the same
-   * change made by a usable link at any pair of the usable context, or
-   * the same side's ending in the usable context by an unambiguous
-   * ending. Authority stops at usable links: a claim at a pair that
-   * only diagnostic history connects to the query may or may not apply
-   * to it, and is reported as the ambiguity it is. Saved rotations of
-   * the endpoint are answered for across the whole positive context of
-   * each usable pair, not only at the pair itself: one the same change
-   * covers is provenance, one at a pair usable links connect is still
-   * pending, and one only diagnostic history connects is that ambiguity.
+   * A pair that only a conflicted link leads to is in that conflict. A
+   * branch that only provenance leads to either rejoins the usable
+   * history through the joins it implies, or is a branch of its own and
+   * is reported as such.
    */
   head(channel: Channel): HeadResult {
     const conflict = new Set<FactId>();
@@ -492,7 +548,6 @@ class Model implements Continuity {
     const usableReach = this.usable.reach(channel, "any");
     for (const current of reach.channels()) {
       if (!usableReach.has(current)) {
-        // a branch only provenance leads to rejoins the usable history through the joins it implies, or it is a branch of its own
         if (!this.positive.hasOutgoing(current)) for (const edge of this.positive.to(current)) for (const id of edge.support) conflict.add(id);
         continue;
       }
