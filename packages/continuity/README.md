@@ -24,6 +24,10 @@ for what each query answers in each situation, and
 [`from-prior.test.ts`](https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts)
 for verifying, binding and creating proofs with a host-held key.
 
+The repository's [illustrated guide](docs/guide.md) walks through joins,
+confirmation, contexts, conflicts, endings and proof boundaries, with
+diagrams and links to the corresponding tests.
+
 ## Where it sits
 
 ```
