@@ -117,6 +117,10 @@ class Model implements Continuity {
   private readonly usable: Graph;
   private readonly usableAdmitted: ReadonlyMap<FactId, readonly FactId[]>;
   private readonly usableWriters: Writers;
+  private readonly usableLocal: Contexts;
+  private readonly usablePeer: Contexts;
+  /** the usable links by the side they replace and the successor DID, for finding the same change made at another pair of a context */
+  private readonly usableChanges = new Map<string, Edge[]>();
 
   constructor(facts: readonly ContinuityFact[]) {
     const buckets = bucketsOf(facts);
@@ -171,6 +175,14 @@ class Model implements Continuity {
     );
     this.usable = usable.graph;
     this.usableAdmitted = new Map([...usable.admitted].map(([link, support]) => [link.id, support]));
+    this.usableLocal = new Contexts(this.usable, "local");
+    this.usablePeer = new Contexts(this.usable, "peer");
+    for (const edge of this.usable.edges()) {
+      const key = changeIndexKey(edge.replaces, edge.replaces === "local" ? edge.to.localDid : edge.to.peerDid);
+      let edges = this.usableChanges.get(key);
+      if (edges === undefined) this.usableChanges.set(key, (edges = []));
+      edges.push(edge);
+    }
   }
 
   private *all(): IterableIterator<Entry> {
@@ -299,6 +311,18 @@ class Model implements Continuity {
     return this.conflictsAt.has(channelKey(channel));
   }
 
+  /** The context of a change of `side` at `channel` as usable links connect it: the pairs the change applies to with authority. */
+  private usableContextRoot(channel: Channel, side: Side): string {
+    return (side === "peer" ? this.usableLocal : this.usablePeer).root(channelKey(channel));
+  }
+
+  /** Whether a usable link makes the same change, of `side` to `successor`, at some pair of the usable context of `at`. */
+  private usablyEstablished(side: Side, at: Channel, successor: Did): boolean {
+    const root = this.usableContextRoot(at, side);
+    for (const edge of this.usableChanges.get(changeIndexKey(side, successor)) ?? []) if (this.usableContextRoot(edge.from, side) === root) return true;
+    return false;
+  }
+
   private contextOf(channel: Channel, side: Side): Channel[] {
     const contexts = side === "peer" ? this.local : this.peer;
     const root = contexts.root(channelKey(channel));
@@ -408,8 +432,11 @@ class Model implements Continuity {
    * decision names as its successor is unresolved, not unknown.
    * A collided or waiting claim of a change that independent facts
    * establish usably anyway is provenance, not an obstacle: the same
-   * rotation reached by a usable link, the same side's ending in the
-   * same context by an unambiguous ending.
+   * change made by a usable link at any pair of the usable context, or
+   * the same side's ending in the usable context by an unambiguous
+   * ending. Authority stops at usable links: a claim at a pair that
+   * only diagnostic history connects to the query may or may not apply
+   * to it, and is reported as the ambiguity it is.
    */
   head(channel: Channel): HeadResult {
     const conflict = new Set<FactId>();
@@ -432,28 +459,35 @@ class Model implements Continuity {
     if (conflict.size > 0) return { status: "conflict", facts: sortedIds(conflict) };
     const endings = new Set<FactId>();
     const support = new Set<FactId>();
+    const usableReach = this.usable.reach(channel, "any");
     for (const current of reach.channels()) {
+      if (!usableReach.has(current)) {
+        // a branch only provenance leads to rejoins the usable history through the joins it implies, or it is a branch of its own
+        if (!this.positive.hasOutgoing(current)) for (const edge of this.positive.to(current)) for (const id of edge.support) conflict.add(id);
+        continue;
+      }
       for (const edge of this.positive.from(current)) {
         const usable = this.usable.edge(edge.from, edge.to);
-        if (usable === undefined) for (const id of edge.support) conflict.add(id);
-        else for (const id of usable.support) support.add(id);
+        if (usable !== undefined) for (const id of usable.support) support.add(id);
+        else if (!this.usablyEstablished(edge.replaces, current, edge.replaces === "local" ? edge.to.localDid : edge.to.peerDid)) for (const id of edge.support) conflict.add(id);
       }
       for (const side of ["peer", "local"] as const) {
         const found = this.endingsAt(current, side);
-        const independent = found.filter((entry) => !entry.tainted);
-        for (const entry of independent) endings.add(entry.fact.id);
-        if (independent.length === 0) for (const entry of found) conflict.add(entry.fact.id);
+        const root = this.usableContextRoot(current, side);
+        const affirmative = found.filter((entry) => !entry.tainted && this.usableContextRoot(entry.fact.at, side) === root);
+        for (const entry of affirmative) endings.add(entry.fact.id);
+        if (affirmative.length === 0) for (const entry of found) conflict.add(entry.fact.id);
       }
       for (const entry of this.entriesAt.get(channelKey(current)) ?? []) {
         if (entry.fact.kind !== "local-decision" || entry.fact.change.kind !== "rotate") continue;
-        if (this.usable.edge(entry.fact.at, successorChannel(entry.fact)!) !== undefined) continue;
+        if (this.usablyEstablished("local", current, entry.fact.change.successor)) continue;
         this.pendingDecision(entry, conflict, waiting, missing);
       }
     }
     if (conflict.size > 0) return { status: "conflict", facts: sortedIds(conflict) };
     if (endings.size > 0) return { status: "ended", endings: sortedIds(endings) };
     if (waiting.size > 0) return { status: "unresolved", waiting: sortedIds(waiting), missing: sortedIds(missing) };
-    const ends = [...reach.channels()].filter((current) => !this.positive.hasOutgoing(current));
+    const ends = [...usableReach.channels()].filter((current) => !this.usable.hasOutgoing(current));
     if (ends.length !== 1) return { status: "conflict", facts: sortedIds(support) };
     return { status: "head", channel: ends[0]!, support: sortedIds(support) };
   }
@@ -586,6 +620,10 @@ class Model implements Continuity {
       }
     }
   }
+}
+
+function changeIndexKey(side: Side, successor: Did): string {
+  return `${side}\u0000${successor}`;
 }
 
 function firstChannelOf(conflict: Conflict): Channel {

@@ -157,10 +157,22 @@ export function inspectFromPrior(jwt: string): UnverifiedFromPrior {
   if (typeof header.alg !== "string") throw form("the protected header names an alg");
   if (typeof header.kid !== "string") throw form("the protected header names a kid");
   if (header.typ !== undefined && typeof header.typ !== "string") throw form("typ is a string");
+  checkPayloadEncoding(header);
   return { header: { alg: header.alg, typ: header.typ, kid: header.kid }, claims: claimsOf(payload) };
 }
 
-/** The claims of a decoded payload, in the shape the profile reads them. */
+/**
+ * RFC 7797 lets a JWS declare an unencoded payload with `b64`, requires
+ * `crit` to list it, and forbids `false` for a JWT (§6, §7). The library
+ * reads `b64` only when `crit` names it, so a token that omits `crit`
+ * would otherwise be verified as if its payload were encoded.
+ */
+function checkPayloadEncoding(header: Record<string, unknown>): void {
+  if (!Object.hasOwn(header, "b64")) return;
+  if (header["b64"] !== true) throw form("b64, when present, is true: a JWT's payload is base64url-encoded");
+  if (!Array.isArray(header["crit"]) || !header["crit"].includes("b64")) throw form("crit lists b64 when the header has it");
+}
+
 function claimsOf(payload: JWTPayload): UnverifiedFromPrior["claims"] {
   if (typeof payload.iss !== "string") throw form("iss is a string");
   if (Object.hasOwn(payload, "sub") && typeof payload.sub !== "string") throw form("sub, when present, is a string");

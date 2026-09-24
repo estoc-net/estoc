@@ -94,7 +94,7 @@ package constraints; they do not describe every JWT or DIDComm implementation.
 
 | Item | Rule |
 | --- | --- |
-| Container and signature | A compact signed JWT with a base64url-encoded JSON payload; `alg` is `EdDSA`, using an Ed25519 key authorized for issuer authentication. Detached or unencoded payloads, nested tokens and unsupported critical headers are not supported. |
+| Container and signature | A compact signed JWT with a base64url-encoded JSON payload; `alg` is `EdDSA`, using an Ed25519 key authorized for issuer authentication. Detached or unencoded payloads, nested tokens and unsupported critical headers are not supported. A present `b64` header must be the Boolean `true`, and its protected `crit` list must include `b64`; reject `false` and non-Boolean values even when `crit` omits them. |
 | `kid` | Required; its DID portion identifies the issuer and its fragment selects an authorized verification method from the validated issuer material. |
 | `iss` and `sub` | `iss` identifies the predecessor. Rotation has a distinct DID in `sub`; ending omits `sub`. Null and empty strings are not omission. |
 | `aud` | The ending extension accepts one recipient DID string. A standard basic ending can omit it and still verify. This initial profile does not accept `aud` on rotations or an audience array. Binding is defined under [relationship ending](#ending). |
@@ -519,6 +519,17 @@ The collided fact's status remains an identity conflict, and exact references
 to it remain unusable; an independent result does not repair that identity.
 It also cannot conceal any variant declaring a different continuation.
 
+For this independent-support rule, equivalent changes have the same side,
+predecessor endpoint and successor or ending, in the same opposite-side
+context. Their facts need not name the identical pair. Applying support from
+another pair requires an opposite-side connection established entirely by
+usable links; a shared component in diagnostic positive history alone is
+insufficient. A complete independent usable route to the head can cover an
+equivalent ambiguous or waiting choice without making that choice, its exact
+references, or every diagnostic edge usable. Continue checking all known
+branches for different changes and unresolved onward choices; this rule does
+not authorize discarding a branch to select a preferred head.
+
 Scope a domain conflict using the actual variant claims and their opposite-side
 context. An ID appearing in a conflict does not make all other variants' pairs
 members of that domain conflict. An identity conflict is retained globally by
@@ -639,6 +650,8 @@ Implementation and integration checks must cover:
 - Same-ID variants arriving in either order or through a third replica; all variants and conflict results survive retransmission, with no target preference.
 - Collision propagation through exact source references, observations and joins; independent support for an uncontested change remains usable, without predecessor fallback or hidden alternatives.
 - Independently supported local rotations and endings surviving an equivalent collided claim; distinct variants in unrelated contexts cannot spread one context's fork into the other.
+- Equivalent changes at different pairs in one usable opposite-side context, with a complete independent route to the same head; the ambiguous or waiting facts retain their own diagnostics.
+- Ending applicability through usable opposite-side links, contrasted with a context connected only by ambiguous links; an unambiguous ending in the latter does not supply independent scope evidence.
 - Separate material arrival, pending dependencies and newly contradicted sources; cached verification results cannot conceal the merged evidence.
 - Opposite-side rotations forming a supported join, concurrent same-side rotations producing conflict, and ending competing with rotation regardless of arrival order.
 - Equal final views after hosts have the same accepted sources, evidence and profile, while preserving their different historical snapshots and recorded decisions.
@@ -716,6 +729,14 @@ address confirmation, and `no-evidence` never authorizes successor allocation.
 An ending and rotation of the same side in one context are competing choices,
 including an unconfirmed local rotation. A valid ending can take precedence
 over a waiting opposite-side rotation: there is no continuing joined head.
+For an ending asserted at another pair, an established ending requires an
+unambiguous ending fact and an opposite-side connection to a usable forward
+pair of the query, with every link and its prerequisites usable. The connection
+may be traversed in either direction to establish context membership; it does
+not create a reverse rotation path. An ending scoped only through ambiguous
+positive history remains diagnostic and cannot override a relevant conflict
+or establish an ended result. If such scoping is the only way to resolve a
+known terminal claim, report the ambiguity rather than an affirmative ending.
 
 Model-level unresolved results describe reference or confirmation gaps visible
 to the core. Material and proof-verification gaps remain separate diagnostics

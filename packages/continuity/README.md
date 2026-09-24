@@ -90,9 +90,13 @@ A conflict's scope is its context and the successors the claims in that
 context name; a variant of the same ID claiming something in another
 context is a different claim and stays out of it. A collided or waiting
 claim of a change that independent unambiguous facts establish anyway
-does not block the head: the same rotation reached by a usable link, or
-the same side's ending in the same context by an unambiguous ending, is
-the head, and the collision stays a diagnostic on that fact.
+does not block the head: the same change made by a usable link at any
+pair of the usable context, or the same side's ending in that context by
+an unambiguous ending, is the head, and the collision stays a diagnostic
+on that fact. Authority stops at usable links: a claim at a pair that
+only diagnostic history connects to the query, such as an ending beyond
+a collided rotation, may or may not apply to it and is reported as
+`conflict`, never applied.
 
 ## from_prior
 
@@ -109,7 +113,9 @@ The supported profile is did:peer:4 issuers, subjects and audiences,
 `exp` or `nbf`: the profile evaluates no validity window, and
 verification consults no clock. Creation writes `typ: JWT`; reception
 takes `typ` as the optional media type it is, accepting its absence or
-`JWT` and `application/jwt` in any case. DID equivalence is the did:peer:4 short
+`JWT` and `application/jwt` in any case. A `b64` header, when present,
+is `true` and listed in `crit`, as RFC 7797 requires of a JWT. DID
+equivalence is the did:peer:4 short
 form; presented spellings are kept beside it. The issuer evidence is the
 issuer's long-form DID as the host retained it: a did:peer:4 is its own
 document, so the signing key is taken from the content the DID's hash

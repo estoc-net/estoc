@@ -435,6 +435,65 @@ describe("identity conflicts", () => {
     sameWhateverTheOrder([here, elsewhere, fork, independent], [A0B0, A0B1, X0Y0, X0Y1]);
   });
 
+  it("applies an ending at another pair only through usable opposite-side links, and reports an ambiguous scope instead of ending", () => {
+    for (const side of ["local", "peer"] as const) {
+      const link = side === "local" ? rotate("p", A0B0, "B1") : decide("d", A0B0, "A1");
+      const linkTwin = link.kind === "peer-transition" ? { ...link, receipt: "receipt-other" } : { ...link, decision: "decision-other" };
+      const there = side === "local" ? A0B1 : A1B0;
+      const end = side === "local" ? localEnd : peerEnd;
+      const e = end("e", there);
+      const eTwin = e.kind === "peer-transition" ? { ...e, receipt: "receipt-other" } : { ...e, decision: "decision-other" };
+      const facts = [...(side === "peer" ? [observe("o0", A0B0)] : []), link, linkTwin, observe("o1", there), e, eTwin, end("independent", A0B0)];
+      const model = deriveContinuity(facts);
+      expect(model.head(there)).toEqual({ status: "conflict", facts: ["e", "independent"] });
+      expect(model.path(A0B0, there)).toEqual({ status: "none" });
+      expect(model.status("independent")).toEqual({ status: "usable", support: ["independent"] });
+      expect(model.history(there).endings.map((ending) => ending.id)).toEqual(["e", "e", "independent"]);
+      expect(deriveContinuity(facts.filter((fact) => fact.id !== "e")).head(there)).toEqual({ status: "conflict", facts: ["independent"] });
+      expect(deriveContinuity(facts.filter((fact) => fact.id !== link.id)).head(there)).toEqual({ status: "conflict", facts: ["e"] });
+      const scoped = deriveContinuity([...facts, { ...link, id: "scope" }]);
+      expect(scoped.head(there)).toEqual({ status: "ended", endings: ["independent"] });
+      expect(scoped.path(A0B0, there).status).toBe("path");
+      expect(deriveContinuity([...facts, end("direct", there)]).head(there)).toEqual({ status: "ended", endings: ["direct"] });
+      const reversed = deriveContinuity([...facts].reverse());
+      expect(view(reversed, [A0B0, there], facts.map((fact) => fact.id))).toEqual(view(model, [A0B0, there], facts.map((fact) => fact.id)));
+    }
+  });
+
+  it("takes the same change made usably at another pair of the context as provenance for a collided or waiting claim", () => {
+    for (const side of ["local", "peer"] as const) {
+      const opposite = side === "local" ? rotate("opposite", A0B0, "B1") : decide("opposite", A0B0, "A1");
+      const other = side === "local" ? A0B1 : A1B0;
+      const collided = side === "local" ? decide("collided", A0B0, "A1") : rotate("collided", A0B0, "B1");
+      const twin = collided.kind === "peer-transition" ? { ...collided, receipt: "receipt-other" } : { ...collided, decision: "decision-other" };
+      const independent = side === "local" ? decide("independent", other, "A1") : rotate("independent", other, "B1");
+      const o0 = observe("o0", A0B0);
+      const o1 = observe("o1", other);
+      const base = [o0, o1, opposite, independent];
+      const model = deriveContinuity([...base, collided, twin]);
+      const support = side === "local" ? ["independent", "o1", "opposite"] : ["independent", "o0", "opposite"];
+      expect(model.head(A0B0)).toEqual({ status: "head", channel: A1B1, support });
+      expect(model.head(A0B0)).toEqual(deriveContinuity(base).head(A0B0));
+      expect(model.path(A0B0, A1B1)).toEqual({ status: "path", channels: [A0B0, other, A1B1], support });
+      expect(model.conflicts()).toEqual([{ kind: "identity-conflict", id: "collided", variants: [collided, twin] }]);
+      expect(model.status("independent")).toMatchObject({ status: "usable" });
+      expect(model.head(side === "local" ? A1B0 : A0B1).status).toBe("conflict");
+      const fork = { ...independent, change: { kind: "rotate", successor: side === "local" ? "A2" : "B2" } } as const;
+      expect(deriveContinuity([o0, o1, opposite, fork, collided, twin]).conflicts()).toMatchObject([{ kind: "competing-changes", side }, { kind: "identity-conflict" }]);
+      expect(deriveContinuity([o0, o1, opposite, fork, collided, twin]).head(A0B0).status).toBe("conflict");
+      expect(deriveContinuity([o0, o1, independent, collided, twin]).head(A0B0).status).toBe("conflict");
+      sameWhateverTheOrder([...base, collided, twin], [A0B0, other, A1B1]);
+    }
+    const p = rotate("p", A0B0, "B1");
+    const o = observe("o", A0B1);
+    const independent = decide("independent", A0B1, "A1");
+    const waiting = decide("d", A0B0, "A1", "missing");
+    const covered = deriveContinuity([p, o, independent, waiting]);
+    expect(covered.head(A0B0)).toEqual({ status: "head", channel: A1B1, support: ["independent", "o", "p"] });
+    expect(covered.status("d")).toEqual({ status: "unresolved", missing: ["missing"] });
+    expect(deriveContinuity([p, o, waiting]).head(A0B0)).toEqual({ status: "unresolved", waiting: ["d"], missing: ["missing"] });
+  });
+
   it("cannot hide an alternative a variant creates", () => {
     const p2 = rotate("p2", A0B0, "B1", "receipt-2");
     const model = deriveContinuity([p1, p1other, p2]);

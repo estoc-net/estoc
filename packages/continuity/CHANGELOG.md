@@ -16,4 +16,8 @@ An ending names no source. A collided or waiting claim of a change
 that independent facts establish usably does not block the head; a
 fork's scope follows the claims made in its context, not every variant
 of an ID involved. Path searches keep one parent edge per channel and
-rebuild a path on demand. Reception takes `typ` as optional.
+rebuild a path on demand. Reception takes `typ` as optional. The same
+change made usably at any pair of the usable context covers a collided
+or waiting claim of it; an ending at another pair applies only through
+usable opposite-side links, and one reached only through diagnostic
+history answers `conflict`. A `b64` header is `true` and critical.

@@ -46,6 +46,10 @@ export class Reach {
     return true;
   }
 
+  has(channel: Channel): boolean {
+    return this.reached.has(channelKey(channel));
+  }
+
   /** every channel reached, the start first, in the order they were reached */
   *channels(): IterableIterator<Channel> {
     for (const { channel } of this.reached.values()) yield channel;

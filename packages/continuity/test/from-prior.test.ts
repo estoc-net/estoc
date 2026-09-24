@@ -199,6 +199,20 @@ describe("verify", () => {
     expect((await failure(verifyFromPrior(otherKey, b0.document))).failure).toBe("signature");
   });
 
+  it("takes b64 as RFC 7797 has it: absent, or true and listed in crit", async () => {
+    const jwt = await rotation(b0, b1);
+    const [, p] = segments(jwt);
+    const signed = (header: Record<string, unknown>) => {
+      const input = `${encode({ alg: "EdDSA", typ: "JWT", kid: b0.kid, ...header })}.${p}`;
+      return `${input}.${base64urlnopad.encode(new Uint8Array(nodeSign(null, new TextEncoder().encode(input), b0.privateKey)))}`;
+    };
+    await expect(verifyFromPrior(signed({ b64: true, crit: ["b64"] }), b0.document)).resolves.toMatchObject({ issuer: { canonical: b0.shortForm } });
+    for (const header of [{ b64: true }, { b64: false }, { b64: false, crit: ["b64"] }, { b64: "no" }, { b64: "no", crit: ["b64"] }, { b64: true, crit: "b64" }]) {
+      expect(() => inspectFromPrior(signed(header))).toThrow(InvalidFromPrior);
+      expect((await failure(verifyFromPrior(signed(header), b0.document))).failure).toBe("form");
+    }
+  });
+
   it("refuses an unencoded payload and unknown critical extensions", async () => {
     const jwt = await rotation(b0, b1);
     const [, p] = segments(jwt);
