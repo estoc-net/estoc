@@ -13,11 +13,16 @@ Two entry points keep proof processing apart from the pure model:
 | `@estoc/continuity` | Validates facts, merges snapshots by union, derives continuity queries | `canonicalize` only |
 | `@estoc/continuity/from-prior` | Inspects, verifies, binds and creates DIDComm v2 `from_prior` proofs | `jose`, `@estoc/did-peer`, `@scure/base` |
 
-The types and JSDoc of the two entry points are the contract; this file
-is the reading order. The tests are the worked examples:
-`test/merge.test.ts` for the merge laws, `test/model.test.ts` for what
-each query answers in each situation, and `test/from-prior.test.ts` for
-verifying, binding and creating proofs with a host-held key.
+The types and JSDoc of the two entry points define the API. This file
+adds what the API cannot express: the evidence each fact must rest on,
+the profile, and the host contract, which are binding on an integrator
+too. The tests in the repository are the worked examples:
+[`merge.test.ts`](https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/merge.test.ts)
+for the merge laws,
+[`model.test.ts`](https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/model.test.ts)
+for what each query answers in each situation, and
+[`from-prior.test.ts`](https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts)
+for verifying, binding and creating proofs with a host-held key.
 
 ## Where it sits
 
@@ -136,8 +141,8 @@ give the same answers from any enumeration order or storage.
 conflict reaches the pair, `ended` when an unambiguous ending applies to
 it, `unresolved` while saved rotations of the endpoint wait for their
 evidence, then `head` with the unique usable forward pair and the
-support that re-derives it. A pair only a waiting decision names as its
-successor is `unresolved`; `no-evidence` is for a pair no fact mentions.
+support of the usable links that lead there. A pair only a waiting
+decision names as its successor is `unresolved`; `no-evidence` is for a pair no fact mentions.
 A known forward change without usable continuation never falls back to
 the old pair.
 
@@ -167,6 +172,15 @@ wrote to exactly that local DID, each with one complete witness.
 joins marked, the endings in scope and both contexts. `localDecisions`,
 `conflicts` and `status` expose what the others summarize. Each result
 type in `src/model.ts` documents its variants.
+
+Support re-derives the usable links an answer asserts, or one
+confirmation, under the same profile. It is not a snapshot that replays
+the whole answer: an unchanged head or a zero-step path has empty
+support, and neither establishes an address observation or a rotation;
+the ending IDs an `ended` answer lists are the assertions, not the
+context that scopes them. No support proves the absence of a conflict or
+a missing reference outside the snapshot. Keep the snapshot, not the
+support, to replay a result.
 
 ### Endings
 
@@ -263,6 +277,12 @@ below is the host's, and the model cannot check it.
   receipts cannot contribute halves of one witness, and a verification
   failure does not become success because another replica reported
   success.
+- **Same revision.** Evaluate an operation's continuity prerequisites
+  and commit its state against the same valid revision of the sources
+  and their projection. When that revision changes before the commit,
+  derive again and evaluate again on the new snapshot; a transaction, a
+  lock or an optimistic version check are all ways to do it. The model
+  carries no database revision and validates nothing at commit time.
 - **History.** The merged present does not reconstruct what a replica
   knew before. A historical question uses the snapshot that replica
   held then, with the verification state and profile of that time;
@@ -289,10 +309,12 @@ below is the host's, and the model cannot check it.
 
 - Endings bind only through this profile's signed audience; a basic
   ending is verified and retained `unbound`, never applied.
-- `path` and `confirmation` return one deterministic witness each and
-  enumerate no alternatives. A policy that needs exhaustive routes needs
-  a richer query; filtering facts out of the input to search for a
-  preferred result can hide a rotation or a conflict.
+- `path` returns one deterministic path. `confirmation` lists every
+  eligible observation, but with one deterministic witness each:
+  alternative paths to the same observation are not enumerated. A
+  policy that needs exhaustive routes needs a richer query; filtering
+  facts out of the input to search for a preferred result can hide a
+  rotation or a conflict.
 - The proof profile refuses `exp` and `nbf`. Supporting them needs an
   explicit evaluation time and a rule for evidence accepted earlier.
 - Usable heads and paths are not monotonic: more evidence can expose a

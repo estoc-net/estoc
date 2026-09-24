@@ -64,7 +64,7 @@ export type FactStatus =
   | { status: "unresolved"; missing: readonly FactId[] }
   /** its pair, its successor pair or a reference it names is in conflict */
   | { status: "conflict"; facts: readonly FactId[]; because: string }
-  /** a rotation whose predecessor address no usable observation confirms yet */
+  /** a rotation whose required confirmation of the predecessor address is not established: no usable observation, or a named source that does not confirm it */
   | { status: "waiting"; because: string }
   /** it links or witnesses with authority; `support` is the fact and everything its authority rests on */
   | { status: "usable"; support: readonly FactId[] };
@@ -83,7 +83,7 @@ export type Confirmation = { id: FactId; at: Channel; support: readonly FactId[]
 export type ConfirmationResult =
   /** the usable observations by which the peer, or a usable successor of it, wrote to exactly this local DID */
   | { status: "confirmed"; observations: readonly Confirmation[] }
-  /** no such observation is usable; `unusable` lists the observations that would confirm it but stand on ambiguous or conflicted evidence */
+  /** no such observation is usable; `unusable` lists the observations to this local DID a usable peer path reaches that are not usable themselves, whatever their status */
   | { status: "unconfirmed"; unusable: readonly FactId[] }
   /** a conflict reaches the pair */
   | { status: "conflict"; facts: readonly FactId[] };
@@ -109,10 +109,15 @@ export type History = { links: readonly PositiveLink[]; endings: readonly Ending
  * the facts supplied: the model cannot say that unknown history does
  * not exist, and more facts may expose a conflict that removes an
  * answer given before. Answers preserve support rather than only a
- * verdict, and the support of an affirmative answer re-derives it under
- * the same profile on its own. Nothing here authorizes an operation:
- * whether a head may be written to, or a path admits a message, is the
- * host's decision under its own policy.
+ * verdict: the support re-derives the usable links asserted, or one
+ * confirmation, under the same profile. It is not a snapshot that
+ * replays the whole answer: an unchanged head or a zero-step path has
+ * empty support, and neither establishes an address observation or a
+ * rotation; the endings an answer lists are assertions, not the context
+ * that scopes them. No support proves the absence of a conflict or a
+ * missing reference outside the snapshot. Nothing here authorizes an
+ * operation: whether a head may be written to, or a path admits a
+ * message, is the host's decision under its own policy.
  */
 export interface Continuity {
   /** the facts as derived over, in canonical order, every variant of a repeated ID included */
