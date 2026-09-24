@@ -63,7 +63,6 @@ function change(value: unknown, where: string): Change {
   throw new InvalidFact(`${where}.kind is rotate or end`);
 }
 
-/** The endpoint a change of this fact replaces: the peer's for a transition, ours for a decision. */
 export function replacedSide(fact: PeerTransition | LocalDecision): "local" | "peer" {
   return fact.kind === "peer-transition" ? "peer" : "local";
 }
@@ -107,6 +106,7 @@ export function validateFact(value: unknown, where = "fact"): ContinuityFact {
       };
       checkSuccessor(fact, where);
       if (fact.source === fact.id) throw new InvalidFact(`${where}: a decision is not its own source`);
+      if (fact.change.kind === "end" && fact.source !== null) throw new InvalidFact(`${where}: an ending confirms no predecessor address, so it names no source`);
       return fact;
     }
     case "address-observed": {

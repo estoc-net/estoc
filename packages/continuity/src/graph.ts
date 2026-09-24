@@ -25,6 +25,11 @@ export interface Link {
   readonly to: Channel;
 }
 
+export interface Reached {
+  readonly channel: Channel;
+  readonly edges: readonly Edge[];
+}
+
 export interface IdentityCollision {
   readonly channels: readonly Channel[];
   readonly support: readonly FactId[];
@@ -34,6 +39,7 @@ export class Graph {
   readonly vertices = new Map<string, Channel>();
   readonly identityCollisions = new Map<string, IdentityCollision>();
   private readonly out = new Map<string, Map<string, Edge>>();
+  private readonly into = new Map<string, Map<string, Edge>>();
   private readonly queue: Edge[] = [];
 
   constructor(private readonly admits: (channel: Channel) => boolean) {}
@@ -55,6 +61,9 @@ export class Graph {
     if (existing === undefined) {
       const edge: Edge = { from, to, replaces, support: new Set(support), derived };
       edges.set(toKey, edge);
+      let inbound = this.into.get(toKey);
+      if (inbound === undefined) this.into.set(toKey, (inbound = new Map()));
+      inbound.set(fromKey, edge);
       this.queue.push(edge);
       return;
     }
@@ -94,6 +103,10 @@ export class Graph {
     return this.out.get(channelKey(channel))?.values() ?? [];
   }
 
+  to(channel: Channel): Iterable<Edge> {
+    return this.into.get(channelKey(channel))?.values() ?? [];
+  }
+
   edge(from: Channel, to: Channel): Edge | undefined {
     return this.out.get(channelKey(from))?.get(channelKey(to));
   }
@@ -106,18 +119,23 @@ export class Graph {
     for (const edges of this.out.values()) yield* edges.values();
   }
 
-  /** The channels forward edges of the given kind reach from `start`, `start` included. */
-  reach(start: Channel, replaces: Replaces | "any"): Map<string, Channel> {
-    const reached = new Map<string, Channel>();
+  /**
+   * Every channel forward edges of the given kind reach from `start`,
+   * `start` included, each with one shortest path to it: breadth first
+   * over edges in canonical order, so the path chosen is the same
+   * whatever order the edges were added.
+   */
+  paths(start: Channel, replaces: Replaces | "any"): Map<string, Reached> {
+    const reached = new Map<string, Reached>([[channelKey(start), { channel: start, edges: [] }]]);
     const frontier = [start];
-    reached.set(channelKey(start), start);
     while (frontier.length > 0) {
-      const channel = frontier.pop()!;
-      for (const edge of this.from(channel)) {
+      const channel = frontier.shift()!;
+      const sofar = reached.get(channelKey(channel))!.edges;
+      for (const edge of [...this.from(channel)].sort((a, b) => compareChannels(a.to, b.to))) {
         if (replaces !== "any" && edge.replaces !== replaces) continue;
         const key = channelKey(edge.to);
         if (reached.has(key)) continue;
-        reached.set(key, edge.to);
+        reached.set(key, { channel: edge.to, edges: [...sofar, edge] });
         frontier.push(edge.to);
       }
     }
@@ -125,25 +143,8 @@ export class Graph {
   }
 
   /** The shortest forward path from `from` to `to` as its edges, empty for the same channel, null when none. */
-  path(from: Channel, to: Channel): Edge[] | null {
-    const target = channelKey(to);
-    const parent = new Map<string, Edge | null>([[channelKey(from), null]]);
-    const frontier = [from];
-    while (frontier.length > 0) {
-      const channel = frontier.shift()!;
-      if (channelKey(channel) === target) {
-        const edges: Edge[] = [];
-        for (let key = target, edge = parent.get(key); edge; key = channelKey(edge.from), edge = parent.get(key)) edges.unshift(edge);
-        return edges;
-      }
-      for (const edge of [...this.from(channel)].sort((a, b) => compareChannels(a.to, b.to))) {
-        const key = channelKey(edge.to);
-        if (parent.has(key)) continue;
-        parent.set(key, edge);
-        frontier.push(edge.to);
-      }
-    }
-    return null;
+  path(from: Channel, to: Channel): readonly Edge[] | null {
+    return this.paths(from, "any").get(channelKey(to))?.edges ?? null;
   }
 
   /**
@@ -206,36 +207,38 @@ export class Graph {
  * every candidate still waiting, so nothing it derives can confirm it;
  * the graph is rebuilt until no candidate is admitted any more. The
  * confirming facts of each admitted candidate are returned with it.
+ * Candidates are told apart as objects, since two variants of one fact
+ * ID are two candidates.
  */
-export function closure(
+export function closure<L extends Link>(
   peerLinks: readonly Link[],
-  candidates: readonly Link[],
+  candidates: readonly L[],
   admits: (channel: Channel) => boolean,
-  confirms: (graph: Graph, candidate: Link) => readonly FactId[] | null
-): { graph: Graph; admitted: Map<FactId, readonly FactId[]>; waiting: Map<FactId, Link> } {
-  const admitted = new Map<FactId, readonly FactId[]>();
-  const waiting = new Map(candidates.map((link) => [link.id, link]));
+  confirms: (graph: Graph, candidate: L) => readonly FactId[] | null
+): { graph: Graph; admitted: Map<L, readonly FactId[]>; waiting: Set<L> } {
+  const admitted = new Map<L, readonly FactId[]>();
+  const waiting = new Set(candidates);
   const build = () => {
     const graph = new Graph(admits);
     for (const link of peerLinks) graph.add(link.from, link.to, "peer", [link.id]);
-    for (const [id, link] of waiting) if (admitted.has(id)) graph.add(link.from, link.to, "local", [id, ...admitted.get(id)!]);
+    for (const [link, support] of admitted) graph.add(link.from, link.to, "local", [link.id, ...support]);
     graph.close();
     return graph;
   };
   let graph = build();
   for (;;) {
     let progressed = false;
-    for (const [id, link] of waiting) {
-      if (admitted.has(id)) continue;
+    for (const link of waiting) {
+      if (admitted.has(link)) continue;
       const support = confirms(graph, link);
       if (support === null) continue;
-      admitted.set(id, support);
+      admitted.set(link, support);
       progressed = true;
     }
     if (!progressed) break;
     graph = build();
   }
-  for (const id of admitted.keys()) waiting.delete(id);
+  for (const link of admitted.keys()) waiting.delete(link);
   return { graph, admitted, waiting };
 }
 

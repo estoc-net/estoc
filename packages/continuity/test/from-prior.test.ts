@@ -1,6 +1,6 @@
 import { createPrivateKey, generateKeyPairSync, sign as nodeSign, type KeyObject } from "node:crypto";
 
-import { encodeLongForm, longToShort, resolveLongForm, resolveShortForm } from "@estoc/did-peer";
+import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import { base58, base64urlnopad } from "@scure/base";
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
@@ -8,27 +8,21 @@ import { describe, expect, it } from "vitest";
 import { deriveContinuity } from "../src/index.js";
 import { bindFromPrior, createFromPrior, FROM_PRIOR_PROFILE, inspectFromPrior, InvalidFromPrior, verifyFromPrior, type IssuerEvidence, type Signer, type VerifiedFromPrior } from "../src/from-prior/index.js";
 
-type Party = { longForm: string; shortForm: string; document: IssuerEvidence; shortDocument: IssuerEvidence; kid: string; privateKey: KeyObject; publicKeyBytes: Uint8Array };
+type Party = { longForm: string; shortForm: string; document: IssuerEvidence; kid: string; privateKey: KeyObject; publicKeyBytes: Uint8Array };
 
-function party(name: string): Party {
+type Input = Record<string, unknown>;
+
+/** A did:peer:4 party whose input document `shape` builds from its key material. */
+function party(name: string, shape: (key: { multikey: string; jwk: Record<string, string>; bytes: Uint8Array }) => Input = (key) => ({ verificationMethod: [{ id: "#key-1", type: "Multikey", publicKeyMultibase: key.multikey }], authentication: ["#key-1"] })): Party {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const publicKeyBytes = base64urlnopad.decode(publicKey.export({ format: "jwk" }).x!);
-  const multibase = `z${base58.encode(new Uint8Array([0xed, 0x01, ...publicKeyBytes]))}`;
+  const multikey = `z${base58.encode(new Uint8Array([0xed, 0x01, ...publicKeyBytes]))}`;
   const input = {
-    verificationMethod: [{ id: "#key-1", type: "Multikey", publicKeyMultibase: multibase }],
-    authentication: ["#key-1"],
+    ...shape({ multikey, jwk: { kty: "OKP", crv: "Ed25519", x: base64urlnopad.encode(publicKeyBytes) }, bytes: publicKeyBytes }),
     service: [{ id: "#service", type: "DIDCommMessaging", serviceEndpoint: { uri: `https://${name}.example`, accept: ["didcomm/v2"] } }],
   };
   const longForm = encodeLongForm(input);
-  return {
-    longForm,
-    shortForm: longToShort(longForm),
-    document: { ref: `doc-${name}`, document: resolveLongForm(longForm) },
-    shortDocument: { ref: `doc-${name}-short`, document: resolveShortForm(longForm) },
-    kid: `${longForm}#key-1`,
-    privateKey,
-    publicKeyBytes,
-  };
+  return { longForm, shortForm: longToShort(longForm), document: { ref: `doc-${name}`, longForm }, kid: `${longForm}#key-1`, privateKey, publicKeyBytes };
 }
 
 const IAT = 1_758_700_000;
@@ -75,7 +69,7 @@ describe("inspect", () => {
     for (const jwt of cases) expect(() => inspectFromPrior(jwt), jwt).toThrow(InvalidFromPrior);
   });
 
-  it("refuses a validity window, so that verification never reads a clock", async () => {
+  it("refuses a validity window, which this profile does not evaluate", async () => {
     expect(() => inspectFromPrior(`${encode({ alg: "EdDSA", kid: b0.kid })}.${encode({ iss: b0.longForm, sub: b1.longForm, iat: IAT, exp: IAT + 10 })}.AA`)).toThrow(InvalidFromPrior);
     expect((await failure(verifyFromPrior(await rotation(b0, b1, {}, { nbf: IAT }), b0.document))).failure).toBe("form");
   });
@@ -91,18 +85,59 @@ describe("verify", () => {
       issuer: { presented: b0.longForm, canonical: b0.shortForm },
       change: { kind: "rotate", successor: { presented: b1.longForm, canonical: b1.shortForm } },
       iat: IAT,
-      document: { ref: "doc-b0", id: b0.longForm },
+      document: { ref: "doc-b0", longForm: b0.longForm },
       method: b0.kid,
     });
   });
 
-  it("verifies under a short-form document and a short-form kid, and keeps the presented spellings", async () => {
+  it("verifies a short-form iss and kid against the retained long form, and keeps the presented spellings", async () => {
     const jwt = await new SignJWT({ iss: b0.shortForm, sub: b1.shortForm, iat: IAT }).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: `${b0.shortForm}#key-1` }).sign(b0.privateKey);
-    const proof = await verifyFromPrior(jwt, b0.shortDocument);
+    const proof = await verifyFromPrior(jwt, b0.document);
     expect(proof.issuer).toEqual({ presented: b0.shortForm, canonical: b0.shortForm });
-    expect(proof.document.id).toBe(b0.shortForm);
-    const mixed = await verifyFromPrior(await rotation(b0, b1), b0.shortDocument);
-    expect(mixed.issuer).toEqual({ presented: b0.longForm, canonical: b0.shortForm });
+    expect(proof.change).toMatchObject({ successor: { presented: b1.shortForm, canonical: b1.shortForm } });
+    expect(proof.document.longForm).toBe(b0.longForm);
+    expect(proof.method).toBe(`${b0.shortForm}#key-1`);
+  });
+
+  it("takes the issuer's key from the long form alone: a document assembled by the caller cannot substitute one", async () => {
+    const attacker = party("attacker");
+    const forged = await new SignJWT({ iss: b0.longForm, sub: attacker.longForm, iat: IAT }).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: b0.kid }).sign(attacker.privateKey);
+    expect((await failure(verifyFromPrior(forged, b0.document))).failure).toBe("signature");
+    expect((await failure(verifyFromPrior(forged, attacker.document))).failure).toBe("document");
+    expect((await failure(verifyFromPrior(forged, { ref: "x", longForm: b0.shortForm }))).failure).toBe("document");
+    const corrupted = b0.longForm.slice(0, -1) + (b0.longForm.endsWith("a") ? "b" : "a");
+    expect((await failure(verifyFromPrior(forged, { ref: "x", longForm: corrupted }))).failure).toBe("document");
+    expect((await failure(verifyFromPrior(await rotation(b0, b1), { ref: "x", longForm: corrupted }))).failure).toBe("document");
+  });
+
+  it("consults no clock", async () => {
+    const jwt = await rotation(b0, b1);
+    const NativeDate = globalThis.Date;
+    let reads = 0;
+    class Counting extends NativeDate {
+      constructor(...args: unknown[]) {
+        if (args.length === 0) reads++;
+        super(...(args as [number]));
+      }
+      static override now(): number {
+        reads++;
+        return NativeDate.now();
+      }
+    }
+    globalThis.Date = Counting as unknown as DateConstructor;
+    try {
+      await expect(verifyFromPrior(jwt, b0.document)).resolves.toMatchObject({ iat: IAT });
+    } finally {
+      globalThis.Date = NativeDate;
+    }
+    expect(reads).toBe(0);
+  });
+
+  it("reads a repeated claim as its last value, the way the library does", async () => {
+    const input = `${encode({ alg: "EdDSA", typ: "JWT", kid: b0.kid })}.${base64urlnopad.encode(new TextEncoder().encode(`{"iss":${JSON.stringify(b0.longForm)},"sub":${JSON.stringify(b1.longForm)},"iat":1,"iat":${IAT}}`))}`;
+    const jwt = `${input}.${base64urlnopad.encode(new Uint8Array(nodeSign(null, new TextEncoder().encode(input), b0.privateKey)))}`;
+    expect(inspectFromPrior(jwt).claims.iat).toBe(IAT);
+    expect((await verifyFromPrior(jwt, b0.document)).iat).toBe(IAT);
   });
 
   it("verifies an ending and retains its audience", async () => {
@@ -112,10 +147,11 @@ describe("verify", () => {
     expect(unaddressed.change).toEqual({ kind: "end", audience: null });
   });
 
-  it("accepts a JWK method too", async () => {
-    const jwk = { kty: "OKP", crv: "Ed25519", x: base64urlnopad.encode(b0.publicKeyBytes) };
-    const document = { ...(b0.document.document as Record<string, unknown>), verificationMethod: [{ id: "#key-1", type: "JsonWebKey2020", publicKeyJwk: jwk }] };
-    await expect(verifyFromPrior(await rotation(b0, b1), { ref: "jwk", document })).resolves.toMatchObject({ method: b0.kid });
+  it("accepts a JWK method, and an embedded authentication method", async () => {
+    const jwk = party("jwk", (key) => ({ verificationMethod: [{ id: "#key-1", type: "JsonWebKey2020", publicKeyJwk: key.jwk }], authentication: ["#key-1"] }));
+    await expect(verifyFromPrior(await rotation(jwk, b1), jwk.document)).resolves.toMatchObject({ method: jwk.kid });
+    const embedded = party("embedded", (key) => ({ authentication: [{ id: "#key-1", type: "Multikey", publicKeyMultibase: key.multikey }] }));
+    await expect(verifyFromPrior(await rotation(embedded, b1), embedded.document)).resolves.toMatchObject({ method: embedded.kid });
   });
 
   it("distinguishes failures of form, profile, document and signature", async () => {
@@ -137,11 +173,11 @@ describe("verify", () => {
 
     expect((await failure(verifyFromPrior(jwt, b1.document))).failure).toBe("document");
     expect((await failure(verifyFromPrior(await resigned({ ...header, kid: `${b0.longForm}#key-2` }, payload), b0.document))).failure).toBe("document");
-    const unauthorized = { ...(b0.document.document as Record<string, unknown>), authentication: [] };
-    expect((await failure(verifyFromPrior(jwt, { ref: "x", document: unauthorized }))).failure).toBe("document");
-    const x25519 = { ...(b0.document.document as Record<string, unknown>), verificationMethod: [{ id: "#key-1", type: "Multikey", publicKeyMultibase: `z${base58.encode(new Uint8Array([0xec, 0x01, ...b0.publicKeyBytes]))}` }] };
-    expect((await failure(verifyFromPrior(jwt, { ref: "x", document: x25519 }))).failure).toBe("document");
-    expect((await failure(verifyFromPrior(jwt, { ref: "x", document: null }))).failure).toBe("document");
+    const unauthorized = party("unauthorized", (key) => ({ verificationMethod: [{ id: "#key-1", type: "Multikey", publicKeyMultibase: key.multikey }], keyAgreement: ["#key-1"] }));
+    expect((await failure(verifyFromPrior(await rotation(unauthorized, b1), unauthorized.document))).failure).toBe("document");
+    const x25519 = party("x25519", (key) => ({ verificationMethod: [{ id: "#key-1", type: "Multikey", publicKeyMultibase: `z${base58.encode(new Uint8Array([0xec, 0x01, ...key.bytes]))}` }], authentication: ["#key-1"] }));
+    expect((await failure(verifyFromPrior(await rotation(x25519, b1), x25519.document))).failure).toBe("document");
+    expect((await failure(verifyFromPrior(jwt, { ref: "x", longForm: null as unknown as string }))).failure).toBe("document");
 
     expect((await failure(verifyFromPrior(`${h}.${encode({ ...payload, iat: IAT + 1 })}.${s}`, b0.document))).failure).toBe("signature");
     expect((await failure(verifyFromPrior(`${h}.${p}.${base64urlnopad.encode(new Uint8Array(64))}`, b0.document))).failure).toBe("signature");

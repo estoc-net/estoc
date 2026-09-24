@@ -61,13 +61,18 @@ channel a conflict reaches. Queries:
   support, `ended`, `unresolved` with the waiting decisions and missing
   references, `conflict` with the facts involved, or `no-evidence`. A
   known forward change without usable continuation never falls back to
-  the old pair.
+  the old pair. Conflict reaching the pair outranks an ending, an ending
+  outranks waiting decisions, and a pair that only a waiting decision
+  names as its successor is `unresolved`; `no-evidence` is for a pair no
+  fact mentions.
 - `changes(channel, side)` — the changes of that side's endpoint across
   its context, with each fact's status.
 - `path(from, to)` — a directed usable path preserving roles.
 - `confirmation(localDid, peerDid)` — the usable observations by which
   the peer, or a usable successor of it, wrote to exactly that local
-  DID, each with its supporting path.
+  DID, each with one complete supporting path: the facts listed
+  re-derive the confirmation on their own, but alternative paths to the
+  same observation are not enumerated.
 - `history(channel)` — every positive link connected to the channel,
   derived joins marked, the endings in scope and both contexts.
 - `localDecisions(channel)`, `conflicts()`, `status(factId)`.
@@ -78,24 +83,29 @@ Competing changes of one endpoint in one context, cycles, joins that
 would pair a DID with itself, and repeated IDs with different values
 are the conflicts. Every saved local decision counts toward competition
 whether or not it is confirmed yet, since two saved successors of one
-predecessor are a fork either way.
+predecessor are a fork either way. Every variant of a repeated ID enters
+the positive graph when its own prerequisites hold, so the competition
+it creates is visible, but no variant links or witnesses anything usable.
 
 ## from_prior
 
 ```ts
 import { verifyFromPrior, bindFromPrior, createFromPrior } from "@estoc/continuity/from-prior";
 
-const proof = await verifyFromPrior(jwt, { ref: "doc-1", document });
+const proof = await verifyFromPrior(jwt, { ref: "doc-1", longForm: issuerLongForm });
 const binding = bindFromPrior(proof, { ref: "receipt-1", token: jwt, recipient, sender }, { transitionId: "p1", observationId: "o1" });
 if (binding.status === "bound") facts.push(...binding.facts);
 ```
 
 The supported profile is did:peer:4 issuers, subjects and audiences,
 `EdDSA` over Ed25519 authentication keys, `typ: JWT`, an integer `iat`
-and no `exp` or `nbf`, so that verification never reads a clock. DID
-equivalence is the did:peer:4 short form; presented spellings are kept
-beside it. The host supplies the issuer's document; the module resolves
-nothing.
+and no `exp` or `nbf`: the profile evaluates no validity window, and
+verification consults no clock. DID equivalence is the did:peer:4 short
+form; presented spellings are kept beside it. The issuer evidence is the
+issuer's long-form DID as the host retained it: a did:peer:4 is its own
+document, so the signing key is taken from the content the DID's hash
+covers and a document assembled by a caller cannot substitute one. The
+module resolves nothing over the network.
 
 Binding a rotation requires the receipt's own token and an
 authenticated sender equal to `sub`; it yields the peer transition at
@@ -104,8 +114,11 @@ observation at `C(recipient, sub)` under the same receipt reference.
 
 A received ending has no sender, and the standard's basic form binds it
 to no particular relationship. This profile binds an ending only when
-its JWT names the recipient in `aud` and the receipt is anonymous; an
-ending without an audience verifies but reports `unbound`.
+its JWT names the recipient in `aud` and the receipt is anonymous, which
+the host asserts by a null sender only when the plaintext carried no
+`from`; an ending in the standard's basic form verifies but reports
+`unbound`, so endings from agents that do not add `aud` are retained
+without binding.
 
 `createFromPrior` builds the token from a request and a signing
 capability that names its method and signs the JWS signing input, then

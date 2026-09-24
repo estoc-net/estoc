@@ -16,9 +16,9 @@
  * audience verifies but does not bind.
  */
 
-import { decodeLongForm, isLongForm, isShortForm, longToShort } from "@estoc/did-peer";
+import { decodeLongForm, isLongForm, isShortForm, longToShort, resolveLongForm } from "@estoc/did-peer";
 import { base58, base64urlnopad } from "@scure/base";
-import { decodeJwt, decodeProtectedHeader, importJWK, jwtVerify, type JWK, type JWTPayload } from "jose";
+import { compactVerify, decodeJwt, decodeProtectedHeader, importJWK, type JWK, type JWTPayload } from "jose";
 
 import type { ContinuityFact, Did, EvidenceRef, FactId } from "../types.js";
 
@@ -48,8 +48,8 @@ export type UnverifiedFromPrior = Readonly<{
   claims: Readonly<{ iss: string; sub: string | undefined; aud: string | undefined; iat: number }>;
 }>;
 
-/** The exact document the host retained for the issuer and its reference. */
-export type IssuerEvidence = Readonly<{ ref: EvidenceRef; document: unknown }>;
+/** The issuer's long-form did:peer:4 as the host retained it, and its reference. */
+export type IssuerEvidence = Readonly<{ ref: EvidenceRef; longForm: Did }>;
 
 const verified: unique symbol = Symbol("verified");
 
@@ -63,7 +63,7 @@ export type VerifiedFromPrior = Readonly<{
   issuer: DidSpelling;
   change: VerifiedChange;
   iat: number;
-  document: Readonly<{ ref: EvidenceRef; id: Did }>;
+  document: Readonly<{ ref: EvidenceRef; longForm: Did }>;
   method: DidUrl;
 }>;
 
@@ -74,7 +74,10 @@ export type ReceiptEvidence = Readonly<{
   token: string;
   /** the local DID the envelope was actually addressed to */
   recipient: Did;
-  /** the authenticated sender, null for an anonymous envelope */
+  /**
+   * the authenticated sender; null only when the host established that
+   * the envelope was anonymous and the plaintext carried no `from`
+   */
   sender: Did | null;
 }>;
 
@@ -85,7 +88,11 @@ export type Binding =
   | Readonly<{ status: "mismatch"; because: string }>
   | Readonly<{ status: "unbound"; because: string }>;
 
-/** A key the host holds under an authentication method of the issuer's document; it need not be exportable. */
+/**
+ * A key the host holds under an authentication method of the issuer's
+ * document, reduced to signing bytes so that a key behind a hardware
+ * wallet or a keystore that exposes no key object can sign too.
+ */
 export type Signer = Readonly<{
   methodId: DidUrl;
   sign(signingInput: Uint8Array): Promise<Uint8Array>;
@@ -154,11 +161,31 @@ export function inspectFromPrior(jwt: string): UnverifiedFromPrior {
   if (Object.hasOwn(payload, "sub") && typeof payload.sub !== "string") throw form("sub, when present, is a string");
   if (Object.hasOwn(payload, "aud") && typeof payload.aud !== "string") throw form("aud, when present, is one string");
   if (!Number.isSafeInteger(payload.iat)) throw form("iat is an integer");
-  if (Object.hasOwn(payload, "exp") || Object.hasOwn(payload, "nbf")) throw form("a from_prior has no exp or nbf; verifying it reads no clock");
+  if (Object.hasOwn(payload, "exp") || Object.hasOwn(payload, "nbf")) throw form("a from_prior has no exp or nbf; this profile evaluates no validity window");
   return {
     header: { alg: header.alg, typ: header.typ, kid: header.kid },
     claims: { iss: payload.iss, sub: payload.sub, aud: payload.aud as string | undefined, iat: payload.iat as number },
   };
+}
+
+const decoder = new TextDecoder();
+
+/** The claims a verified signature covers, as the profile reads them. */
+function verifiedClaims(payload: Uint8Array): UnverifiedFromPrior["claims"] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoder.decode(payload));
+  } catch {
+    throw form("the payload is JSON");
+  }
+  if (!isPlainObject(parsed)) throw form("the payload is an object");
+  const claims = parsed as JWTPayload;
+  if (typeof claims.iss !== "string") throw form("iss is a string");
+  if (Object.hasOwn(claims, "sub") && typeof claims.sub !== "string") throw form("sub, when present, is a string");
+  if (Object.hasOwn(claims, "aud") && typeof claims.aud !== "string") throw form("aud, when present, is one string");
+  if (!Number.isSafeInteger(claims.iat)) throw form("iat is an integer");
+  if (Object.hasOwn(claims, "exp") || Object.hasOwn(claims, "nbf")) throw form("a from_prior has no exp or nbf; this profile evaluates no validity window");
+  return { iss: claims.iss, sub: claims.sub, aud: claims.aud as string | undefined, iat: claims.iat as number };
 }
 
 type Method = { id: string; key: JWK };
@@ -189,22 +216,31 @@ function ed25519Jwk(method: Record<string, unknown>, id: string): JWK {
 }
 
 /**
- * The authentication method of the issuer's document that `kid` names:
- * the document's `id` and the kid's DID portion both name the issuer,
- * the fragment matches byte for byte, and the method is listed under
- * `authentication`, by reference or embedded.
+ * The issuer's document, resolved from the long form the host retained:
+ * the long form's hash covers the document, so a key found in it is the
+ * issuer's own.
  */
-function authenticationMethod(document: unknown, issuer: DidSpelling, kid: string): Method {
-  if (!isPlainObject(document)) throw new InvalidFromPrior("the issuer document is an object", "document");
-  const documentId = document["id"];
-  if (typeof documentId !== "string") throw new InvalidFromPrior("the issuer document has an id", "document");
-  let documentDid: DidSpelling;
+function issuerDocument(evidence: IssuerEvidence, issuer: DidSpelling): { id: string; document: Record<string, unknown> } {
+  const longForm = evidence.longForm;
+  if (typeof longForm !== "string" || !isLongForm(longForm)) throw new InvalidFromPrior("the issuer evidence is a long-form did:peer:4", "document");
+  let document: unknown;
   try {
-    documentDid = canonicalDid(documentId, "the document id");
+    document = resolveLongForm(longForm);
   } catch (err) {
-    throw new InvalidFromPrior(err instanceof Error ? err.message : String(err), "document");
+    throw new InvalidFromPrior(`the issuer's long form does not resolve: ${err instanceof Error ? err.message : String(err)}`, "document");
   }
-  if (documentDid.canonical !== issuer.canonical) throw new InvalidFromPrior(`the document is ${documentId}'s, not ${issuer.presented}'s`, "document");
+  if (longToShort(longForm) !== issuer.canonical) throw new InvalidFromPrior(`the evidence is ${longForm}'s, not ${issuer.presented}'s`, "document");
+  if (!isPlainObject(document)) throw new InvalidFromPrior("the issuer document is an object", "document");
+  return { id: longForm, document };
+}
+
+/**
+ * The authentication method of the issuer's document that `kid` names:
+ * the kid's DID portion names the issuer, the fragment matches byte for
+ * byte, and the method is listed under `authentication`, by reference
+ * or embedded.
+ */
+function authenticationMethod(documentId: string, document: Record<string, unknown>, kid: string): Method {
   const target = splitDidUrl(kid, "kid");
   const defined = new Map<string, Record<string, unknown>>();
   const methods = document["verificationMethod"];
@@ -241,14 +277,28 @@ function authenticationMethod(document: unknown, issuer: DidSpelling, kid: strin
     if (method === undefined) throw new InvalidFromPrior(`${id} is authorized but not defined`, "document");
     return { id: kid, key: ed25519Jwk(method, id) };
   }
-  throw new InvalidFromPrior(`${kid} is not an authentication method of ${issuer.presented}`, "document");
+  throw new InvalidFromPrior(`${kid} is not an authentication method of ${documentId}`, "document");
+}
+
+function profileChange(claims: UnverifiedFromPrior["claims"], issuer: DidSpelling): VerifiedChange {
+  if (claims.sub !== undefined) {
+    const successor = canonicalDid(claims.sub, "sub");
+    if (successor.canonical === issuer.canonical) throw profile("sub is another DID than iss");
+    if (claims.aud !== undefined) throw profile("a rotation names no aud");
+    return { kind: "rotate", successor };
+  }
+  const audience = claims.aud === undefined ? null : canonicalDid(claims.aud, "aud");
+  if (audience !== null && audience.canonical === issuer.canonical) throw profile("aud is another DID than iss");
+  return { kind: "end", audience };
 }
 
 /**
- * Verify a token against the exact issuer document supplied: the
- * protected `kid` names the issuer's authentication method, that
- * method's Ed25519 key verifies the signature, and the claims meet the
- * profile. The token and document are retained as given; a failure
+ * Verify a token against the issuer's retained long form: the protected
+ * `kid` names an authentication method of the document that long form
+ * encodes, that method's Ed25519 key verifies the JWS, and the claims
+ * the signature covers meet the profile. The library verifies the
+ * signature only; the profile has no time-bound claim and consults no
+ * clock. The token and long form are retained as given; a failure
  * says whether form, profile, document or signature failed.
  */
 export async function verifyFromPrior(jwt: string, evidence: IssuerEvidence): Promise<VerifiedFromPrior> {
@@ -258,32 +308,25 @@ export async function verifyFromPrior(jwt: string, evidence: IssuerEvidence): Pr
   const issuer = canonicalDid(unverified.claims.iss, "iss");
   const kid = splitDidUrl(unverified.header.kid, "kid");
   if (kid.did.canonical !== issuer.canonical) throw profile("the kid names a key of iss");
-  let change: VerifiedChange;
-  if (unverified.claims.sub !== undefined) {
-    const successor = canonicalDid(unverified.claims.sub, "sub");
-    if (successor.canonical === issuer.canonical) throw profile("sub is another DID than iss");
-    if (unverified.claims.aud !== undefined) throw profile("a rotation names no aud");
-    change = { kind: "rotate", successor };
-  } else {
-    const audience = unverified.claims.aud === undefined ? null : canonicalDid(unverified.claims.aud, "aud");
-    if (audience !== null && audience.canonical === issuer.canonical) throw profile("aud is another DID than iss");
-    change = { kind: "end", audience };
-  }
-  const method = authenticationMethod(evidence.document, issuer, unverified.header.kid);
+  const { id: documentId, document } = issuerDocument(evidence, issuer);
+  const method = authenticationMethod(documentId, document, unverified.header.kid);
   const key = await importJWK(method.key, FROM_PRIOR_ALG);
+  let payload: Uint8Array;
   try {
-    await jwtVerify(jwt, key, { algorithms: [FROM_PRIOR_ALG], typ: "JWT" });
+    ({ payload } = await compactVerify(jwt, key, { algorithms: [FROM_PRIOR_ALG] }));
   } catch (err) {
     throw new InvalidFromPrior(`the signature does not verify under ${method.id}: ${err instanceof Error ? err.message : String(err)}`, "signature");
   }
+  const claims = verifiedClaims(payload);
+  const signedIssuer = canonicalDid(claims.iss, "iss");
   return {
     [verified]: true,
     profile: FROM_PRIOR_PROFILE,
     token: jwt,
-    issuer,
-    change,
-    iat: unverified.claims.iat,
-    document: { ref: evidence.ref, id: (evidence.document as { id: string }).id },
+    issuer: signedIssuer,
+    change: profileChange(claims, signedIssuer),
+    iat: claims.iat,
+    document: { ref: evidence.ref, longForm: documentId },
     method: method.id,
   } as VerifiedFromPrior;
 }

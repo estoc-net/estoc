@@ -5,8 +5,8 @@
  * values is ambiguous. Then the positive closure: every peer rotation,
  * every local rotation whose predecessor address an observation
  * confirms in the graph built without it, and every join they imply,
- * all branches kept, identity-conflicted variants included so that no
- * competing continuation can hide. Then contexts and conflicts over
+ * all branches kept, every variant of an identity-conflicted ID
+ * included so that no competing continuation can hide. Then contexts and conflicts over
  * that whole graph: competing changes of one endpoint in one context,
  * cycles, joins that would pair a DID with itself. Only then usable
  * continuity: the same closure again over unambiguous facts, admitting
@@ -16,7 +16,7 @@
  */
 
 import { changeKey, channelKey, channelOf, compareChannels, compareUtf8, sortedChannels, sortedIds, successorChannel } from "./facts.js";
-import { closure, Contexts, Graph, type Edge, type Link, type Replaces } from "./graph.js";
+import { closure, Contexts, Graph, type Edge, type Link, type Reached, type Replaces } from "./graph.js";
 import { bucketsOf } from "./merge.js";
 import type { AddressObservation, Change, Channel, ContinuityFact, Did, FactId, LocalDecision, PeerTransition } from "./types.js";
 
@@ -98,13 +98,15 @@ interface Entry {
 
 type Writers = Map<Did, Map<Did, FactId[]>>;
 
+type Candidate = Link & { readonly entry: Entry };
+
 const EVERY_CHANNEL = () => true;
 
 class Model implements Continuity {
   readonly facts: readonly ContinuityFact[];
   private readonly entries = new Map<FactId, Entry[]>();
   private readonly positive: Graph;
-  private readonly positiveWaiting: ReadonlyMap<FactId, Link>;
+  private readonly positiveWaiting: ReadonlySet<FactId>;
   private readonly local: Contexts;
   private readonly peer: Contexts;
   private readonly domainConflicts: readonly Conflict[];
@@ -130,12 +132,12 @@ class Model implements Continuity {
     const positiveWriters = this.writersOf((entry) => this.positiveObservation(entry));
     const positive = closure(
       this.peerLinks(() => true),
-      this.candidates((entry) => !entry.tainted && entry.standing.kind === "ok"),
+      this.candidates((entry) => entry.standing.kind === "ok"),
       EVERY_CHANNEL,
       (graph, link) => this.confirming(graph, link, positiveWriters, (entry) => this.positiveObservation(entry))
     );
     this.positive = positive.graph;
-    this.positiveWaiting = positive.waiting;
+    this.positiveWaiting = new Set([...positive.waiting].map((link) => link.id));
     for (const entry of this.all()) this.positive.vertex(entry.fact.at);
     this.local = new Contexts(this.positive, "local");
     this.peer = new Contexts(this.positive, "peer");
@@ -157,7 +159,7 @@ class Model implements Continuity {
       (graph, link) => this.confirming(graph, link, this.usableWriters, (entry) => this.usableObservation(entry))
     );
     this.usable = usable.graph;
-    this.usableAdmitted = usable.admitted;
+    this.usableAdmitted = new Map([...usable.admitted].map(([link, support]) => [link.id, support]));
   }
 
   private *all(): IterableIterator<Entry> {
@@ -200,11 +202,11 @@ class Model implements Continuity {
     return links;
   }
 
-  private candidates(admits: (entry: Entry) => boolean): Link[] {
-    const links: Link[] = [];
+  private candidates(admits: (entry: Entry) => boolean): Candidate[] {
+    const links: Candidate[] = [];
     for (const entry of this.all()) {
       if (entry.fact.kind !== "local-decision" || entry.fact.change.kind !== "rotate" || !admits(entry)) continue;
-      links.push({ id: entry.fact.id, from: entry.fact.at, to: successorChannel(entry.fact)! });
+      links.push({ id: entry.fact.id, from: entry.fact.at, to: successorChannel(entry.fact)!, entry });
     }
     return links;
   }
@@ -252,25 +254,28 @@ class Model implements Continuity {
    * What confirms a candidate's predecessor address in the graph so far:
    * the exact source it names, when that observation is of the peer or
    * of a peer a peer-only path from the predecessor reaches; otherwise
-   * any admitted observation addressed to the predecessor by such a peer.
+   * any admitted observation addressed to the predecessor by such a
+   * peer. The support names the observation, the transition it carried
+   * and the path to its peer, so that the support alone re-derives the
+   * confirmation.
    */
-  private confirming(graph: Graph, link: Link, writers: Writers, admits: (entry: Entry) => boolean): readonly FactId[] | null {
-    const decision = this.single(link.id)!.fact as LocalDecision;
-    const reached = graph.reach(link.from, "peer");
-    const carriedOf = (observationId: FactId) => {
+  private confirming(graph: Graph, link: Candidate, writers: Writers, admits: (entry: Entry) => boolean): readonly FactId[] | null {
+    const decision = link.entry.fact as LocalDecision;
+    const reached = graph.paths(link.from, "peer");
+    const witness = (observationId: FactId, via: Reached) => {
       const carried = (this.single(observationId)!.fact as AddressObservation).carriedTransition;
-      return carried === null ? [] : [carried];
+      return [observationId, ...(carried === null ? [] : [carried]), ...via.edges.flatMap((edge) => [...edge.support])];
     };
     if (decision.source !== null) {
       const source = this.single(decision.source)!;
       if (!admits(source)) return null;
-      for (const channel of reached.values()) if (channel.peerDid === source.fact.at.peerDid) return sortedIds([source.fact.id, ...carriedOf(source.fact.id)]);
-      return null;
+      const via = reached.get(channelKey(source.fact.at));
+      return via === undefined ? null : sortedIds(witness(source.fact.id, via));
     }
     const peers = writers.get(link.from.localDid);
     if (peers === undefined) return null;
     const support: FactId[] = [];
-    for (const channel of reached.values()) for (const id of peers.get(channel.peerDid) ?? []) support.push(id, ...carriedOf(id));
+    for (const via of reached.values()) for (const id of peers.get(via.channel.peerDid) ?? []) support.push(...witness(id, via));
     return support.length === 0 ? null : sortedIds(support);
   }
 
@@ -380,17 +385,54 @@ class Model implements Continuity {
     return this.positive.vertices.has(channelKey(channel));
   }
 
+  /** A local rotation not admitted to the usable graph: a fork still waiting, or one the model cannot rely on. */
+  private pendingDecision(entry: Entry, conflict: Set<FactId>, waiting: Set<FactId>, missing: Set<FactId>): void {
+    if (entry.tainted) {
+      conflict.add(entry.fact.id);
+      return;
+    }
+    waiting.add(entry.fact.id);
+    if (entry.standing.kind === "missing") for (const id of entry.standing.ids) missing.add(id);
+    if (entry.standing.kind === "ambiguous") for (const id of entry.standing.ids) conflict.add(id);
+  }
+
+  /** A pair some fact is at, or a usable link leads to; one only conflicted links lead to rests on the conflict. */
+  private established(channel: Channel): boolean {
+    for (const entry of this.all()) if (channelKey(entry.fact.at) === channelKey(channel)) return true;
+    for (const _ of this.usable.to(channel)) return true;
+    return false;
+  }
+
+  /**
+   * Conflict reaching the pair outranks everything: a fork is a fork
+   * whether its branches are confirmed or not, and a pair that only a
+   * conflicted link leads to is in that conflict. Then an established
+   * ending, then decisions still waiting, then the unique end of the
+   * usable forward paths. A pair no fact establishes but a waiting
+   * decision names as its successor is unresolved, not unknown.
+   */
   head(channel: Channel): HeadResult {
-    if (!this.known(channel)) return { status: "no-evidence" };
-    const reached = this.positive.reach(channel, "any");
     const conflict = new Set<FactId>();
-    for (const current of reached.values()) for (const id of this.conflictFactsAt(current)) conflict.add(id);
-    if (conflict.size > 0) return { status: "conflict", facts: sortedIds(conflict) };
     const waiting = new Set<FactId>();
     const missing = new Set<FactId>();
+    if (!this.known(channel)) {
+      for (const id of this.conflictFactsAt(channel)) conflict.add(id);
+      if (conflict.size > 0) return { status: "conflict", facts: sortedIds(conflict) };
+      for (const entry of this.all()) {
+        if (entry.fact.kind !== "local-decision" || entry.fact.change.kind !== "rotate") continue;
+        if (channelKey(successorChannel(entry.fact)!) === channelKey(channel)) this.pendingDecision(entry, conflict, waiting, missing);
+      }
+      if (conflict.size > 0) return { status: "conflict", facts: sortedIds(conflict) };
+      if (waiting.size > 0) return { status: "unresolved", waiting: sortedIds(waiting), missing: sortedIds(missing) };
+      return { status: "no-evidence" };
+    }
+    const reached = this.positive.paths(channel, "any");
+    for (const { channel: current } of reached.values()) for (const id of this.conflictFactsAt(current)) conflict.add(id);
+    if (!this.established(channel)) for (const edge of this.positive.to(channel)) for (const id of edge.support) conflict.add(id);
+    if (conflict.size > 0) return { status: "conflict", facts: sortedIds(conflict) };
     const endings = new Set<FactId>();
     const support = new Set<FactId>();
-    for (const current of reached.values()) {
+    for (const { channel: current } of reached.values()) {
       for (const edge of this.positive.from(current)) {
         const usable = this.usable.edge(edge.from, edge.to);
         if (usable === undefined) for (const id of edge.support) conflict.add(id);
@@ -401,17 +443,15 @@ class Model implements Continuity {
         else endings.add(entry.fact.id);
       }
       for (const entry of this.all()) {
-        if (entry.fact.kind !== "local-decision" || entry.fact.change.kind !== "rotate" || entry.tainted) continue;
+        if (entry.fact.kind !== "local-decision" || entry.fact.change.kind !== "rotate") continue;
         if (channelKey(entry.fact.at) !== channelKey(current) || this.usableAdmitted.has(entry.fact.id)) continue;
-        waiting.add(entry.fact.id);
-        if (entry.standing.kind === "missing") for (const id of entry.standing.ids) missing.add(id);
-        if (entry.standing.kind === "ambiguous") for (const id of entry.standing.ids) conflict.add(id);
+        this.pendingDecision(entry, conflict, waiting, missing);
       }
     }
     if (conflict.size > 0) return { status: "conflict", facts: sortedIds(conflict) };
     if (endings.size > 0) return { status: "ended", endings: sortedIds(endings) };
-    if (waiting.size > 0 || missing.size > 0) return { status: "unresolved", waiting: sortedIds(waiting), missing: sortedIds(missing) };
-    const ends = [...reached.values()].filter((current) => !this.positive.hasOutgoing(current));
+    if (waiting.size > 0) return { status: "unresolved", waiting: sortedIds(waiting), missing: sortedIds(missing) };
+    const ends = [...reached.values()].filter(({ channel: current }) => !this.positive.hasOutgoing(current)).map(({ channel: current }) => current);
     if (ends.length !== 1) return { status: "conflict", facts: sortedIds(support) };
     return { status: "head", channel: ends[0]!, support: sortedIds(support) };
   }
@@ -448,18 +488,17 @@ class Model implements Continuity {
     if (conflict.length > 0) return { status: "conflict", facts: sortedIds(conflict) };
     const observations: Confirmation[] = [];
     const unusable: FactId[] = [];
-    const reached = localDid === peerDid ? new Map<string, Channel>() : this.usable.reach(channel, "peer");
+    const reached = localDid === peerDid ? new Map<string, Reached>() : this.usable.paths(channel, "peer");
     for (const entry of this.all()) {
       if (entry.fact.kind !== "address-observed" || entry.fact.at.localDid !== localDid) continue;
-      const target = reached.get(channelKey(entry.fact.at));
-      if (target === undefined) continue;
+      const via = reached.get(channelKey(entry.fact.at));
+      if (via === undefined) continue;
       if (!this.usableObservation(entry)) {
         unusable.push(entry.fact.id);
         continue;
       }
-      const edges = this.usable.path(channel, target) ?? [];
       const carried = entry.fact.carriedTransition === null ? [] : [entry.fact.carriedTransition];
-      observations.push({ id: entry.fact.id, at: entry.fact.at, support: sortedIds([entry.fact.id, ...carried, ...edges.flatMap((edge) => [...edge.support])]) });
+      observations.push({ id: entry.fact.id, at: entry.fact.at, support: sortedIds([entry.fact.id, ...carried, ...via.edges.flatMap((edge) => [...edge.support])]) });
     }
     if (observations.length > 0) return { status: "confirmed", observations: observations.sort((a, b) => compareUtf8(a.id, b.id)) };
     return { status: "unconfirmed", unusable: sortedIds(unusable) };

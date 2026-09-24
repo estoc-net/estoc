@@ -1,6 +1,6 @@
 # Continuity domain package design draft
 
-Status: **Exploratory proposal. Not implemented; the current phase-1 contract is unchanged.**
+Status: **Exploratory proposal with a prototype. `packages/continuity` implements the model, merge contract and from-prior profile described here; the contract is not final, and the vault does not consume it yet. The current phase-1 contract is unchanged.**
 
 The proposed package, `@estoc/continuity`, provides a pure continuity model and a
 `from-prior` module for DIDComm proofs. An agent supplies receipt evidence,

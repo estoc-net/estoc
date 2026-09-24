@@ -23,8 +23,9 @@ export type PeerTransition = Readonly<{
 
 /**
  * A saved local choice to rotate the local DID of `at`, or to end there.
- * `source` names the exact observation the host selected as confirming
- * the predecessor address; null lets the model find any.
+ * For a rotation, `source` names the exact observation the host selected
+ * as confirming the predecessor address, and null lets the model find
+ * any. An ending confirms no address: its `source` is null.
  */
 export type LocalDecision = Readonly<{
   kind: "local-decision";

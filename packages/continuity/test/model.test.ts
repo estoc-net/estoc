@@ -78,6 +78,8 @@ describe("local rotation and confirmation", () => {
   it("is unresolved until the predecessor address is confirmed, and never falls back to absence", () => {
     const waiting = deriveContinuity([d1]);
     expect(waiting.head(A0B0)).toEqual({ status: "unresolved", waiting: ["d1"], missing: [] });
+    expect(waiting.head(A1B0)).toEqual({ status: "unresolved", waiting: ["d1"], missing: [] });
+    expect(waiting.head(C("A2", "B0"))).toEqual({ status: "no-evidence" });
     expect(waiting.status("d1")).toEqual({ status: "waiting", because: expect.stringContaining("no observation") });
     expect(waiting.localDecisions(A0B0)).toEqual([{ id: "d1", at: A0B0, change: { kind: "rotate", successor: "A1" }, to: A1B0, status: waiting.status("d1") }]);
     const confirmed = deriveContinuity([d1, o0]);
@@ -103,6 +105,7 @@ describe("local rotation and confirmation", () => {
     expect(deriveContinuity([named, o0]).status("d1")).toEqual({ status: "usable", support: ["d1", "o0"] });
     const missing = deriveContinuity([named]);
     expect(missing.head(A0B0)).toEqual({ status: "unresolved", waiting: ["d1"], missing: ["o0"] });
+    expect(missing.head(A1B0)).toEqual({ status: "unresolved", waiting: ["d1"], missing: ["o0"] });
     expect(missing.status("d1")).toEqual({ status: "unresolved", missing: ["o0"] });
     const otherPeer = deriveContinuity([named, observe("o0", C("A0", "X0"))]);
     expect(otherPeer.status("d1")).toEqual({ status: "waiting", because: expect.stringContaining("o0") });
@@ -118,6 +121,23 @@ describe("local rotation and confirmation", () => {
     const o1 = observe("o1", A0B1, "p1", "receipt-1");
     const model = deriveContinuity([p1, o1, d1]);
     expect(model.head(A0B0)).toEqual({ status: "head", channel: A1B1, support: ["d1", "o1", "p1"] });
+  });
+
+  it("supports a confirmation with the peer path to the observer, so the support alone re-derives it", () => {
+    const facts = [rotate("p1", A0B0, "B1"), rotate("p2", A0B1, "B2"), observe("o2", C("A0", "B2")), decide("d1", A0B0, "A1", "o2")];
+    const model = deriveContinuity(facts);
+    const path = model.path(A0B0, A1B0);
+    expect(path).toEqual({ status: "path", channels: [A0B0, A1B0], support: ["d1", "o2", "p1", "p2"] });
+    expect(model.status("d1")).toEqual({ status: "usable", support: ["d1", "o2", "p1", "p2"] });
+    if (path.status !== "path") throw new Error(path.status);
+    const replayed = deriveContinuity(facts.filter((fact) => path.support.includes(fact.id)));
+    expect(replayed.path(A0B0, A1B0)).toEqual(path);
+    const unnamed = deriveContinuity([rotate("p1", A0B0, "B1"), rotate("p2", A0B1, "B2"), observe("o2", C("A0", "B2")), decide("d1", A0B0, "A1")]);
+    expect(unnamed.status("d1")).toEqual({ status: "usable", support: ["d1", "o2", "p1", "p2"] });
+  });
+
+  it("names no source for an ending", () => {
+    expect(() => deriveContinuity([{ ...localEnd("e1", A0B0), source: "o0" }])).toThrow(InvalidFact);
   });
 });
 
@@ -213,6 +233,8 @@ describe("competing changes", () => {
     const model = deriveContinuity([d1, d2]);
     expect(model.conflicts()).toMatchObject([{ kind: "competing-changes", side: "local", context: [A0B0] }]);
     expect(model.head(A0B0)).toEqual({ status: "conflict", facts: ["d1", "d2"] });
+    expect(model.head(A1B0)).toEqual({ status: "conflict", facts: ["d1", "d2"] });
+    expect(model.head(C("A2", "B0"))).toEqual({ status: "conflict", facts: ["d1", "d2"] });
     const confirmed = deriveContinuity([d1, d2, observe("o0", A0B0)]);
     expect(confirmed.head(A0B0)).toEqual({ status: "conflict", facts: ["d1", "d2"] });
     expect(confirmed.status("d1")).toMatchObject({ status: "conflict" });
@@ -342,6 +364,7 @@ describe("identity conflicts", () => {
     const model = deriveContinuity([p1, twin]);
     expect(model.conflicts()).toEqual([{ kind: "identity-conflict", id: "p1", variants: [p1, twin] }]);
     expect(model.head(A0B0)).toEqual({ status: "conflict", facts: ["p1"] });
+    expect(model.head(A0B1)).toEqual({ status: "conflict", facts: ["p1"] });
     expect(model.history(A0B0).links).toEqual([{ from: A0B0, to: A0B1, replaces: "peer", support: ["p1"], derived: false, usable: false }]);
   });
 
@@ -358,6 +381,24 @@ describe("identity conflicts", () => {
     const model = deriveContinuity([p1, p1other, p2]);
     expect(model.head(A0B0)).toEqual({ status: "conflict", facts: ["p1", "p2"] });
     expect(model.status("p2")).toMatchObject({ status: "conflict" });
+  });
+
+  it("does not hide a collided local decision behind its predecessor", () => {
+    const d1 = decide("d1", A0B0, "A1");
+    const twin = { ...d1, decision: "decision-other" };
+    const o0 = observe("o0", A0B0);
+    const confirmed = deriveContinuity([o0, d1, twin]);
+    expect(confirmed.status("d1")).toEqual({ status: "identity-conflict", variants: [d1, twin] });
+    expect(confirmed.head(A0B0)).toEqual({ status: "conflict", facts: ["d1", "o0"] });
+    expect(confirmed.head(A1B0)).toEqual({ status: "conflict", facts: ["d1", "o0"] });
+    expect(confirmed.history(A0B0).links).toEqual([{ from: A0B0, to: A1B0, replaces: "local", support: ["d1", "o0"], derived: false, usable: false }]);
+    const waiting = deriveContinuity([d1, twin]);
+    expect(waiting.head(A0B0)).toEqual({ status: "conflict", facts: ["d1"] });
+    expect(waiting.head(A1B0)).toEqual({ status: "conflict", facts: ["d1"] });
+    const forked = deriveContinuity([o0, d1, decide("d1", A0B0, "A2")]);
+    expect(forked.conflicts()).toMatchObject([{ kind: "competing-changes", side: "local", changes: [{ facts: ["d1"] }, { facts: ["d1"] }] }, { kind: "identity-conflict", id: "d1" }]);
+    expect(forked.head(A0B0)).toEqual({ status: "conflict", facts: ["d1"] });
+    sameWhateverTheOrder([o0, d1, twin], [A0B0, A1B0]);
   });
 
   it("reports conflict for a reference to a collided identity instead of resolving it", () => {
