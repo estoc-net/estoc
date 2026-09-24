@@ -1,10 +1,10 @@
-# The Estoc event store, version 3
+# The Estoc event store, version 4
 
 <!-- suite-navigation:start -->
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **phase 1, implemented**. SQLite is the sole persistent vault and interchange
+Status: **phase 1; version-4 source preservation specified, implementation pending**. SQLite is the sole persistent vault and interchange
 format for one active writable runtime. This specification defines observable
 store semantics, not SQLite's implementation. Capitalized requirement words
 have their BCP 14 meanings.
@@ -34,7 +34,8 @@ these primitives.
 
 Portable vault state consists of immutable events, retained content-addressed
 objects, immutable identity metadata and an encrypted seed wrapper. Local IDs,
-positions, options, caches and diagnostics do not travel with that state.
+positions, options, caches and transient diagnostics do not travel with that state.
+Conflicting canonical event variants are portable evidence, not local diagnostics.
 SQLite's committed view determines what is accepted; private preparation is
 not acceptance.
 
@@ -46,8 +47,12 @@ A server-hosted full runtime has the same rules as an end-user runtime.
 
 ## 2. Invariants
 
-Events are immutable and merged by `eventId` using canonical-byte equality.
-Folds depend on the accepted event set, never arrival or physical row order.
+Events are immutable. Merge maps each `eventId` to the union of its distinct
+canonical byte values, including conflicting variants. Here an **accepted
+event** means a durably retained variant, not a trusted domain fact or an
+application-admitted message. Folds depend on this complete inventory, never
+arrival or physical row order. An event reference resolves exactly only when
+its ID has one canonical value; an ambiguous ID grants no domain authority.
 Authorship is explicit; a replica ID is provenance, not a credential. Phase 1
 has one active writable runtime, and two writable copies cannot share an author.
 
@@ -202,10 +207,12 @@ immutable IDs, tombstones or set semantics, not wall-clock latest-wins.
 
 ### 4.3 Canonical order
 
-Canonical order is ascending `(at, eventId, author)` using literal string
-comparison. The fixed UTC millisecond form makes timestamp lexical order equal
-represented instant order. `eventId` is globally unique; author is a defensive
-final component. This is presentation order and the order for explicitly
+Canonical order is ascending `(at, eventId, author, canonicalEventBytes)` using
+literal string comparison for the first three components and unsigned byte
+comparison for the last. The fixed UTC millisecond form makes timestamp lexical
+order equal represented instant order. The final component orders conflicting
+variants; it never chooses one as authoritative. This is presentation order and
+the order for explicitly
 specified latest-wins fields, not arrival order, causality or necessarily batch
 input order.
 
@@ -239,7 +246,7 @@ type Filter = {
 };
 
 type ChangeToken = string;
-type Conflict = { eventId: EventId; kept: Event; rejected: Event; source?: string };
+type Conflict = { eventId: EventId; variants: readonly Event[] };
 type Rejected = { value: unknown; error: string; source?: string };
 type Damaged = { where: string; bytes?: Uint8Array; error: string };
 type Ingested = {
@@ -288,10 +295,13 @@ success survives process restart. No failed batch exposes an accepted subset.
 ### 5.3 `ingest`
 
 Read or stage the full input and perform fork preflight before accepting any
-new event. An absent ID is added; the same ID with identical canonical bytes
-counts as a duplicate; a different value for an accepted ID reports a conflict
-without overwriting either source. Reject/report malformed envelopes rather
-than partially reinterpreting them. Accept all new valid events and positions
+new variant. Each previously unseen canonical value is retained and increments
+`added`, including a different value under an existing ID. An already retained
+value increments `duplicates`. `conflicts` lists each ID touched by the input
+that has multiple values in the resulting inventory, with all its variants
+in section 5.6's deterministic order. This includes duplicate-only retries of
+a collided ID. Reject/report malformed envelopes rather than partially
+reinterpreting them. Accept all new valid variants and positions
 in one transaction, updating or invalidating any caches. Retrying the same
 input is idempotent. Full-vault import also publishes staged objects and repairs
 atomically.
@@ -310,20 +320,23 @@ accidental cloned histories, not malicious authorship by a shared-seed holder.
 
 ### 5.4 `scan`
 
-Yield one event per accepted ID, parsed from canonical bytes, in canonical order
+Yield every distinct accepted variant, parsed from canonical bytes, in canonical order
 at one fixed cut. Filters are conjunctions of author equality, type equality
 and equality of specified top-level `data` fields to the supplied JSON primitive.
 `undefined` adds no constraint; `null` matches only present JSON null. Missing,
 boolean and number values cannot be conflated by SQL coercion. Filtering must
-equal applying the filter to the same unfiltered cut; it cannot expose rejected
-conflicts. Ranges, joins, full text and nested fields are outside this API.
+equal applying the filter to the same unfiltered cut. A filter can hide another
+variant of an ID, so a filtered result alone cannot establish unambiguous source
+identity. Authority consumers must resolve IDs against the complete unfiltered
+inventory at that cut. Ranges, joins, full text and nested fields are outside this API.
 
 <a id="changes"></a>
 
 ### 5.5 `changes`
 
-Return a frontier token and every matching event accepted after `since` through
-that frontier, once each, in no promised order. Missing token starts at zero.
+Return a frontier token and every matching variant accepted after `since` through
+that frontier, once each, in no promised order. A new conflicting variant advances
+the frontier even when its ID is already known. Missing token starts at zero.
 Late events with earlier timestamps still appear. An empty filtered result still
 advances its token. Consume the complete result before checkpointing it.
 
@@ -350,12 +363,13 @@ contract. Recovery uses a validated snapshot restored into a new runtime under
 [SQ §12.1](vault-sqlite.md#restore). Object damage follows
 [SQ §6](vault-sqlite.md#reads-damage-and-collection).
 
-`conflicting()` reports observed rejected values with the accepted value as
-`kept`. This diagnostic history is local and may be cleared. Portable snapshot
-inspection always returns an empty array from `conflicting()` because rejected
-values and their diagnostic history are not exported. Never use row order
-or a read filter to pick another accepted value, including after structural
-damage. A conflict is not permission to overwrite an accepted event.
+`conflicting()` derives all IDs with two or more canonical values from one fixed
+cut of the inventory, on both runtime and portable vaults. Sort groups by ID
+and their distinct variants by canonical bytes, both in unsigned UTF-8/byte
+order. No `kept` value wins. These variants cannot be cleared with caches or
+diagnostics, overwritten, or removed by export. Malformed rejected input remains
+diagnostic data; it is not an accepted variant. A structurally valid collision
+is evidence conflict, not storage damage, and does not itself block export.
 
 <a id="folds-and-local-caches"></a>
 
@@ -363,7 +377,8 @@ damage. A conflict is not permission to overwrite an accepted event.
 
 Folds are deterministic functions of the accepted event set, independent of
 arrival order and, except for explicitly local views, the current replica ID.
-They can always be rebuilt from `scan()`. Start with direct folds. Caching and
+They can always be rebuilt from unfiltered `scan()`, retaining every value per
+ID. A first-wins map is not a valid fold input. Start with direct folds. Caching and
 incremental updates are optional; correctness and invalidation requirements
 are in [SQ §7](vault-sqlite.md#local-state-and-projections).
 
@@ -384,7 +399,7 @@ and collection semantics. Only the vault runtime computes held roots under
 ### 8.1 Metadata and keystore
 
 ```ts
-type VaultMetadata = Readonly<{ version: 3; anchor: string }>;
+type VaultMetadata = Readonly<{ version: 4; anchor: string }>;
 type WrappedSeed = Readonly<{ version: 3; seedJwe: string }>;
 
 interface KeystoreAccess {
@@ -393,6 +408,7 @@ interface KeystoreAccess {
 }
 ```
 
+The keystore wrapper version is independent of the vault version and remains 3.
 Metadata is immutable. The unlocked host owns privileged rewrap and verifies
 that the replacement opens to the same seed/anchor. Read returns a detached
 value, not identity authority. `seedJwe` is a compact JWE string. Exact bytes
@@ -488,7 +504,7 @@ validation and atomic same-anchor union. Validate source-only properties before
 taking the target lock; perform target-dependent checks under it. Apply
 canonical duplicate/conflict, own-author fork, known payload,
 [receipt-integrity](vault-events.md#message-in) and erasure rules. Every root
-retained by a newly accepted source event in the prospective union, and every
+retained by a newly accepted source variant in the prospective union, and every
 root held by the union but not by the target before import, must have verified
 source bytes or [sound accepted target bytes](dasl-objects.md#read-operations);
 otherwise abort before publication. Compute the target-before-import and
@@ -537,7 +553,13 @@ browser support.
 
 ## 12. Versioning
 
-Vault version 3 covers envelope, object profile, key derivation and domain folds.
+Vault version 4 covers envelope, object profile, key derivation and domain folds.
+It adopts portable event variants, the continuity integration and durable
+application admission. The six-field envelope, DID/key derivation, deterministic
+ID transcripts, raw object profile and version-3 keystore wrapper remain as
+defined here; the version bump does not rename their purpose strings.
+The target runtime accepts only vault version 4 with SQLite schema version 2.
+No migration or import/restore compatibility with earlier vaults is required.
 SQLite schema versioning is separate. For published versions, compatible
 additions are new event types, optional payload fields with a fixed absent
 meaning, or negotiated capabilities. Changing existing
@@ -559,7 +581,8 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 3. <a id="es-3"></a> A batch and its new objects commit entirely, with one timestamp.
 4. <a id="es-4"></a> JCS-ineligible events fail before acceptance.
 5. <a id="es-5"></a> Different JSON spellings with equal canonical bytes ingest as duplicates.
-6. <a id="es-6"></a> Conflicting bytes for an accepted ID never overwrite its value.
+6. <a id="es-6"></a> Conflicting bytes for an accepted ID retain every canonical variant;
+    opposite ingest orders yield the same inventory and conflict groups, without a winner.
 7. <a id="es-7"></a> Unseen or conflicting current-author input aborts the whole ingest.
 
 <a id="folds-scans-and-interchange-es-8-es-16"></a>
@@ -567,9 +590,12 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 ### Folds, scans and interchange (ES-8–ES-16)
 
 8. <a id="es-8"></a> Shuffling/repartitioning events does not change folds.
-9. <a id="es-9"></a> Scans have canonical order regardless of physical order.
+9. <a id="es-9"></a> Scans have canonical order regardless of physical order, including the
+    canonical-byte tie-break for variants with equal at, eventId and author.
 10. <a id="es-10"></a> Event BLOBs round-trip exactly without LF and agree with indexed fields.
 11. <a id="es-11"></a> Deltas are complete for their cut and reject wrong-generation tokens.
+    A new variant of a known ID advances the token and invalidates affected projections;
+    an event-only exact-duplicate ingest allocates no position.
 12. <a id="es-12"></a> Full reconciliation needs no local token.
 13. <a id="es-13"></a> Portable values round-trip under the defined wrapper import policy.
 14. <a id="es-14"></a> Portable restore creates fresh local identity.
@@ -589,7 +615,7 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 
 <a id="import-collection-and-reader-protection-es-23-es-32"></a>
 
-### Import, collection and readers (ES-23–ES-32)
+### Import, collection and readers (ES-23–ES-33)
 
 23. <a id="es-23"></a> Export cannot mix cuts or publish missing held objects.
 24. <a id="es-24"></a> Import recovery exposes the whole old or new union, not staging.
@@ -602,5 +628,9 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 31. <a id="es-31"></a> Independent clients cannot bypass runtime ownership; a broker is optional.
 32. <a id="es-32"></a> Offline inspection excludes a later writer; separate immutable snapshots need no live owner.
     Portable inspection exposes the read-only `Vault` members, no local author,
-    and an empty `conflicting()` result. Every `commit` and `changes` call fails
+    and all retained conflict groups. Every `commit` and `changes` call fails
     with `UnsupportedOperation` without consuming sources or minting local IDs.
+
+33. <a id="es-33"></a> A filtered scan may show one variant while an unfiltered scan shows
+    a collision; resolving a reference against the same complete cut stays conflicted.
+    Cache clearing and portable round trips cannot remove the other variant.

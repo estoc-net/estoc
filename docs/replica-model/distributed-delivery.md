@@ -281,8 +281,11 @@ before the next delivery enters step 3. A pickup batch MAY parallelize the
 checks in steps 1–2, but MUST NOT commit all receipts before admitting the first.
 Do not fold a later delivery's proof or resolution as committed evidence early.
 For direct deliveries, the active runtime's serialized receive order plays the
-same role. Import or other committed evidence that becomes available meanwhile
-still applies at step 6; pickup order never overrides known replacement.
+same role. This is one runtime-wide receipt/admission sequence across pickup
+and direct delivery, including concurrent deliveries with different transport
+keys; per-delivery deduplication locks alone are insufficient. Import or other
+committed evidence that becomes available meanwhile still applies at step 6;
+pickup order never overrides known replacement.
 Sending the pickup ACK need not hold the operation lock or wait for application
 effects, and its network completion does not delay the next local step.
 
@@ -305,6 +308,9 @@ effects, and its network completion does not delay the next local step.
    denial and conflicts before committing `message.admitted`. Missing proof
    remains pending; an unadmitted
    old-peer source remains `ignored-superseded`. Neither changes pickup ACK.
+   After successful admission publication, refold the committed source/admission
+   view before generating dependent records. Within a pass, later candidates
+   see earlier decisions under the [ordered admission rule](channels.md#application-admission).
    For each consumer, validate the admitted source and its required target or
    protocol fields, then current operation policy. Commit its concrete intent
    or local result with already committed references. Invitation consumption
@@ -621,6 +627,11 @@ the original local endpoint or its verified local successor. Undirected graph
 connectivity, group membership, threads and ordinary responses are insufficient.
 
 All redundant witness fields must come from one admitted complete source row.
+Same-channel attribution compares the two canonical endpoints directly and
+does not query a zero-step continuity path. An aggregate graph conflict alone
+does not erase that observation; source/proof, receipt, admitted-intent and
+target/package integrity still apply. Cross-channel attribution requires the
+package's usable directed path under [channel authorization](channels.md#continuity-integration).
 An ignored old-peer carrier cannot acknowledge an outbound or change ACK timing.
 An admission recorded before supersession remains historical ACK evidence. Missing
 path/authentication/package references defer the acknowledgment. The carrier's
@@ -1022,10 +1033,11 @@ or mediator-visible IDs.
 - <a id="dd-32"></a> **DD-32.** No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
 - <a id="dd-33"></a> **DD-33.** Every unconfirmed local successor uses the same long-form sender and
     frozen from_prior rules, including the first public-to-private rotation.
-- <a id="dd-34"></a> **DD-34.** `from_prior.sub` equals plaintext `from` byte-for-byte; the protected JWT
-    `kid` has the exact `iss` DID portion. Predecessor method authorization uses
-    [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned)'s validated spelling comparison against the
-    exact predecessor verification document, without requiring byte equality with presentedDid.
+- <a id="dd-34"></a> **DD-34.** Received rotation proofs use the package's canonical DID
+    comparison for subject/sender and issuer/kid, with authentication against the
+    issuer's own immutable document. Long/short equivalent spellings bind without
+    rewriting JWT bytes; a different DID or unauthorized method does not. Local
+    producers still use their frozen long-form issuer/subject and package spelling.
 - <a id="dd-35"></a> **DD-35.** New unconfirmed successor packages include frozen proof/long form; committed packages never change after confirmation.
 
 - <a id="dd-36"></a> **DD-36.** Direct and mediated traffic use the same channel receipt and operation folds; only mediated traffic has pickup ACK.

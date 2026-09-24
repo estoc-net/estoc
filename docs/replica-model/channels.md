@@ -1,7 +1,9 @@
 # Channels, continuity and operation evidence
 
-Status: **phase 1; application-admission and rotation restrictions specified, implementation pending**. This document owns channel identity, invitation
-consumption, directed continuity evidence and operation eligibility. Storage
+Status: **phase 1; continuity integration, application admission and rotation restrictions specified, implementation pending**. This document owns channel identity, invitation
+consumption, the vault evidence adapter and operation eligibility. The
+[`@estoc/continuity` API and host contract](../../packages/continuity/README.md)
+own proof and graph semantics; this document specifies their application use. Storage
 envelopes and durability follow [event-store.md](event-store.md). Sending and
 effect ordering follow [distributed-delivery.md](distributed-delivery.md).
 The capitalized requirement words have their BCP 14 meanings.
@@ -120,9 +122,10 @@ The adapter MUST retain all envelope integrity, current-sender authorization,
 recipient and cross-layer addressing checks. Failure of those checks follows
 the hard pre-vault gate; no failed authentication may be presented as success.
 Predecessor resolution and proof verification occur after receipt under
-[the proof rule](relationships.md#predecessor-resolution). Use maintained
-DIDComm/JOSE verification and encoding APIs against the exact predecessor
-document. Never strip the proof or treat decoding as verification. A library
+[the proof rule](relationships.md#predecessor-resolution), through
+`@estoc/continuity/from-prior`. The DIDComm library authenticates the envelope;
+the continuity package verifies the original proof against the issuer's own
+immutable document. Never strip the proof or treat decoding as verification. A library
 that couples proof verification to unpack needs an explicit deferred-proof
 mode; waiting unopened for continuity is not a phase-1 fallback.
 
@@ -172,7 +175,8 @@ invitation/operation status are shown separately. Invitation availability
 does not make continuity pending. If an imported receipt's
 own sender evidence is missing, show that pending authentication separately;
 do not claim its sender has already been verified. Pending/invalid/conflicted
-continuity grants no peer ACK, handler effect or inherited channel permission.
+continuity grants no authority through that continuity. Same-channel historical
+ACK attribution uses section 5.2's direct identity rule and its own source checks.
 Application admission is a separate fact under
 [section 6.1](#application-admission); `verified` alone does not mean accepted.
 Later evidence may update the display and graph without another pickup, receipt
@@ -253,7 +257,12 @@ consumer. Consumption never disables the disclosed DID.
 
 ## 5. Derived continuity
 
-The graph folds retained proof evidence and local rotation decisions.
+The vault projects retained proof evidence and local rotation decisions into
+`@estoc/continuity` and uses its queries. The package's public types, JSDoc,
+README host contract and tests define normalization, joins, contexts, conflict
+scope and query outcomes. The descriptions and join diagram below explain the
+evidence mapping; they do not define another graph algorithm. The
+[integration contract](#continuity-integration) fixes the host responsibilities.
 Proof verification is local and appends no verification events.
 Application admission is a separate durable decision under section 6.1.
 
@@ -420,12 +429,10 @@ source witnesses; equivalent DID spellings neither split the context nor hide
 competing successors. These contexts are derived queries; message identifiers
 remain fixed by their actual channel and sender.
 
-Compute the least positive closure of links and joins from independently
-authenticated carriers with verified JWTs and from local decisions. A local decision's predecessor confirmation
-must be supported without that decision or its descendants. Pure reference
-cycles with no independent evidence grant nothing. Fold the full
-available evidence before checking current conflicts or authorizing new work;
-enumeration order and intermediate graph rows cannot authorize dispatch.
+Use the package's full projection and independent-confirmation rules; do not
+implement a second closure, fork detector or join algorithm in the vault.
+Fold the full available evidence before checking current conflicts or authorizing
+new work; enumeration order and intermediate graph rows cannot authorize dispatch.
 
 ### 5.2 Supersession, confirmation and authorization
 
@@ -459,11 +466,153 @@ Confirmation permits future newly prepared messages to omit the
 frozen proof; it does not edit a committed package or acknowledge
 any particular wire ID.
 
-For ACK authorization, a path preserves endpoint roles and uses verified
-forward replacements and the joins above. It relates a specific old channel
-to a specific successor channel. General undirected graph connectivity never
+For ACK attribution in the exact same canonical channel, compare both endpoint
+roles directly and require the admitted source's own authentication/proof,
+receipt integrity, admitted intent agreement and target/package evidence.
+An unrelated aggregate rotation conflict does not by itself invalidate this
+same-channel historical observation. Do not require `path(c, c)` to be usable:
+the package deliberately reports conflict even for that query in a conflicted
+context. This rule supplies no new-send or response authority.
+
+Cross-channel ACK attribution instead requires a usable `model.path(old, carrier)`
+and its exact evidence. It preserves endpoint roles through forward replacements
+and joins. General undirected graph connectivity never
 authorizes ACKs, sending or protocol effects. An unrelated channel in the same
 contact cannot acknowledge a message even when it chooses the same wire ID.
+
+<a id="continuity-integration"></a>
+
+### 5.3 Vault integration contract
+
+The adapter belongs in `@estoc/vault`. Agent-core performs decisions and durable
+commits using that adapter's results; daemon records and app views consume the
+same policy projections through the existing app → daemon → agent-core → vault
+dependency path. They MUST NOT maintain a separate continuity graph or infer
+application acceptance from raw receipts.
+
+```mermaid
+flowchart TD
+    S["Complete source variants and retained objects"] --> E["Vault: exact evidence and source conflicts"]
+    E --> P["continuity/from-prior: verify and bind"]
+    E --> F["Vault: stable fact projection and evidence index"]
+    P --> F
+    F --> M["continuity: one complete model"]
+    E --> A["Vault: effective admissions and intent agreement"]
+    M --> H["Vault: operation policy and admitted witnesses"]
+    A --> H
+    H --> R["Agent-core: evaluate and commit at the same revision"]
+    R --> S
+    H --> V["Daemon and app: accepted views and diagnostics"]
+```
+
+**Source inventory and projection.** Read every canonical variant from the
+[event store](event-store.md#scan), including conflicts, and retain an index
+from each fact and evidence reference to its exact sources, documents and
+validation dependencies. Check event-ID ambiguity before filtering by type or
+normalizing fields. A collision remains a host integrity fault even when its
+variants normalize to identical facts; package fact equality cannot erase it.
+Operations depending on that source or reference grant no authority. Where
+individually verifiable variants project to different values of one fact ID,
+pass all those values so the model exposes their conflict and diagnostic graph.
+No first-arrival or preferred-variant projection is permitted.
+For saved local choices and denials, account for every variant's possible
+selector: a relevant conflicted or unprojected record remains an operation
+blocker, rather than disappearing as an absent choice or block. Unrelated
+channels do not inherit that fault merely by sharing a DID.
+
+Use `PROFILE_VERSION = "estoc-continuity/1"` and proof profile
+`FROM_PRIOR_PROFILE = "estoc-from-prior/1"`. A snapshot's `identityNamespace`
+is the vault's immutable anchor DID, never its replica ID. Use the following
+stable fact IDs; evidence references are the source event IDs. These strings
+belong only to the derived projection, not the event envelope or wire protocol.
+
+| Validated retained source | Projected facts |
+| --- | --- |
+| Authenticated proof-free `message.in` E | `receipt:E:observation`, an `address-observed` at the exact receipt pair with `carriedTransition: null` |
+| Authenticated rotation carrier E whose own JWT verifies and binds | `receipt:E:transition` and `receipt:E:observation`; the observation references that exact transition, both with receipt E |
+| Saved `did.rotationSelected` E with valid local entities, key ownership and frozen proof | `decision:E`, a `local-decision` at its fixed predecessor pair |
+| Missing or failed source/proof/binding prerequisites | Host pending/invalid/conflict diagnostics and dependency index; never a fabricated proof-free observation |
+| Admission, block, contact or outbound intent | Host state only; no continuity fact |
+
+Replace E by the canonical event ID, identically across replicas and rebuilds.
+Never allocate new fact IDs to conceal variants of one source. For a saved
+decision, `sourceEventId != null` maps to that receipt's observation ID only
+after checking it is the exact predecessor-confirming source in the decision's
+pair, not merely a business trigger. Null remains null. The model evaluates
+confirmation and graph prerequisites; the adapter must not require the decision
+to already have a usable link before projecting it. Keep saved decisions whose
+host evidence is still unresolved in the inventory. Before successor allocation,
+inspect those records as well as `localDecisions()`; a pending saved choice
+cannot be mistaken for permission to allocate another successor.
+
+**Proof boundary.** Use `inspectFromPrior` only to locate issuer material, then
+`verifyFromPrior` with the retained issuer long form and `bindFromPrior` with
+the exact original token, receipt reference, authenticated sender and local
+recipient. The bound rotation yields the two same-receipt facts above. Proof
+creation uses `createFromPrior` and a host-held signer capability; vault checks
+local key ownership and the local producer's fixed spellings and saves the
+returned token before dependent work. Import never trusts a cached verified type.
+
+Decoding success is not profile validation. Document-independent failures must
+be distinguishable from missing issuer material, including malformed claims,
+unsupported JOSE headers/time claims and canonical sender/subject mismatch.
+Keep that validation in the shared package boundary. If its public API does
+not expose the necessary precheck, extend and test the package API before
+completing the adapter; do not create another JWT parser in vault or agent-core.
+The current `inspectFromPrior` alone does not establish those checks.
+
+This application revision projects **rotations only**. Retain otherwise
+receivable ending tokens as unsupported-proof diagnostics, without projecting
+an ending or granting admission/effects from that proof. Anonymous receipt
+still has no channel. Do not convert an ending into `channel.blocked`, global
+DID retirement or synthetic confirmation. Enabling the package's ending feature
+requires an explicit application policy and event/UI revision; it is not an
+incidental consequence of replacing the verifier.
+
+**One model, separate admission.** Derive one complete model from all host-validated
+evidence, including observations without admission and committed local decisions.
+They are needed to rebuild links and detect conflicts. Do not filter out
+unadmitted observations, insert admission as a fact or make consumer-specific
+graphs. Facts are a rebuildable projection, not the durable inventory: newly
+learned contradictions may retract previously projected evidence. Do not union
+old cached facts back into a fresh projection.
+
+For new rotation, short-form disclosure or omission of the frozen proof, take
+the eligible observations from `confirmation(localDid, peerDid)` and select
+one whose exact receipt has effective admission and meets that consumer's
+integrity checks. A bare `confirmed` result is insufficient. Require admission
+for that observation, not every fact in its `support`: historical decisions
+and their rebuilding witnesses retain their own validation rules. Each returned
+witness's references must still be unambiguous. If no admitted observation
+qualifies, keep the operation unconfirmed even when the package reports confirmation.
+
+| Query or situation | Host interpretation |
+| --- | --- |
+| `head: head` | Candidate pair only; check exact evidence, source integrity, local lifecycle, denial and the operation's requirements |
+| `head: no-evidence` | A first-contact send may use the requested exact pair with local ownership, peer evidence, route and policy checks; invent no receipt or confirmation |
+| `head: unresolved` | Preserve the pending reason and saved choice; no predecessor fallback or new successor allocation |
+| `head: conflict` | No default or explicit send in the affected context; retain diagnostics and historical outcomes |
+| `head: ended` | No send authority; this rotation-only adapter must surface an unsupported-profile diagnostic if such a fact enters its model |
+| `changes()` | Examine status and support; a nonempty list alone is not a usable replacement |
+| `history()` | Positive diagnostic graph; directional successor traversal may propagate denial, but undirected connectivity grants no authority |
+| Proof-free receipt in a conflicted context | Per-source authentication/admission remains independent of observation graph status; apply section 6.1's actual blockers |
+
+`no-evidence` is not a fallback for a missing or conflicted exact source, an
+unprojected saved decision or an incomplete proof that the operation needs.
+Combine model outcomes with the host dependency/fault index before authorizing
+anything. Package `support` explains a witness, not the absence of other
+conflicts or a replayable snapshot; retain the full source cut and profile to
+reproduce an answer.
+
+**Revision and commit.** Source validation, the complete fact projection,
+admission fold, policy checks and dependent commit must use the same valid
+revision. Holding the vault operation lock from scan through commit satisfies
+this. If verification runs outside the lock, compare its captured revision
+under the lock and rebuild/recheck on change before committing. A cache key
+includes the exact token, issuer material, binding and profile; source or
+dependency contradictions invalidate it even when those bytes are unchanged.
+Import, receipt, document recovery and policy/decision commits cannot leave a
+previously authorized projection active. Release locks before network I/O.
 
 <a id="message-scoped"></a>
 <a id="message-accepted"></a>
@@ -474,10 +623,12 @@ contact cannot acknowledge a message even when it chooses the same wire ID.
 Each operation checks its evidence and current policy before recording its
 intent, local decision or result.
 
-A **complete source witness** is one authenticated `message.in` with a valid
+A **complete source witness** is one unambiguous authenticated `message.in` with a valid
 local recipient/key mapping, canonical sender and its own exact resolution
-document. Its actual DID pair fixes its channel. A carried proof also requires
-its own verified JWT and valid derived peer link under section 5. Proof-free
+document. Its actual DID pair fixes its channel. A carried rotation proof also
+requires its own verified JWT and valid bound predecessor/successor pair under
+section 5. These per-source checks do not establish a usable graph path;
+consumers that need continuity additionally check that path and its conflicts. Proof-free
 input needs no continuity witness. Another carrier cannot supply this source's
 sender authentication, proof result or immutable claims.
 Missing exact references defer the affected consumer;
@@ -516,7 +667,8 @@ including protocol thread correlation for Report Problem, but no handler
 decision. Admission is required even for these read-only projections. Current
 blocking or supersession does not erase ACK evidence from a previously admitted
 source; a newly received or still-unadmitted old-peer ACK supplies none.
-Invalid/conflicting evidence still prevents attribution.
+Invalid/conflicting evidence needed for attribution still prevents it; a
+same-channel observation does not require a continuity path under section 5.2.
 Body erasure preserves committed event facts but prevents new content-derived
 work and invalidates display data that requires the erased bytes under
 [application views](vault-events.md#application-message-views).
@@ -597,10 +749,10 @@ Unadmitted payloads, including old-peer duplicates, do not enter application
 intent agreement or invalidate accepted history merely by contradicting its
 content. Their raw discrepancy remains visible as a diagnostic.
 
-An **effective admission** is a schema-valid `message.admitted` whose exact source
+An **effective admission** is an unambiguous schema-valid `message.admitted` whose exact source
 has complete positive authentication and endpoint evidence, whose own carried
 JWT, if present, verifies and derives a valid peer pair, and whose logical input
-is unaffected by receipt-integrity faults. Check these per-source facts
+is unaffected by receipt-integrity faults or source/reference collisions. Check these per-source facts
 independently of aggregate intent or continuity conflicts and current policy.
 Missing exact evidence leaves the admission pending; invalid source/proof
 evidence or a receipt-integrity fault grants no effective admission.
@@ -623,7 +775,7 @@ following table from top to bottom; the first matching row wins:
 
 | Disposition | Meaning |
 | --- | --- |
-| `refused` | Definitive source authentication, endpoint or carried-proof invalidity, or a receipt-integrity fault; expose the reason |
+| `refused` | Definitive source authentication, endpoint or carried-proof invalidity, or a receipt/source-reference integrity fault; expose the reason |
 | `admitted` | At least one effective admission names this exact source, including after later denial or supersession |
 | `ignored-superseded` | No effective admission, and the authenticated peer has a verified replacement in this channel context |
 | `pending-admission` | None of the above; expose missing evidence, unfinished admission or the current admission blocker |
@@ -657,9 +809,17 @@ admissions first, then evaluate sources without
 effective admission in ascending `receiptOrderKey`. Integrity-conflicted keys
 grant no admission and need no event-order tie-break. Reapply the checks above
 to each candidate; missing evidence for one does not block unrelated candidates.
+Commit each new admission and refresh effective admissions and logical intent
+agreement before evaluating the next candidate. Two contradictory candidates
+must not both be approved against one stale pre-pass fold. A transaction may
+batch the decisions only if its ordered evaluation includes earlier staged
+admissions and publication remains atomic; no dependent work observes them
+before successful durable publication. Resolve uncertain publication before
+continuing the pass.
 Ignored or definitively refused sources gain no admission. Reuse an existing
 saved admission if repaired evidence makes it effective; do not append a
-replacement. Finish this local pass before dependent application work, then
+replacement. After durable publication, refold the committed view before any
+dependent consumption, ACK projection or effect. Finish this local pass before dependent application work, then
 reconcile invitation consumption. No restart or redelivery is required. A
 successful pass creates no dispatch action; only the current live delivery,
 if still eligible, retains its original action under the receive procedure.
@@ -671,7 +831,10 @@ restore accepted history.
 
 ### 6.2 Merge, restore and disconnected replicas
 
-Merge remains union by event ID. Import admissions with their exact sources and
+Merge unions all canonical values per event ID under the
+[source preservation contract](event-store.md#invariants). A collided source or
+admission ID has no effective admission, regardless of arrival order or
+normalization. Import admissions with their exact sources and
 proof evidence; import order must not determine their meaning. Once the same
 complete union is available, all readers derive the same admitted history and
 current restrictions. A late duplicate without its own admission cannot extend
@@ -782,17 +945,18 @@ retain their source channels even when a contact displays data from several chai
 
 ## 8. Fixed outbound channel and dispatch authority
 
-For a new user send, follow complete verified role-preserving links and joins
-from each selected channel to its unique non-conflicted **head**: a reachable
-channel with no further verified forward replacement. A predecessor of such a
-link or join is replaced for default selection. Fold the complete available
-graph before selecting; opposite-side paths that join at the same head supply
-one choice. Competing same-end successors or a cycle leave no default in the
-affected context. An ineligible head supplies no default and MUST NOT silently
-fall back to a predecessor.
+For a new user send, query `model.head` from each selected channel against the
+complete projection and apply the host checks in section 5.3. A usable **head**
+is a candidate for current operation policy. `no-evidence` permits the explicit
+first-contact case there; `unresolved`, `conflict` or `ended` supplies no default.
+A saved but unconfirmed local rotation is unresolved, not permission to send
+from its predecessor. Two competing saved local successors conflict even before
+either is confirmed. No ineligible head or pending choice silently falls back
+to a predecessor.
 
-For contact-based sending, `writeTo[]` contains the distinct eligible heads of
-the selected contexts. A `contact.useDid` preference also matches verified local
+For contact-based sending, `writeTo[]` contains the distinct eligible candidate
+pairs from those `head` or first-contact `no-evidence` results for the selected
+contexts. A `contact.useDid` preference also matches verified local
 successors of its DID along forward paths in those contexts. It grants no path
 to an unrelated channel sharing that DID. After applying any saved preference,
 exactly one eligible head supplies the default; otherwise the user must select
@@ -862,6 +1026,9 @@ must define an authenticated application operation ID and its own rules.
 
 ## 9. Required conformance cases
 
+These cases include host policy and integration behavior. Passing the package's
+own model/proof tests alone does not establish application conformance.
+
 - <a id="ch-1"></a> **CH-1.** A channel is an ordered local/peer canonical DID pair, independent of keys, routes and contacts. Local sending and peer receipt share that pair; reversing local/peer roles selects a different vault-local view.
 - <a id="ch-2"></a> **CH-2.** First authenticated receipt commits and pickup-ACKs without invitation consumption, continuity history or a contact.
 - <a id="ch-3"></a> **CH-3.** A valid retained proof with complete authenticated source and endpoints derives its link without an earlier predecessor-channel message. Invitation state cannot make it pending-history; recovering required evidence adds no receipt or stored graph event.
@@ -926,3 +1093,17 @@ must define an authenticated application operation ID and its own rules.
 - <a id="ch-64"></a> **CH-64.** Validation of committed rotation, invitation consumption, automatic outbound, package and submission records with complete evidence preserves their derived local links, exclusive consumer, fixed intents/packages and submitted state regardless of whether source admissions are available, even after peer supersession. Missing exact authentication/proof/confirmation references still defer those records. They supply no chat/profile/ACK admission and cannot authorize a new source-derived decision or intent without an admitted source.
 - <a id="ch-65"></a> **CH-65.** Source/proof invalidity or receipt-integrity faults take precedence over a saved admission. Otherwise an effective admission stays admitted after denial, supersession or an independently admitted intent conflict; that conflict separately blocks application use. Without effective admission, verified supersession precedes pending-admission. Denial alone leaves an unadmitted source pending with a denial blocker, including a late ACK for a pre-block outbound; an ACK admitted before blocking retains its attribution. Competing B0-to-B1 and B0-to-B2 proofs block new admission of those proof-carrying sources, but do not by themselves block an otherwise eligible proof-free source from B1 in its own channel.
 - <a id="ch-66"></a> **CH-66.** In one pickup batch, an eligible B0 chat followed by a verified B0-to-B1 carrier completes receipt and admission before the rotation receipt commits, preserving the chat as admitted history. Reverse pickup order leaves the B0 chat ignored-superseded. Parallel decryption cannot change that result. A replacement imported before the chat's admission still blocks it; a crash after its receipt but before admission follows current-policy recovery rather than reconstructing batch order.
+
+- <a id="ch-67"></a> **CH-67.** Rebuilding or restoring the same source inventory yields identical fact IDs, evidence references, anchor namespace and profile, despite different replica IDs or event enumeration. A carrier produces a transition and observation with the same receipt reference; another carrier's proof cannot complete it.
+- <a id="ch-68"></a> **CH-68.** Same-ID source variants carrying different successors survive scan, import, export and restore and reach the model as conflicting fact values. If variants instead normalize to identical facts, the host source fault still blocks dependent admission, confirmation, paths and sending. Filtering by event type or clearing caches cannot hide the fault.
+- <a id="ch-69"></a> **CH-69.** The full projection rebuilds a saved local rotation and its join using a predecessor observation without admission. That observation alone cannot confirm an address for new work. A qualifying admitted observation may use a witness whose support includes unadmitted historical evidence; do not require admission for every support fact or filter the model per consumer.
+- <a id="ch-70"></a> **CH-70.** A first-contact pair with no facts returns no-evidence and permits a policy-eligible explicit send without a synthetic receipt or confirmation. An unconfirmed saved rotation stays unresolved without predecessor fallback; two different saved successors conflict before confirmation. An unprojected saved decision also prevents another allocation.
+- <a id="ch-71"></a> **CH-71.** With two competing peer successors, otherwise valid proof-free input in its own channel may gain admission despite the model's conflicted observation status. A previously admitted same-channel ACK with complete source/target evidence remains attributable without path(c,c). A cross-channel ACK needing that conflicted path is not attributable, and no new send bypasses the conflict.
+- <a id="ch-72"></a> **CH-72.** The adapter accepts a valid long-form issuer with an equivalent short-form kid and a short-form subject matching the authenticated long-form sender, with original JWT bytes unchanged. It accepts absent typ and JWT/application/jwt case variants, and rejects exp, nbf, unsupported critical headers and unauthorized keys under the package profile.
+- <a id="ch-73"></a> **CH-73.** Without issuer material, document-independent malformed claims/profile headers and canonical sender mismatch remain invalid; a well-formed unresolved issuer remains pending-proof. Successful inspection alone cannot establish profile validity. Evidence recovery verifies and binds the exact saved token without replaying the receive action.
+- <a id="ch-74"></a> **CH-74.** Two pending receipts with the same logical input and contradictory intent are reconciled in receiptOrderKey order. The second sees the first newly committed or transactionally staged admission and gains none. Crash or uncertain commit before publication authorizes no dependent consumption, ACK projection or effect; recovery reads committed admissions before proceeding.
+- <a id="ch-75"></a> **CH-75.** Concurrent direct deliveries with different transport keys share the pickup receipt/admission sequence. A later rotation receipt cannot commit ahead of an earlier delivery's admission decision through a separate lock. Network completion of pickup ACK or automatic output does not hold that sequence; separately imported evidence still applies before admission.
+- <a id="ch-76"></a> **CH-76.** Import a collision or replacement after verification but before an operation commit. The captured revision cannot authorize the operation: revalidate and refold against the changed inventory. Dependency damage or repair invalidates affected verification/projection caches even without a new event. A fresh projection never revives withdrawn facts by unioning its old cache.
+- <a id="ch-77"></a> **CH-77.** Shared host policy gates user send, preparation, first dispatch and manual retry at both fixed endpoints. No daemon/app flag enables pre-rotation bypass. Preserve the intent, package, wire ID and actual in-flight/submitted outcome when a later rotation removes eligibility.
+- <a id="ch-78"></a> **CH-78.** Otherwise receivable ending tokens, including a valid signed-audience ending and an unbound basic ending, remain unsupported-proof diagnostics in this application revision. They create no graph ending, admission, channel block, DID retirement or confirmation; anonymous receipt supplies no channel.
+- <a id="ch-79"></a> **CH-79.** Daemon/app accepted conversation, profile and ACK views use the same effective admissions and source validation as the runtime. Raw pending/refused/ignored receipts remain separately inspectable. Open, restore, import and evidence recovery refresh those views and missing admissions without minting LiveInput/LiveAction or sending historical ACKs, replies or notifications.

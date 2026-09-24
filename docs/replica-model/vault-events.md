@@ -1,4 +1,4 @@
-# The Estoc vault events, version 3
+# The Estoc vault events, version 4
 
 <!-- suite-navigation:start -->
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
@@ -15,7 +15,7 @@ when, and only when, they appear in all capitals.
 Every example below is the `type`, `roots` and `data` portion of an event
 whose complete envelope is defined by [event-store.md](event-store.md). Object CIDs and
 retention semantics are defined by [dasl-objects.md](dasl-objects.md). A known event
-type has a closed payload schema in version 3. The store itself validates
+type has a closed payload schema in version 4. The store itself validates
 only the envelope; the vault layer validates the payload before append
 and after ingest.
 
@@ -167,7 +167,7 @@ Reserved names are:
 | `did/<id>/authentication` | signing/authentication key for one communication DID entity |
 | `did/<id>/key-agreement` | DIDComm key-agreement key for one communication DID entity |
 
-In `did/...` names, `<id>` is the DID entity ID. Version 3 defines exactly
+In `did/...` names, `<id>` is the DID entity ID. Version 4 defines exactly
 one authentication key and one key-agreement key per communication DID
 entity. Key names are never renamed or reused. They do not encode a contact,
 replica, domain owner or process location.
@@ -226,7 +226,7 @@ estocNamespace(purpose) = UUIDv5(
 )
 ```
 
-The version-3 purposes and resulting namespace UUIDs are:
+The purposes and resulting namespace UUIDs, unchanged from version 3, are:
 
 | purpose | namespace UUID |
 | --- | --- |
@@ -322,14 +322,21 @@ type EventReference<T extends string> = EventId & { readonly __eventType: T };
 Identifiers serialize as validated strings without wrapper objects or type
 prefixes. `Channel` serializes as a record of two canonical DID strings. Parsers
 and derivation functions produce them only after the owning format checks.
-A cast is not validation. An event-reference
-type records its required target type; missing evidence still defers and
+A cast is not validation. Resolve every event reference against the complete
+[source inventory](event-store.md#damage-and-conflicts) before filtering by type
+or fields. An ID with multiple canonical values is an integrity conflict,
+including when only one value has the expected type or both values normalize
+to the same domain fact. No variant of that ID supplies authoritative state,
+a release decision or an exact witness. Dependent records expose that conflict;
+independent evidence remains independently evaluable. Keep every variant for
+diagnostics, continuity conflict detection and conservative retention.
+An event-reference type records its required target type; missing evidence still defers and
 incompatible evidence still conflicts under the referencing schema. It is
 never proof that the target is available or valid. `effectKey` is the existing
 derived idempotency key, not a keystore name or a cryptographic public key.
 
-Message identity has three levels. `eventId` names one exact receipt or other
-event; repeated receipt may create several event IDs with one `messageId`.
+Message identity has three levels. An unambiguous `eventId` names one exact
+receipt or other event; repeated receipt may create several event IDs with one `messageId`.
 An inbound `messageId` names the exact sender/recipient/wire-ID input; accepted
 key variants in that channel share one execution. Different channels never
 alias message or execution identities.
@@ -1065,24 +1072,25 @@ message-content erasure removes neither source of issuer material.
 No association, link or trusted verification result is stored as an event.
 Verification requires neither handler execution nor a known predecessor channel.
 
-The proof's `iss` canonicalizes to the derived document's DID and, for
-channel inheritance, the predecessor channel's peer DID; `sub` equals
-the carrier's exact plaintext `from` and authcrypt sender spelling and
-canonicalizes to the successor DID. The two canonical DIDs must differ.
-`iat` is an integer Epoch-Seconds value: it has no message-age acceptance window
-and elects no branch or alternative issuer document. The protected JWT `kid`
-has a DID portion byte-identical to `iss` and names an authentication method
-authorized by the exact predecessor document. Use maintained signature and
-encoding APIs to verify the original JWT; decoding alone proves nothing.
+Use the shared proof profile through
+[the vault adapter](channels.md#continuity-integration), with
+`@estoc/continuity/from-prior` owning parsing, profile checks, signature
+verification, creation and receipt binding. The issuer material is its validated
+long-form DID: an arbitrary document with the same claimed ID cannot replace
+the document encoded in that DID. The retained document/CID must match that
+immutable representation.
 
-For predecessor comparison, validate any Peer long form and derive its short
-form under [the DID profile](relationships.md#peer-did-numalgo-4-profile).
-The document's DID spelling need not equal
-`iss` if these validated canonical forms agree. To compare `kid` with that document's
-authentication methods, resolve relative method references against its `id`,
-then canonicalize only the DID portions of the two DID URLs. All remaining
-components, including the fragment, match byte-for-byte. This comparison
-rewrites neither the JWT signing input nor the retained document or CID.
+The proof's `iss` canonicalizes to that issuer and the predecessor peer;
+binding requires `sub` to canonicalize to the receipt's authenticated sender.
+Long and short spellings of the same DID compare equal, including the DID
+portion of `kid`; the method fragment still identifies the authorized
+authentication key. Preserve the original JWT, document and presented sender
+spellings without rewriting signing input. The package profile accepts optional
+`typ` as `JWT` or `application/jwt` without case sensitivity and rejects `exp`
+and `nbf`; it evaluates no clock window. These are examples of the shared
+profile, not permission for a separate vault parser. `iat` elects no branch.
+Local producers additionally use the fixed long-form spellings required by
+[local rotation](channels.md#did-rotationselected).
 
 Verification and rebuild follow [predecessor resolution](relationships.md#predecessor-resolution).
 Restored issuer material can complete a short-form proof only when its validated
@@ -1338,7 +1346,7 @@ Problem attribution follows [the error rules](relationships.md#remote-errors-and
 ## 8. Stored message document
 
 Message application content is stored as one whole-resource raw DASL object
-containing UTF-8 RFC 8785 canonical JSON. Version 3 uses the following closed
+containing UTF-8 RFC 8785 canonical JSON. Version 4 uses the following closed
 stored representation:
 
 ```json
@@ -2263,9 +2271,18 @@ Missing bytes MUST NOT be displayed as intentional deletion.
 Under the operation lock in [event-store.md section 9](event-store.md#vault-interface), the vault runtime computes
 the held roots passed to `ObjectStore.collect` in [dasl-objects.md section 8.3](dasl-objects.md#collection).
 
-A root is held when at least one accepted event retains it through
-`event.roots`, except that a root named by `message.erased` is no longer held
-by that message.
+A root is held when at least one accepted event variant retains it through
+`event.roots`, except that a root named by an unambiguous valid `message.erased`
+is no longer held by that message. Compute this fold over the full unfiltered
+inventory. Every variant of a collided event ID contributes its roots; choosing
+one variant cannot release another's contribution. Ordinary explicit erasure
+can release a message/root relation only where it unambiguously covers that
+contribution; every uncovered or ambiguously attributed variant still retains
+its roots. No collided event itself supplies erasure or submission authority.
+Conflicted release events or references also grant no release of other events'
+roots. A collision may therefore restore a retention obligation for previously
+released bytes; import must satisfy the prospective union's
+[required roots](vault-sqlite.md#import) before publishing the collision.
 
 This section is the sole normative owner of prepared-envelope retention.
 For a consistent outbound `M` and valid package `P`, define:
@@ -2306,7 +2323,7 @@ Submission eligibility additionally checks current time, addressing,
 proof, route and available bytes. Scheduling eligibility is not a retention
 predicate.
 
-Unknown event types retain every exact root in their `roots` because version 3
+Unknown event types retain every exact root in their `roots` because version 4
 defines no erase rule for them. A CID embedded in object content is not a
 retention edge unless it also appears in an accepted event's `roots`.
 
@@ -2316,7 +2333,7 @@ retention edge unless it also appears in an accepted event's `roots`.
 
 ### 12.4 No runtime-local eviction event
 
-Version 3 does not represent local body eviction as a portable event. A local
+Version 4 does not represent local body eviction as a portable event. A local
 storage policy that deletes a non-erased retained object makes the phase-1
 vault incomplete. It may be repaired from a verified portable SQLite import or backup.
 Missing bytes never authorize collection of retained roots.
@@ -2510,7 +2527,9 @@ Opposite-side rotation uses verified joins, never contact lookup.
 
 ### 14.1 Event merge
 
-Merge is event-store union by `eventId`. It never:
+Merge is the event-store union of canonical variants per `eventId`. No same-ID
+value wins; references to collided IDs remain conflicted after export/restore.
+It never:
 
 - rewrites an event;
 - removes an imported decision;
@@ -2658,11 +2677,11 @@ author remain unchanged.
 
 ## 16. Versioning
 
-These event meanings belong to vault version 3. A version-3 reader may
+These event meanings belong to vault version 4. A version-4 reader may
 preserve unknown event types but MUST validate every known type according
 to this document.
 
-Compatible additions within version 3 may introduce a new event type or
+Compatible additions within version 4 may introduce a new event type or
 an explicitly optional payload field whose absence has a fixed meaning.
 Changing a published field meaning, fold, deterministic ID, erasure rule or key
 derivation requires a new vault version.
@@ -2788,7 +2807,7 @@ derivation requires a new vault version.
     `kid` has that exact DID portion. Peer verification matches validated
     predecessor spellings and method IDs under [section 6.4](#relationship-peertransitioned), without changing
     the immutable document or JWT bytes.
-- <a id="ve-39"></a> **VE-39.** `from_prior.sub` equals plaintext `from` byte-for-byte; before confirmation
+- <a id="ve-39"></a> **VE-39.** A local producer's `from_prior.sub` equals plaintext `from` byte-for-byte; before confirmation
     both use the successor's Peer-DID long form.
 - <a id="ve-40"></a> **VE-40.** Each carrier's original JWT verifies against the immutable document derived from its long-form issuer or matching retained peer.resolved material for a short-form issuer. Link derivation uses that carrier's exact authentication and endpoint evidence; iat selects no alternative document. Rebuild appends no event for verification and needs no prior verification cache.
 

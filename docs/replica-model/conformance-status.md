@@ -31,12 +31,42 @@ specification-only revision.
 | VE-32, VE-60, VE-61, VE-78, VE-97, VE-109, VE-115, VE-126, VE-133, VE-139, VE-141, VE-142, VE-144, VE-151 | `partial` | Admission-aware application witnesses, ACK/profile/confirmation views and current endpoint restrictions |
 | DD-12, DD-23, DD-26, DD-27, DD-44, DD-65, DD-70, DD-71, DD-74, DD-76, DD-77; RZ-33 | `partial` | Admission-aware intent conflicts and ACK witnesses/order, and strict dispatch eligibility |
 
+<a id="continuity-integration-revision"></a>
+
+## Pending continuity integration and source preservation — 2026-09-24
+
+The target now uses vault version 4 / SQLite schema 2 and consumes
+`@estoc/continuity` through the vault. Its package is available, but the storage,
+adapter and application changes below are **not implemented**. The version-3
+seed wrapper, DID/key derivation and deterministic ID transcripts stay unchanged.
+Earlier vaults need no migration. Documentation checks do not verify runtime
+behavior, and the package's own tests do not establish host conformance.
+
+| Cases | Status after this revision | Remaining work |
+| --- | --- | --- |
+| ES-6, ES-9, ES-11, ES-32 | `partial` | Preserve and scan all canonical variants, deterministic tie-break, variant deltas and portable conflicts |
+| ES-33; SQ-41–SQ-42 | `missing` | Source ambiguity despite filters, atomic variant/object publication, collision retention and portable round trips |
+| SQ-11, SQ-14, SQ-29, SQ-35, SQ-36 | `partial` | Composite event/position keys and source/target variant union with complete root preflight |
+| DD-34; VE-39 | `partial` | Shared proof verification and canonical received binding; retain local producer spelling constraints |
+| CH-67–CH-79 | `missing` | Vault adapter, admitted confirmation, explicit query policy, source faults, ordered admission, revision checks, strict dispatch and app views |
+
+Implement in this order; each stage needs its own integration evidence before
+its status is promoted:
+
+| Stage | Deliverable | Completion evidence |
+| --- | --- | --- |
+| 1 | Event-store and SQLite variant inventory | Opposite import orders, cache clearing, export/restore and crash preserve every source variant and its held objects; reject old formats |
+| 2 | Vault dependency, proof adapter and complete fact projection | Stable IDs, same-receipt binding, issuer/profile boundaries including document-independent rejection, joins, unconfirmed decisions and source conflicts; replace the old graph/parser |
+| 3 | Admission schema/fold and agent-core reconciliation | Ordered contradictory candidates, receipt/admission crashes, uncertain commit, shared direct/pickup sequence and revision-change rechecks |
+| 4 | Admitted witnesses and shared send policy | Historical decisions rebuild; new confirmation needs an admitted observation; same/cross-channel ACK rules and both endpoint gates cover every dispatch path |
+| 5 | Daemon records, app views and end-to-end behavior | Accepted and diagnostic views remain separate; both pickup orders and import/reopen converge without historical dispatch; remove pre-rotation bypass parameters |
+
 The following summary and detailed rows are the **2026-09-21 baseline**. Their
-counts exclude the ten added cases, and their old evidence does not verify
-revised clauses. The revision table above overrides baseline status for the
-listed cases. All other application-consumer cases must also be reassessed
-against the common admission prerequisite before claiming this revision is
-implemented; unchanged test titles alone are not evidence of that prerequisite.
+counts exclude all subsequently added cases, and their old evidence does not
+verify revised clauses. Both revision tables above override baseline status for
+listed cases. Reassess every storage/fold consumer for the complete variant
+inventory and every application consumer for admission before claiming version-4
+conformance; unchanged test titles alone are not evidence of either prerequisite.
 
 ## Baseline summary
 

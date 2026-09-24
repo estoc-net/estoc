@@ -1,10 +1,10 @@
-# The Estoc SQLite vault, version 3
+# The Estoc SQLite vault, version 4
 
 <!-- suite-navigation:start -->
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **phase 1, implemented**. SQLite is the sole persistent vault and portable
+Status: **phase 1; schema-2 source preservation specified, implementation pending**. SQLite is the sole persistent vault and portable
 backup format.
 
 The capitalized requirement words in this document have their BCP 14 meanings.
@@ -53,10 +53,10 @@ Use SQLite's UTF-8 file format and:
 
 ```sql
 PRAGMA application_id = 1163088963; -- 0x45535443, ESTC
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 ```
 
-`user_version` identifies the SQLite schema; `vault_meta.vault_version = 3`
+`user_version` identifies the SQLite schema; `vault_meta.vault_version = 4`
 identifies event, object, key and fold semantics. Reject unsupported versions
 before application writes or payload interpretation. Published schema changes
 require a new schema version; semantic changes follow [ES §12](event-store.md#versioning).
@@ -65,6 +65,9 @@ versions accepted for restore and import; runtime migration support alone does
 not imply portable compatibility.
 Any supported migration is application-owned and commits schema and version
 together. A failed migration cannot expose a partly upgraded normal runtime.
+This revision accepts only schema 2 / vault 4 for runtime open, portable
+inspection, restore and import. Earlier formats are rejected; no migration is
+required. The seed wrapper remains version 3 independently of these versions.
 
 <a id="common-schema"></a>
 
@@ -76,7 +79,7 @@ Runtime and portable databases use these five ordinary `STRICT` tables:
 CREATE TABLE vault_meta (
   singleton     INTEGER PRIMARY KEY CHECK (singleton = 1),
   format        TEXT NOT NULL CHECK (format = 'estoc-sqlite'),
-  vault_version INTEGER NOT NULL CHECK (vault_version = 3),
+  vault_version INTEGER NOT NULL CHECK (vault_version = 4),
   kind          TEXT NOT NULL CHECK (kind IN ('runtime', 'portable')),
   ready         INTEGER NOT NULL CHECK (ready IN (0, 1)),
   anchor        TEXT NOT NULL
@@ -89,11 +92,12 @@ CREATE TABLE keystore (
 ) STRICT;
 
 CREATE TABLE events (
-  event_id  TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
+  event_id  TEXT COLLATE BINARY NOT NULL,
   at        TEXT COLLATE BINARY NOT NULL,
   author    TEXT COLLATE BINARY NOT NULL,
   type      TEXT COLLATE BINARY NOT NULL,
-  canonical BLOB NOT NULL
+  canonical BLOB NOT NULL,
+  PRIMARY KEY (event_id, canonical)
 ) STRICT;
 
 CREATE TABLE objects (
@@ -175,8 +179,9 @@ the seed is available or a readable valid wrapper can be unlocked.
 ## 5. Events and change tokens
 
 `events.canonical` is exactly `canonicalEventBytes(event)`, without a newline;
-the other columns MUST equal the corresponding envelope fields. Accepted events
-are never updated or deleted. Duplicate/conflict and current-author fork checks
+the other columns MUST equal the corresponding envelope fields. Each row is
+one canonical variant; an ID may have several rows and none wins. Accepted
+variants are never updated or deleted. Duplicate/conflict and current-author fork checks
 follow [ES §5](event-store.md#eventstore).
 
 If SQL JSON functions are used for filtering, pass `CAST(canonical AS TEXT)`;
@@ -195,12 +200,16 @@ CREATE TABLE store_state (
 
 CREATE TABLE event_positions (
   accepted_seq INTEGER PRIMARY KEY CHECK (accepted_seq > 0),
-  event_id     TEXT NOT NULL UNIQUE REFERENCES events(event_id)
+  event_id     TEXT COLLATE BINARY NOT NULL,
+  canonical    BLOB NOT NULL,
+  UNIQUE (event_id, canonical),
+  FOREIGN KEY (event_id, canonical) REFERENCES events(event_id, canonical)
 ) STRICT;
 ```
 
 In a runtime there is one control row; both IDs are canonical lowercase UUIDv7.
-Every accepted event has one position. Acceptance allocates positions above `last_seq` and
+Every accepted variant has one position, including a later collision under an
+existing ID. Acceptance allocates positions above `last_seq` and
 advances it in the same transaction. Empty/duplicate-only writes do not advance
 it. Positions remain fixed within a generation; `last_seq` is their maximum or
 zero for an empty store. Missing/inconsistent control is damage, not creation.
@@ -216,8 +225,8 @@ Positions/tokens never travel in portable state.
 Portable inspection exposes [ES §9](event-store.md#vault-interface)'s read-only
 `Vault` and scans the immutable event set in canonical order without local
 control tables. It has no change frontier; `changes` is rejected under
-[ES §5.5](event-store.md#changes). Its `conflicting()` result is always empty
-because local rejection diagnostics are not exported.
+[ES §5.5](event-store.md#changes). Its `conflicting()` result is derived from
+the same complete variant inventory; it requires no local diagnostic table.
 
 <a id="objects-and-streams"></a>
 
@@ -278,7 +287,7 @@ because a promise failed.
 
 ## 7. Local state and projections
 
-Local IDs, positions, preferences, diagnostics, staging and projections are not
+Local IDs, positions, preferences, transient diagnostics, staging and projections are not
 portable. Normal reopen and cache clearing preserve identity/control and the
 keystore. Restore creates fresh replica/generation IDs. An explicit identity
 reset closes the runtime and atomically replaces both IDs under ownership,
@@ -289,6 +298,11 @@ are optional. If used, they must equal the pure fold and be updated with their
 checkpoint or invalidated in the accepting transaction. Rebuild before use;
 no background rebuild, prescribed cache schema or incremental algorithm is
 required. Cached previews obey their source content's erasure policy.
+Source variants are authoritative portable evidence, never a clearable diagnostic
+cache. The host revision used for authorization covers objects and validation
+dependencies as well as the event frontier: evidence repair or discovered damage
+can change a projection without adding an event. Invalidate and recheck affected
+operations under [the adapter's revision rule](channels.md#continuity-integration).
 
 <a id="ownership-and-lifecycle"></a>
 
@@ -379,7 +393,7 @@ events. Transaction atomicity does not itself guarantee exactly-once execution.
 ## 10. Snapshot and export
 
 Export includes immutable metadata, the keystore row at the export cut, every
-accepted event and exactly the held objects for that same cut. Copy the keystore
+accepted event variant and exactly the held objects for that same cut. Copy the keystore
 row's `seed_jwe` bytes unchanged. Unknown valid event types retain their roots.
 Missing/damaged held bytes or incomplete history fails export. Local tables,
 control, unheld content and temporary data are excluded.
@@ -450,8 +464,8 @@ authored the history. Valid conflicting semantic facts remain facts.
 
 Validate a complete source and its recovery credential/anchor. Build a new
 runtime in an unused destination using application-owned DDL, adopting the
-wrapper and preserving every event ID, author, canonical byte and held
-object. Rebuilding copies validated logical values without copying source free
+wrapper and preserving every event ID, every canonical variant and its author,
+and every held object. Rebuilding copies validated logical values without copying source free
 pages or adopting source SQL. Assign fresh replica/generation IDs and local
 positions. Keep it unready until integrity/completeness checks pass; publish readiness in one transaction.
 Open reconstructs retention and pending state before enabling workers. Domain
@@ -494,16 +508,16 @@ restore missing continuity history or discarded messages under
 Validate and pin the complete source **before taking the target operation lock**.
 Then, under that lock, require a ready unlocked target with equal `user_version`,
 `vault_meta.vault_version` and `vault_meta.anchor`. Apply target duplicate/conflict
-and `ForkedAuthor` checks. The target wins event-ID content conflicts, which are
-reported; distinct valid facts remain in the union. Let `targetBeforeImport` be
-the accepted target event set under that lock before any import writes, and
-`union` the prospective accepted event union. Compute `heldRoots` for both sets
-under [VE §12.3](vault-events.md#held-roots). Newly accepted source events have
-IDs absent from the target after duplicate/conflict and fork checks.
+and `ForkedAuthor` checks. Union canonical values per ID, reporting all collisions
+without selecting a target or source winner. Let `targetBeforeImport` be the
+complete accepted target inventory under that lock before any import writes,
+and `union` the prospective variant union. Compute `heldRoots` for both sets
+under [VE §12.3](vault-events.md#held-roots). Newly accepted source variants are
+canonical values absent from the target, even when their IDs already exist.
 
 ```text
 requiredRoots =
-    roots retained by newly accepted source events in union
+    roots retained by newly accepted source variants in union
     ∪ (heldRoots(union) − heldRoots(targetBeforeImport))
 ```
 
@@ -512,7 +526,7 @@ For every root in `requiredRoots`, require verified source bytes or
 before publication. Compute both folds before checking bytes. A reference the
 union fold does not hold requires no bytes, including an erased reference or
 an envelope released by submission or termination.
-Conflicting evidence may make newly accepted source events retain roots their
+Conflicting evidence may make newly accepted source variants retain roots their
 source released, or make existing target events retain roots absent from
 `heldRoots(targetBeforeImport)`. Both cases are subject to this requirement.
 
@@ -527,7 +541,7 @@ discover damage before import. Successful import does not certify
 the integrity of reused target bytes or repair every existing target object.
 
 Quiesce readers before repair under [DO §6.2](dasl-objects.md#putobject).
-One transaction publishes the staged objects and repairs, all new events and
+One transaction publishes the staged objects and repairs, all new variants and
 positions, and updates/invalidates any caches. No visible sub-batches. Preflight
 failure changes no accepted state; crash recovery yields the complete old or
 new union. Preserve target metadata, wrapper and local IDs. Repeated import is
@@ -575,10 +589,12 @@ read and maintenance strategies.
 ### Events and transactions (SQ-10–SQ-18)
 
 10. <a id="sq-10"></a> Canonical event bytes and indexed fields agree; invalid events fail.
-11. <a id="sq-11"></a> Conflicts preserve target rows; a current-author fork aborts import.
+11. <a id="sq-11"></a> Conflicts preserve all source and target variants without a winner;
+    a current-author fork still aborts the whole import.
 12. <a id="sq-12"></a> Large batches preserve ES timestamp/ID/order and atomicity rules.
 13. <a id="sq-13"></a> Process/worker termination never exposes a partial accepted commit.
-14. <a id="sq-14"></a> Late events appear in deltas; empty filtered deltas advance tokens.
+14. <a id="sq-14"></a> Late events and new variants of known IDs appear in deltas;
+    exact duplicate variants allocate no position; empty filtered deltas advance tokens.
     Portable inspection rejects every `changes` call with `UnsupportedOperation`
     and allocates no local IDs, positions or tokens.
 15. <a id="sq-15"></a> Driver integers round-trip exactly or fail before acceptance.
@@ -610,9 +626,9 @@ read and maintenance strategies.
 
 <a id="backup-import-and-restore"></a>
 
-### Backup, import and restore (SQ-29–SQ-40)
+### Backup, import and restore (SQ-29–SQ-42)
 
-29. <a id="sq-29"></a> Export contains the exact keystore row, every event and exactly held objects
+29. <a id="sq-29"></a> Export contains the exact keystore row, every event variant and exactly held objects
     at its selected cut.
 30. <a id="sq-30"></a> Excluded local/unheld sentinel bytes never enter the fresh portable file.
 31. <a id="sq-31"></a> Rewrap/erase/GC cannot mix the export cut. Final read-only validation
@@ -641,10 +657,12 @@ read and maintenance strategies.
     senders have bounded visible diagnostics without authenticated peer attribution;
     unknown mediator recipient registrations likewise expose a bounded visible
     registration/state-mismatch diagnostic and are reconciled normally.
-35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
+35. <a id="sq-35"></a> Import preserves target wrapper/IDs, retains and reports conflicts
+    and is idempotent. A+B and B+A yield equal portable inventories, including
+    colliding IDs, their conflict groups and all held evidence objects.
 36. <a id="sq-36"></a> A fork, or any `requiredRoots` member with neither verified source
     bytes nor sound accepted target bytes, aborts without semantic writes. Check
-    both roots retained by newly accepted source events in the union and roots
+    both roots retained by newly accepted source variants in the union and roots
     held by the union but not by the target before import.
     Exercise two complete inputs with different event IDs for the two intents
     and no current-author fork: the target has outbound `M`, prepared package `P`
@@ -669,3 +687,13 @@ read and maintenance strategies.
 38. <a id="sq-38"></a> Interrupted construction is unpublished or complete, never implicit creation.
 39. <a id="sq-39"></a> Exact move requires a stopped source; stale copies refresh local identity.
 40. <a id="sq-40"></a> Large-object and output limits are exercised on each supported platform.
+
+41. <a id="sq-41"></a> Two same-ID receipts carrying different proofs survive export and
+    restore as two canonical rows and one conflict group. Rebuilding in either
+    arrival order grants no exact-source authority to either; their roots remain
+    held. A collision on a release record cannot release another event's roots.
+42. <a id="sq-42"></a> A new conflicting variant, its newly required objects, positions
+    and projection invalidation publish atomically; interruption leaves the old
+    or full new inventory. Import aborts when a collision would re-hold collected
+    bytes unavailable from either complete input. Reject schema 1 / vault 3
+    rather than silently reading it as the new format.

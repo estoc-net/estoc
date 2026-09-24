@@ -484,13 +484,15 @@ replaying the receive operation.
 #### Predecessor resolution for DID replacement
 
 After durable receipt and without delaying pickup ACK, verify the carrier's
-original JWT under [the continuity fold](channels.md#continuity). Use maintained
-library decoding APIs to check the claims that need
-no predecessor document: compact JWS syntax, integer `iat`, `sub` equal to the
-carrier's exact authenticated `from`, supported and distinct canonical `iss`
-and `sub`, and a protected `kid` whose DID portion is byte-identical to `iss`.
-Validate any supplied numalgo-4 long form before canonicalizing it. Failure is
-invalid proof; decoding supplies no signature or channel authority.
+original JWT through [the continuity adapter](channels.md#continuity-integration).
+Use the shared package's proof profile and canonical DID binding, including
+equivalent issuer/`kid` DID spellings and subject/sender spellings. Preserve
+document-independent rejection separately from missing material: malformed
+claims, unsupported profile headers and `exp`/`nbf`, or a mismatched canonical
+subject are invalid even without an issuer document. `inspectFromPrior` locates
+material but does not establish profile validity. Keep any required precheck
+extension in the package, without a second parser in the runtime. Decoding
+supplies no signature or channel authority.
 
 Resolve a long-form issuer locally from its validated encoded document using
 [the fixed document representation](vault-events.md#peer-resolved). For a
@@ -509,8 +511,9 @@ reply or notification for that historical carrier. If the material never
 arrives, that carrier remains a pending diagnostic without application admission.
 A new independently authenticated live carrier is evaluated separately.
 
-The fold checks the original signature and the document's authorized
-authentication method without appending an event.
+`verifyFromPrior` checks the original signature against the authentication
+method in the issuer's own long-form DID, and `bindFromPrior` checks the exact
+carrier. The vault appends no verification event.
 A bad signature or unauthorized key is invalid. Missing source/endpoint/history
 references remain pending for their own reason. Invalid or pending proof never
 undoes durable receipt or pickup ACK.
