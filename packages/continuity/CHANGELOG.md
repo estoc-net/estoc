@@ -23,4 +23,5 @@ usable opposite-side links, and one reached only through diagnostic
 history answers `conflict`. A `b64` header is `true` and critical.
 A saved rotation of the head's endpoint anywhere in its positive
 context is answered for: covered by the same usable change, pending
-when usable links connect its pair, otherwise `conflict`.
+when usable links connect its pair, otherwise `conflict`. A pending
+choice is diagnosed along its whole reference chain, as its status is.

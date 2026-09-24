@@ -100,7 +100,10 @@ a collided rotation, may or may not apply to it and is reported as
 answered for across its whole positive context, including pairs off the
 usable forward paths: one the same usable change covers is provenance,
 one at a pair usable links connect is `unresolved`, and one only
-diagnostic history connects is `conflict`.
+diagnostic history connects is `conflict`. A pending choice is
+diagnosed along its whole reference chain, as `status` diagnoses it: a
+missing carried transition of its source is listed as missing, and a
+collided one is a conflict that outranks an ending.
 
 ## from_prior
 

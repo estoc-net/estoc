@@ -413,15 +413,33 @@ class Model implements Continuity {
     return this.positive.vertices.has(channelKey(channel));
   }
 
-  /** A local rotation without usable continuation: a variant of a collided ID, or one still waiting on its predecessor's confirmation. */
+  /**
+   * A local rotation without usable continuation, diagnosed as the fact
+   * query diagnoses it, so that a missing or collided reference anywhere
+   * along the exact chain it names, an observation's carried transition
+   * included, reaches the head the same way it reaches the fact's status.
+   */
   private pendingDecision(entry: Entry, conflict: Set<FactId>, waiting: Set<FactId>, missing: Set<FactId>): void {
-    if (entry.tainted) {
-      conflict.add(entry.fact.id);
-      return;
+    const status = this.status(entry.fact.id);
+    switch (status.status) {
+      case "identity-conflict":
+        conflict.add(entry.fact.id);
+        return;
+      case "conflict":
+        for (const id of status.facts) conflict.add(id);
+        return;
+      case "unresolved":
+        waiting.add(entry.fact.id);
+        for (const id of status.missing) missing.add(id);
+        return;
+      case "waiting":
+      case "invalid":
+        waiting.add(entry.fact.id);
+        return;
+      case "usable":
+      case "unknown":
+        return;
     }
-    waiting.add(entry.fact.id);
-    if (entry.standing.kind === "missing") for (const id of entry.standing.ids) missing.add(id);
-    if (entry.standing.kind === "ambiguous") for (const id of entry.standing.ids) conflict.add(id);
   }
 
   /** A pair some fact is at, or a usable link leads to; one only conflicted links lead to rests on the conflict. */

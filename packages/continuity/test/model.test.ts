@@ -525,6 +525,28 @@ describe("identity conflicts", () => {
     sameWhateverTheOrder([...base, w], [A0B0, A1B0, A1B1]);
   });
 
+  it("diagnoses a pending choice along its whole reference chain, so a collided carried transition outranks an ending", () => {
+    const scope = rotate("scope", A0B0, "B1");
+    const w = decide("w", A0B0, "A1", "s");
+    const s = observe("s", A0B1, "t", "receipt-t");
+    const t = rotate("t", A0B0, "B1", "receipt-t");
+    const end = peerEnd("end", A0B1);
+    const missing = deriveContinuity([scope, w, s]);
+    expect(missing.head(A0B1)).toEqual({ status: "unresolved", waiting: ["w"], missing: ["t"] });
+    expect(missing.head(A0B0)).toEqual({ status: "unresolved", waiting: ["w"], missing: ["t"] });
+    expect(deriveContinuity([scope, w, s, end]).head(A0B1)).toEqual({ status: "ended", endings: ["end"] });
+    const collided = deriveContinuity([scope, w, s, t, { ...t, receipt: "receipt-other" }]);
+    expect(collided.head(A0B1)).toEqual({ status: "conflict", facts: ["t"] });
+    expect(collided.head(A0B0)).toEqual({ status: "conflict", facts: ["t"] });
+    expect(collided.status("w")).toEqual({ status: "conflict", facts: ["t"], because: expect.stringContaining("s") });
+    expect(deriveContinuity([scope, w, s, t, { ...t, receipt: "receipt-other" }, end]).head(A0B1)).toEqual({ status: "conflict", facts: ["t"] });
+    expect(deriveContinuity([scope, w, s, t]).head(A0B1)).toEqual({ status: "head", channel: A1B1, support: ["s", "scope", "t", "w"] });
+    const covered = deriveContinuity([scope, w, s, t, { ...t, receipt: "receipt-other" }, observe("o", A0B1), decide("i", A0B1, "A1", "o")]);
+    expect(covered.head(A0B1)).toEqual({ status: "head", channel: A1B1, support: ["i", "o"] });
+    expect(deriveContinuity([scope, w, observe("s", A0B1, "t", "receipt-other"), t]).head(A0B1)).toEqual({ status: "unresolved", waiting: ["w"], missing: [] });
+    sameWhateverTheOrder([scope, w, s, t, { ...t, receipt: "receipt-other" }], [A0B0, A0B1]);
+  });
+
   it("cannot hide an alternative a variant creates", () => {
     const p2 = rotate("p2", A0B0, "B1", "receipt-2");
     const model = deriveContinuity([p1, p1other, p2]);

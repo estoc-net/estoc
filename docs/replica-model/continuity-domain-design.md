@@ -738,15 +738,19 @@ positive history remains diagnostic and cannot override a relevant conflict
 or establish an ended result. If such scoping is the only way to resolve a
 known terminal claim, report the ambiguity rather than an affirmative ending.
 
-A saved rotation of the query's local endpoint at another pair of its
-peer-only context is answered for alike, whether or not that pair lies on a
-usable forward path of the query. The same change made by a usable link in the
-query's usable context covers it as provenance. Otherwise it is an unresolved
-forward choice when usable opposite-side links connect its pair to a usable
-forward pair of the query, and an ambiguity to report when only diagnostic
-positive history does. Neither case yields an affirmative head; a branch that
-rejoins the usable history through the joins it implies still owes an answer
-for the choices saved on it.
+For each usable forward pair of the query, a saved rotation of that pair's
+local endpoint at another pair of its peer-only context is answered for alike,
+whether or not that pair lies on a usable forward path of the query. The same
+change made by a usable link in the query's usable context covers it as
+provenance. Otherwise it is an unresolved forward choice when usable
+opposite-side links connect its pair to a usable forward pair of the query,
+and an ambiguity to report when only diagnostic positive history does. Neither
+case yields an affirmative head; a branch that rejoins the usable history
+through the joins it implies still owes an answer for the choices saved on it.
+An unresolved choice is diagnosed as the fact query diagnoses it, along the
+whole chain of exact references it names: a reference missing anywhere along
+that chain is reported as missing, and a collided or conflicted one is a
+relevant conflict, which outranks an ending as the order above has it.
 
 Model-level unresolved results describe reference or confirmation gaps visible
 to the core. Material and proof-verification gaps remain separate diagnostics
