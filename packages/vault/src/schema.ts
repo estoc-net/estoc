@@ -331,6 +331,7 @@ const SCHEMAS: { [T in VaultEventType]: Schema<T> } = {
   ),
   "did.retired": schema(shape({ didId: idMembers.didId, because: nonEmpty }), none),
   "invitation.consumed": schema(shape({ disclosureEventCid: ref<"did.disclosed">(), sourceEventCid: ref<"message.in">() }), none),
+  "message.admitted": schema(shape({ sourceEventCid: ref<"message.in">() }), none),
   "did.rotationSelected": schema(
     checked(shape({ fromDidId: idMembers.didId, peerDid: channelDid, toDidId: idMembers.didId, sourceEventCid: nullable(ref<"message.in">()), fromPrior: compactJwt }), (data) => {
       if (data.fromDidId === data.toDidId) throw new Fault("fromDidId and toDidId differ: a rotation moves to another DID entity");

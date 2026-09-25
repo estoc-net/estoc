@@ -15,7 +15,17 @@
  * Everything is decided under the writer lock over the fold read
  * there, and the envelope object, the resolution evidence and the
  * package are committed in that one lock; the fold holds the package
- * from then on, whatever rotates, confirms or resolves later.
+ * from then on, whatever rotates, confirms or resolves later. A
+ * resolution committed here is evidence an observation may have
+ * waited for — the document of the issuer of the proof it carried —
+ * so what the vault owes is recorded under the same lock once the
+ * message has its package, made now or held already, before the
+ * package's dispatch or any other work reads the fold. That pass is
+ * owed by every preparation, not only the one that committed the
+ * resolution: a commit refused after the resolution was durable, the
+ * package's or the pass's own, leaves the resolution in the fold and
+ * the work over it undone, and the next preparation or dispatch of
+ * any message completes it.
  */
 
 import { v7 as uuidv7 } from "uuid";
@@ -62,6 +72,7 @@ import { packEncrypted, secretsResolverFor, type DidcommApi, type IMessage } fro
 import { recordOwedAcceptance } from "./acceptance.js";
 import { UnknownEntity } from "./errors.js";
 import { authorizedKeys, commitResolution, didcommDocumentOf, pinnedResolver } from "./evidence.js";
+import { recordOwedUnderLock } from "./receive/after.js";
 import { secretsOf } from "./keyring.js";
 import { sealData } from "./link.js";
 import { serially } from "./procedure.js";
@@ -83,7 +94,7 @@ export interface PrepareOptions {
 
 export type Prepared =
   | { outcome: "prepared"; messageId: MessageId; packageId: PackageId; prepared: VaultEvent<"message.prepared">; resolved: VaultEvent<"peer.resolved"> }
-  /** the package the fold already holds for the message: nothing was written */
+  /** the package the fold already holds for the message: no package was written */
   | { outcome: "reused"; messageId: MessageId; package: Package }
   /** the fold asks for no package: the message is closed, in conflict, or not the sender's to prepare now */
   | { outcome: "none"; messageId: MessageId; because: string }
@@ -156,7 +167,7 @@ export async function expireUnderLock(held: Held, messageId: MessageId, phase: "
   return { result: { outcome: "expired", messageId, failed: event as VaultEvent<"delivery.failed"> }, notes };
 }
 
-/** `prepare` for a caller that already holds the message's turn and the writer lock: the dispatch of a message the fold says needs a package first. */
+/** `prepare` for a caller that already holds the message's turn and the writer lock. */
 export async function prepareUnderLock(held: Held, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Settled<Prepared>> {
   const notes: Note[] = [];
   const fold = await scanVault(held, keys, scanOptions(options));
@@ -168,7 +179,10 @@ export async function prepareUnderLock(held: Held, keys: Keys, messageId: Messag
   if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
   const { work } = outbound;
   if (work.kind === "none") return { result: { outcome: "none", messageId, because: work.because }, notes };
-  if (work.kind === "dispatch") return { result: { outcome: "reused", messageId, package: work.package }, notes };
+  if (work.kind === "dispatch") {
+    notes.push(...(await owedRecorded(held, keys, messageId)));
+    return { result: { outcome: "reused", messageId, package: work.package }, notes };
+  }
   const sender = outbound.sender as LocalDidEntity;
   const channel = outbound.channel as Channel;
   const ends = await endsOf(fold, keys, sender, channel, intent.recipientDid);
@@ -204,7 +218,25 @@ export async function prepareUnderLock(held: Held, keys: Keys, messageId: Messag
     )
   ).map(readVaultEvent);
   notes.push({ stream: "envelope", what: "seal", data: { ...sealData(packed, plaintext as unknown as IMessage), messageId, packageId } });
+  notes.push(...(await owedRecorded(held, keys, messageId)));
   return { result: { outcome: "prepared", messageId, packageId, prepared: prepared as VaultEvent<"message.prepared">, resolved }, notes };
+}
+
+/**
+ * The pass over what the vault owes, once the message has its package:
+ * an admission whose proof waited for the document a preparation
+ * resolved, and what follows one, recorded before the lock is released
+ * and dispatched by nothing. The package stands whether the pass ran
+ * through or stopped; one that stopped is noted, and left to the next
+ * pass, which the next preparation, dispatch, receipt or open runs.
+ */
+async function owedRecorded(held: Held, keys: Keys, messageId: MessageId): Promise<Note[]> {
+  try {
+    await recordOwedUnderLock(held, keys);
+    return [];
+  } catch (err) {
+    return [{ stream: "diag", what: "admission", data: { messageId, reason: `the pass the preparation runs stopped: ${err instanceof Error ? err.message : String(err)}` } }];
+  }
 }
 
 interface Ends {

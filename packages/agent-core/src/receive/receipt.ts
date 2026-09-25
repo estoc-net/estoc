@@ -16,13 +16,27 @@
  * that lock too, and told with the record: only the first observation
  * of an input may earn automatic work, whichever runtime recorded the
  * others and whatever became of it.
+ *
+ * Before the lock is released, the admissions the vault owes are
+ * reconciled over a fold read again, the new observation's proof
+ * judged in it and its admission decided among the rest in
+ * first-receipt order. The writer lock is thus the one sequence every
+ * receipt and admission goes through, whichever way the delivery
+ * came: no observation is committed while an earlier one's admission
+ * is undecided, and a replacement known by then is known to the
+ * decision. Whether this call may earn the input automatic work is
+ * decided there too, and holds whatever happens once the lock is
+ * released: a first observation the pass admitted as its input's
+ * witness is live; one the pass left waiting for evidence is not, and
+ * the evidence, when it comes, admits the observation and revives no
+ * call.
  */
-
 
 import type { Held, VaultRuntime } from "@estoc/event-store";
 import {
   InvalidPayload,
   InvalidPlaintext,
+  admitReceipts,
   anonymousMessageId,
   inboundMessageId,
   rawCidOfBytes,
@@ -153,5 +167,8 @@ async function settle(held: Held, keys: Keys, { recipient, sender }: Authenticat
   const receiptOrdinal = String(fold.channels.receipts.nextReceiptOrdinal) as ReceiptOrdinal;
   const resolved = sender === null ? null : await commitResolution(held, { resolution: sender.resolution, localKeyName: recipient.localKeyName, peerPublicKey: sender.peerPublicKey });
   const [event] = (await held.commit(objects, [vaultDraft("message.in", { ...observed, receiptOrdinal, peerResolutionEventCid: (resolved?.cid ?? null) as EventReference<"peer.resolved"> | null })])).map(readVaultEvent);
-  return { outcome: "received", cid: (event as VaultEvent<"message.in">).cid as EventReference<"message.in">, first };
+  const cid = (event as VaultEvent<"message.in">).cid as EventReference<"message.in">;
+  const { fold: admitted } = await admitReceipts(held, await scanVault(held, keys));
+  const live = first && admitted.inbound.ofSource(cid)?.firstWitness?.source.event.cid === cid;
+  return { outcome: "received", cid, first, live };
 }

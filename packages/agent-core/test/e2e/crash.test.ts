@@ -32,9 +32,9 @@ async function pair(): Promise<{ mediator: FakeMediator; alice: Running; bob: Ru
 describe("a process that dies", () => {
   it("after an input was recorded and before its mediator heard so: the delivery comes again as no live input, the reply it committed is listed and sent only by a retry", { timeout: LONG }, async () => {
     const { mediator, alice, bob } = await pair();
-    dieAt(alice, "unsent");
+    dieAt(alice, "unacknowledged");
     await bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, { ...hello("hello"), pleaseAck: [""] }, { messageId: HELLO });
-    await until("alice died calling her acknowledgement", () => alice.dead);
+    await until("alice died telling the mediator of the delivery", () => alice.dead);
     expect(queuedFor(mediator, alice)).toBe(1);
 
     const sentBefore = forwardsSeen(mediator);

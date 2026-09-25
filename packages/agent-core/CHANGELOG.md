@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+- **Every receipt is admitted, or told why not, before its lock is
+  released** (behaviour change): the receipt commits the observation,
+  reads the fold again and runs the vault's ordered admission pass, so
+  the writer lock is the one receipt/admission sequence whichever way a
+  delivery came, and a replacement known by then is known to the
+  decision. The after-receipt pass (`afterReceipt`, `recordOwed`) runs
+  the same pass first, under one lock with the consumptions and
+  acknowledgements it then records over the fold the admissions left;
+  `Owed.admitted` holds what it recorded, `AfterReceipt.disposition`
+  what the observation in hand is to the application, and an
+  observation not admitted goes to the `diag` stream as `admission`. An
+  input a denied channel, a replaced peer or a contradiction keeps from
+  admission is not established: its automatic effects are not asked,
+  and `Reacted.because` says so. The exact source of a rotation and of
+  the private-address policy must itself be admitted.
+- A contradicting duplicate of an admitted input is refused admission
+  and listed as the discrepancy it is; the input stays established by
+  what it admitted first and keeps the outputs it earned.
+- **A live observation earns effects only as the witness its input
+  speaks through** (behaviour change): `reactTo` asks no operation
+  for an observation that is not its input's first admitted complete
+  witness — its own proof refused or still waiting while a duplicate
+  delivered after it was admitted — and `Reacted.because` says why.
+  What the input earns through the admitted duplicate is listed for
+  manual completion.
+- **Evidence recovered during normal operation is reconciled at
+  once**: every preparation runs the after-receipt pass under its
+  lock once the message has its package, made now or held already
+  (`recordOwedUnderLock`), and so does every dispatch, which prepares
+  first; a carrier whose proof waited for the document the
+  preparation resolved is admitted then, dispatching nothing, and a
+  pass a commit refused after the resolution was durable — the
+  package's or the pass's own — is completed by the next preparation
+  or dispatch of any message. A pass that stops leaves the package
+  standing and is noted in the `diag` stream as `admission`, with the
+  message ID. `Agent.localStateChanged()` runs the same pass first, for
+  evidence the host brought — an import, a document — before it
+  retries the waiting deliveries. `recordOwedUnderLock` returns the
+  fold as the pass left it, every event it committed folded in.
+- **A receipt is live only as its lock admitted it** (behaviour
+  change): `ReceiptOutcome.live`, decided under the receipt's lock, is
+  what `Received.live` carries — the observation is the first the
+  vault holds of its input and the admission pass run before the lock
+  was released admitted it as the witness its input speaks through —
+  and `first` stays what it was. A first observation whose admission
+  waited for evidence is not live, and stays not: the evidence, when
+  it comes, admits the observation and revives no call, so the agent
+  decides no effects and no private address for it, and what the input
+  earns is listed for the user. A first observation refused, denied or
+  superseded at its receipt is not live either, where before it was
+  and its effects came to nothing; `Inbound.reacted` and `address` are
+  null for it, and `after.disposition` says why. A custom `receipt`
+  must decide `live` the same way.
+- **The pickup acknowledgement and a delivery's calls run off the
+  ingress turn** (behaviour change): `Pickup` tells the mediator what
+  a delivery's attachments came to outside the sequence the
+  deliveries are handled in, and the agent's pickup handle does a
+  delivery's local work — its receipt, what the vault owes, the
+  decisions of its effects and of the private-address policy — in
+  its turn, then makes the calls decided off it, one delivery after
+  another, so that neither the mediator's answer nor a call on the
+  wire holds the receipt of the delivery behind. `Agent.settled()`
+  resolves once those calls are done and the host told; `onInbound`
+  is still told in the order the mail came. `reactTo`, `privateAddress`
+  and `rotate` are each the composition of a `decide…` step under the
+  lock and a `call…` step after it, exported alongside.
+
 - **Continuity comes from `@estoc/continuity` through the vault**
   (behaviour change): a send, a reply or a rotation from a channel a
   conflict lies ahead of, or whose own saved rotation the peer has not

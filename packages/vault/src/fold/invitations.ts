@@ -9,18 +9,20 @@
  * recorded consumer is never reopened: erasure, retirement, denial, a
  * later conflict or a duplicate disclosure may make the invitation
  * unavailable or conflicted, but the consumer stays recorded. A new
- * consumer is held to more than the record: its receipt is one
- * observation of a logical input, and an input whose authenticated
- * intents disagree consumes nothing, whichever observation of it the
- * invitation would take. The fold assigns no consumer and appends
- * nothing: the candidates it lists, in first-receipt order and each
- * with why it may or may not be consumed, are what the runtime walks
- * to record one.
+ * consumer is held to more than the record: its receipt must be
+ * admitted, it is one observation of a logical input, and an input
+ * whose admitted intents disagree consumes nothing, whichever
+ * observation of it the invitation would take. The fold assigns no
+ * consumer and appends nothing: the candidates it lists, in
+ * first-receipt order and each with why it may or may not be
+ * consumed, are what the runtime walks to record one, after it has
+ * recorded the admissions they wait for.
  */
 
 import { didKeyName } from "../ids.js";
 import type { VaultEvent } from "../schema.js";
 import type { Did, DidId, EventCid } from "../types.js";
+import type { Dispositions, Eligibility } from "./admission.js";
 import type { ChannelEvidence, Source } from "./channels.js";
 import { compareReceiptKeys, receiptOrderKey } from "./channels.js";
 import type { Continuity } from "./continuity.js";
@@ -47,18 +49,18 @@ export interface Consumption {
 
 /**
  * Whether a receipt may be recorded as the invitation's consumption
- * now. Eligible may. Deferred waits for evidence, and stops the walk
- * behind it: nothing later is selected past it. Refused is current
- * policy — the disclosed DID or its route ended, the channel denied,
- * the peer superseded or the channel in a continuity conflict — and
- * invalid is evidence that refuses the receipt for good: its own, or
- * the disagreement of its input's authenticated intents; both are
+ * now, in the same terms as its admission. Eligible may. Deferred
+ * waits for evidence, or for the admission the receipt is still owed,
+ * and stops the walk behind it: nothing later is selected past it.
+ * Refused is current policy — the disclosed DID or its route ended,
+ * the channel denied, the peer superseded or the channel in a
+ * continuity conflict, or whatever refuses the receipt's admission —
+ * and invalid is evidence that refuses the receipt for good: its own,
+ * or the disagreement of its input's admitted intents; both are
  * skipped. An integrity conflict is an ordinal one author gave to two
  * observations; reached before an eligible receipt, it leaves the
  * invitation conflicted and selects nothing.
  */
-export type Eligibility = { status: "eligible" } | { status: "deferred"; because: string } | { status: "refused"; because: string } | { status: "invalid"; because: string } | { status: "integrity-conflict" };
-
 export interface Candidate {
   readonly source: Source;
   readonly eligibility: Eligibility;
@@ -100,7 +102,7 @@ export interface InvitationFold {
   under(oobId: string): readonly Invitation[];
 }
 
-export function foldInvitations(set: VaultEventSet, routes: RouteFold, evidence: ChannelEvidence, continuity: Continuity, inbound: InboundFold, erasures: Erasures): InvitationFold {
+export function foldInvitations(set: VaultEventSet, routes: RouteFold, evidence: ChannelEvidence, continuity: Continuity, inbound: InboundFold, dispositions: Dispositions, erasures: Erasures): InvitationFold {
   const byOobId = groupBy(
     set.of("did.disclosed").filter((event) => event.data.as === "oob"),
     (event) => event.data.oobId!
@@ -123,7 +125,7 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold, evidence:
     const own = (records.get(disclosure.cid) ?? []).map((event) => consumptions.get(event.cid)!);
     const candidates = (receipts.get(`${didKeyName(disclosure.data.didId, "key-agreement")} ${oobId}`) ?? [])
       .sort((a, b) => compareReceiptKeys(receiptOrderKey(a), receiptOrderKey(b)))
-      .map((event) => candidateOf(evidence.sources.get(event.cid)!, lifecycle, evidence, continuity, inbound));
+      .map((event) => candidateOf(evidence.sources.get(event.cid)!, lifecycle, evidence, continuity, inbound, dispositions));
     const consumer = consumerOf(own);
     invitations.set(disclosure.cid, {
       disclosure,
@@ -232,12 +234,15 @@ function invitationStatus(consumptions: readonly Consumption[], consumer: Did | 
  * have raised under another thread or with a proof and which no later
  * evidence settles — then what current policy refuses, known from the
  * lifecycle and from the channel's ends, which a receipt names even
- * while its witness is incomplete, and only then what waits: the
- * witness, or a route or mediation that may recover. A refusal that is
- * already certain is not deferred, so a missing document behind a
- * denied or superseded channel holds up nothing behind it.
+ * while its witness is incomplete, then what its admission says while
+ * it has none — refused or invalid skipped like the rest, a candidate
+ * for admission or one waiting on evidence deferred — and only then
+ * what waits: the witness, or a route or mediation that may recover.
+ * A refusal that is already certain is not deferred, so a missing
+ * document behind a denied or superseded channel holds up nothing
+ * behind it.
  */
-function candidateOf(source: Source, lifecycle: Lifecycle, evidence: ChannelEvidence, continuity: Continuity, inbound: InboundFold): Candidate {
+function candidateOf(source: Source, lifecycle: Lifecycle, evidence: ChannelEvidence, continuity: Continuity, inbound: InboundFold, dispositions: Dispositions): Candidate {
   const candidate = (eligibility: Eligibility): Candidate => ({ source, eligibility });
   if (evidence.receipts.affected.has(source.event.data.messageId)) return candidate({ status: "integrity-conflict" });
   const witness = continuity.witness(source.event.cid);
@@ -251,7 +256,18 @@ function candidateOf(source: Source, lifecycle: Lifecycle, evidence: ChannelEvid
     if (continuity.conflicted(channel)) return candidate({ status: "refused", because: "the channel is in a continuity conflict" });
     if (continuity.superseded(channel)) return candidate({ status: "refused", because: "the peer has replaced its DID" });
   }
+  const admission = admissionOf(source, dispositions);
+  if (admission !== null && admission.status !== "deferred") return candidate(admission);
   if (witness.status === "pending") return candidate({ status: "deferred", because: witness.because });
   if (lifecycle.waiting !== null) return candidate({ status: "deferred", because: lifecycle.waiting });
-  return candidate({ status: "eligible" });
+  return candidate(admission ?? { status: "eligible" });
+}
+
+/** What the receipt's admission holds against its consumption: nothing once it is admitted, else whatever holds against the admission, an admission still to be recorded or one waiting for evidence deferring it. */
+function admissionOf(source: Source, dispositions: Dispositions): Exclude<Eligibility, { status: "eligible" }> | null {
+  const { cid } = source.event;
+  if (dispositions.disposition(cid).status === "admitted") return null;
+  const candidate = dispositions.candidate(cid);
+  if (candidate === null) return { status: "deferred", because: "an admission of the receipt is recorded and waits for evidence" };
+  return candidate.eligibility.status === "eligible" ? { status: "deferred", because: "the receipt is not yet admitted" } : candidate.eligibility;
 }

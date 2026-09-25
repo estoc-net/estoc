@@ -1,4 +1,4 @@
-import { MemoryVault } from "@estoc/event-store";
+import { MemoryVault, type Held } from "@estoc/event-store";
 import { importSeed } from "@estoc/keystore";
 import { SignJWT, importJWK } from "jose";
 import { describe, expect, it } from "vitest";
@@ -15,6 +15,8 @@ import {
   PROBLEM_REPORT_TYPE,
   PURE_ACK_EFFECT,
   ROTATION_NOTIFICATION_EFFECT,
+  admissionDrafts,
+  admitReceipts,
   automaticIntent,
   blockChannels,
   blockDrafts,
@@ -25,6 +27,7 @@ import {
   consumptionDrafts,
   decisionFor,
   deleteContact,
+  reconcileAdmissions,
   deleteContactDrafts,
   didKeyName,
   eraseMessage,
@@ -45,10 +48,12 @@ import {
   type MessageId,
   type PendingWork,
 } from "../src/index.js";
-import { AUTHOR2, SEED, Scene, cidOf, expectOrderFree } from "./fold/helpers.js";
-import { IAT, PURE_ACK, automatic, blocked, channel, intent, invitation, noObjects, packageOf, proof, receipt, ref, resolved, rotation, vaults, type Local, type Peer } from "./fold/scene.js";
+import { AUTHOR2, HASH, SEED, Scene, cidOf, expectOrderFree } from "./fold/helpers.js";
+import { IAT, PURE_ACK, automatic, blocked, channel, intent, invitation, noObjects, observation, packageOf, proof, receipt, ref, resolved, rotation, vaults, type Local, type Peer } from "./fold/scene.js";
 
 const encoder = new TextEncoder();
+
+const OTHER_HASH = "Amqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA";
 
 /** A vault in memory holding the scene's events and the bytes of every text named. */
 async function vaultOf(scene: Scene, texts: readonly string[] = []): Promise<MemoryVault> {
@@ -162,6 +167,85 @@ const workSnapshot = (work: PendingWork) => ({
   consumptions: work.consumptions.map((d) => d.data),
 });
 
+describe("admitting receipts", () => {
+  it("records, round by round, the first eligible observation of each input in first-receipt order, each round judged against what the earlier ones admitted: a consistent duplicate is admitted next, a contradicting one refused for good, a superseded or denied one passed over, and one waiting for evidence holds up nothing", async () => {
+    const { scene, keys, peerKeys, a0, a1, b0, b1, b2, b3 } = await vaults();
+    const wire = uuidv7();
+    const plain = (local: Local, peer: Peer, ordinal: number, overrides: Parameters<typeof receipt>[1]["overrides"] = {}) =>
+      observation(scene, { local, peer, resolution: resolved(scene, local.didId, peer), ordinal, overrides });
+    const input = (ordinal: number, hash = HASH) => observation(scene, { local: a0, peer: b0, resolution: resolved(scene, a0.didId, b0), ordinal, wire, overrides: { intentHash: hash as never } });
+    const opening = input(1);
+    const contradicting = input(2, OTHER_HASH);
+    const consistent = input(3);
+    const elsewhere = plain(a1, b0, 4);
+    const unresolved = plain(a0, b1, 5, { peerResolutionEventCid: rawCidOfBytes(new Uint8Array(32).fill(3)) as never });
+    const carrier = observation(scene, { local: a0, peer: b3, resolution: resolved(scene, a0.didId, b3), ordinal: 6, fromPrior: await proof(peerKeys, b2, b3) });
+    const superseded = plain(a0, b2, 7);
+    blocked(scene, a1, b1);
+    const denied = plain(a1, b1, 8);
+
+    const vault = await fold(scene, keys);
+    expect(admissionDrafts(vault).map((draft) => draft.data.sourceEventCid)).toEqual([opening.cid, elsewhere.cid, carrier.cid]);
+    expectOrderFree(scene.events, (set) => admissionDrafts(foldVault(set, vault.checks)).map((draft) => draft.data.sourceEventCid));
+
+    const memory = await vaultOf(scene);
+    const admitted = await memory.locked(async (held) => admitReceipts(held, await scanVault(held, keys)));
+    expect(admitted.events.map((event) => event.data.sourceEventCid)).toEqual([opening.cid, elsewhere.cid, carrier.cid, consistent.cid]);
+    expect(admitted.fold.dispositions.candidates.map(({ source, eligibility }) => [source.event.cid, eligibility.status])).toEqual([
+      [contradicting.cid, "refused"],
+      [unresolved.cid, "deferred"],
+      [superseded.cid, "refused"],
+      [denied.cid, "refused"],
+    ]);
+    const execution = admitted.fold.inbound.ofSource(opening.cid)!;
+    expect([execution.status, execution.members.map(({ admitted: isAdmitted }) => isAdmitted), execution.contradicting.map(({ source }) => source.event.cid)]).toEqual([{ status: "complete" }, [true, false, true], [contradicting.cid]]);
+    expect(await reconcileAdmissions(memory, keys)).toEqual([]);
+    const after = await scanVault(memory.vault, keys);
+    expect([...after.admissions.admissions.values()].map(({ event, status }) => [event.data.sourceEventCid, status.status]).sort()).toEqual(admitted.events.map((event) => [event.data.sourceEventCid, "effective"]).sort());
+  });
+
+  it("admits the contradicting observation instead when it comes first in receipt order, whatever order the events are read in; a commit the disk refuses ends the pass with the rounds before it durable, one whose answer is lost leaves its round durable all the same, and the next pass goes on from what is durable, admitting nothing twice", async () => {
+    const { scene, keys, a0, b0, b1 } = await vaults();
+    const wire = uuidv7();
+    const input = (ordinal: number, hash: string) => observation(scene, { local: a0, peer: b0, resolution: resolved(scene, a0.didId, b0), ordinal, wire, overrides: { intentHash: hash as never } });
+    const later = input(2, HASH);
+    const earlier = input(1, OTHER_HASH);
+    const other = observation(scene, { local: a0, peer: b1, resolution: resolved(scene, a0.didId, b1), ordinal: 3 });
+    const consistent = input(4, OTHER_HASH);
+    const vault = await fold(scene, keys);
+    expect(admissionDrafts(vault).map((draft) => draft.data.sourceEventCid)).toEqual([earlier.cid, other.cid]);
+
+    const memory = await vaultOf(scene);
+    const durable = async () => (await scanVault(memory.vault, keys)).set.of("message.admitted").map((event) => event.data.sourceEventCid).sort();
+    /** The held view with its commit failing at the `at`th: refused before anything is written, or its answer lost once the write is durable. */
+    const failing = (held: Held, at: number, how: "refused" | "lost"): Held => {
+      let commits = 0;
+      const faulty = Object.create(held) as Held;
+      faulty.commit = async (objects, drafts) => {
+        if (commits++ !== at) return held.commit(objects, drafts);
+        if (how === "refused") throw new Error("the disk is full for now");
+        await held.commit(objects, drafts);
+        throw new Error("the disk answered nothing");
+      };
+      return faulty;
+    };
+    await expect(memory.locked(async (held) => admitReceipts(failing(held, 1, "refused"), await scanVault(held, keys)))).rejects.toThrow("the disk is full for now");
+    expect(await durable()).toEqual([earlier.cid, other.cid].sort());
+    await expect(memory.locked(async (held) => admitReceipts(failing(held, 0, "lost"), await scanVault(held, keys)))).rejects.toThrow("the disk answered nothing");
+    expect(await durable()).toEqual([earlier.cid, other.cid, consistent.cid].sort());
+
+    expect(await reconcileAdmissions(memory, keys)).toEqual([]);
+    const after = await scanVault(memory.vault, keys);
+    expect(after.inbound.ofSource(later.cid)).toMatchObject({ status: { status: "complete" }, intentHash: OTHER_HASH, contradicting: [{ source: { event: { cid: later.cid } } }] });
+    expect(after.inbound.ofSource(later.cid)!.members.map(({ source, admitted }) => [source.event.cid, admitted])).toEqual([
+      [earlier.cid, true],
+      [later.cid, false],
+      [consistent.cid, true],
+    ]);
+    expect(after.dispositions.disposition(later.cid)).toEqual({ status: "pending-admission", because: "the observation contradicts the intent its input has admitted" });
+  });
+});
+
 describe("consuming invitations", () => {
   it("records the first eligible receipt of each available invitation, passes over refused ones, stops at one that waits, and never reopens a consumer", async () => {
     const { scene, keys, a0, a1, b0, b1, b2 } = await vaults();
@@ -171,7 +255,7 @@ describe("consuming invitations", () => {
     blocked(scene, a0, b2);
     const first = proofFreeReceipt(scene, a0, b0, 2, { pthid: disclosure.data.oobId });
     const second = proofFreeReceipt(scene, a0, b1, 3, { pthid: disclosure.data.oobId });
-    proofFreeReceipt(scene, a1, b0, 4, { pthid: other.data.oobId });
+    const outside = proofFreeReceipt(scene, a1, b0, 4, { pthid: other.data.oobId });
     const vault = await fold(scene, keys);
     expect(vault.invitations.invitations.get(disclosure.cid)!.candidates.map((c) => [c.source.event.cid, c.eligibility.status])).toEqual([
       [denied.cid, "refused"],
@@ -181,7 +265,7 @@ describe("consuming invitations", () => {
     const drafts = consumptionDrafts(vault);
     expect(drafts.map((draft) => draft.data)).toEqual([
       { disclosureEventCid: disclosure.cid, sourceEventCid: first.cid },
-      { disclosureEventCid: other.cid, sourceEventCid: scene.events.at(-1)!.cid },
+      { disclosureEventCid: other.cid, sourceEventCid: outside.cid },
     ]);
     expectOrderFree(scene.events, (set) => consumptionDrafts(foldVault(set, vault.checks)).map((draft) => draft.data));
 

@@ -2,7 +2,7 @@ import { SignJWT, importJWK } from "jose";
 import { describe, expect, it } from "vitest";
 
 import { encodeLongForm, type DIDDoc } from "@estoc/did-peer";
-import { InvalidDidDocument, anonymousMessageId, canonicalDidOf, didKeyName, inboundMessageId, readPlaintext, scanVault, signFromPrior, vaultDraft, type DidId, type MediationId, type VaultEvent, type VaultEventType, type VaultFold, type WireMessageId } from "@estoc/vault";
+import { InvalidDidDocument, anonymousMessageId, canonicalDidOf, didKeyName, inboundMessageId, readPlaintext, scanVault, signFromPrior, vaultDraft, type DidId, type EventCid, type MediationId, type VaultEvent, type VaultEventType, type VaultFold, type WireMessageId } from "@estoc/vault";
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { PLAIN_TYP, packEncrypted, secretsResolverFor, type IMessage } from "../src/protocol/didcomm.js";
@@ -158,7 +158,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob, carol);
   });
 
-  it("a message delivered again is another observation of the same input under its own ordinal, live for the first alone, whichever receiver records the others: one execution, no second resolution; the same wire ID with other content is recorded as the contradiction it is", async () => {
+  it("a message delivered again is another observation of the same input under its own ordinal, live for the first alone, whichever receiver records the others: one execution, no second resolution; the same wire ID with other content is recorded, refused admission and listed as the contradiction it is", async () => {
     const { alice, bob } = await parties();
     const sealer = await peerSealer(bob);
     const wire = crypto.randomUUID();
@@ -181,9 +181,12 @@ describe("the receipt", () => {
     const fold = await foldOf(alice);
     expect([fold.inbound.executions.size, fold.inbound.ofMessage(messageId)?.members.length, fold.inbound.ofMessage(messageId)?.status]).toEqual([1, 3, { status: "complete" }]);
 
-    expect(await again.receive({ packed: await sealed(sealer, alice.longFormDid, { id: wire, body: { content: "other" } }), source: DIRECT })).toMatchObject({ outcome: "received", live: false });
+    const other = await again.receive({ packed: await sealed(sealer, alice.longFormDid, { id: wire, body: { content: "other" } }), source: DIRECT });
+    expect(other).toMatchObject({ outcome: "received", live: false });
     const contradicted = await foldOf(alice);
-    expect([contradicted.inbound.executions.size, contradicted.inbound.ofMessage(messageId)?.status.status]).toEqual([1, "conflict"]);
+    const execution = contradicted.inbound.ofMessage(messageId)!;
+    expect([contradicted.inbound.executions.size, execution.status, execution.members.map(({ admitted }) => admitted), execution.contradicting.map(({ source }) => source.event.cid)]).toEqual([1, { status: "complete" }, [true, true, true, false], [(other as { cid: string }).cid]]);
+    expect(contradicted.dispositions.disposition((other as { cid: EventCid }).cid)).toEqual({ status: "pending-admission", because: "the observation contradicts the intent its input has admitted" });
     await closeAll(alice, bob);
   });
 
@@ -264,6 +267,34 @@ describe("the receipt", () => {
 
     expect((await receiver.receive({ packed: await sealed(honest, alice.longFormDid), source: DIRECT })).outcome).toBe("received");
     expect((await foldOf(alice)).channels.sources.size).toBe(3);
+    await closeAll(alice, bob);
+  });
+
+  it("the receipt admits the observation before the lock is released, judged among every other in first-receipt order: a message from the address the peer has since left is recorded and ignored, and deliveries recorded at once each have their admission decided before the next is recorded", async () => {
+    const { alice, bob } = await parties();
+    const { receiver } = await receiving(alice);
+    const routeId = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
+    const { minted: prior } = await createDid(bob.runtime, bob.keys, routeId, BOB_PRIOR);
+    const proof = await signFromPrior(bob.keys, { didId: BOB_PRIOR, longFormDid: prior.longFormDid }, bob.longFormDid, IAT);
+    const carried = await receiver.receive({ packed: await sealed(await peerSealer(bob), alice.longFormDid, { from_prior: proof }), source: DIRECT });
+    const fromOld = await receiver.receive({ packed: await sealed(await peerSealer(bob, prior.longFormDid), alice.longFormDid), source: DIRECT });
+    if (carried.outcome !== "received" || fromOld.outcome !== "received") throw new Error("not received");
+    const fold = await foldOf(alice);
+    expect((await eventsOf(alice, "message.admitted")).map(({ data }) => data.sourceEventCid)).toEqual([carried.cid]);
+    expect([fold.dispositions.disposition(carried.cid).status, fold.dispositions.disposition(fromOld.cid)]).toEqual(["admitted", { status: "ignored-superseded" }]);
+    expect([fold.inbound.ofSource(carried.cid)!.status, fold.inbound.ofSource(fromOld.cid)!.status]).toEqual([{ status: "complete" }, { status: "pending", because: "no observation of the input is admitted" }]);
+    receiver.close();
+
+    const one = await authenticated(alice, bob);
+    const other = await authenticated(alice, bob);
+    const outcomes = await Promise.all([one, other].map((a) => recordReceipt(alice.runtime, alice.keys, a)));
+    expect(outcomes.map(({ outcome }) => outcome)).toEqual(["received", "received"]);
+    const inOrder = (await foldOf(alice)).set;
+    const sequence = [...inOrder.all()]
+      .filter((event) => event.type === "message.in" || event.type === "message.admitted")
+      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .map((event) => event.type);
+    expect(sequence).toEqual(["message.in", "message.admitted", "message.in", "message.in", "message.admitted", "message.in", "message.admitted"]);
     await closeAll(alice, bob);
   });
 

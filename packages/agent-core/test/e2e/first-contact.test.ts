@@ -70,6 +70,7 @@ describe("first contact over a mediator", () => {
     const sentBefore = forwards.length;
     mediator.queues.get(alice.party.created.data.me.did)!.push({ id: "again", packed: JSON.stringify(envelope) });
     expect(await alice.agent.connect()).toMatchObject([{ drained: { acked: 1, ended: "empty" } }]);
+    await alice.agent.settled();
     expect(alice.inbounds).toHaveLength(2);
     expect(alice.inbounds[1]).toMatchObject({ received: { outcome: "received", live: false }, reacted: null, address: null });
     const again = await fold(alice);

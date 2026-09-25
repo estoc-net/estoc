@@ -23,7 +23,7 @@ Agent            a vault running: one receiver, one dispatcher, a line to each m
   ├─ send        what a message is, committed as an intent in its channel before any network work
   ├─ prepare     an intent → the one exact envelope every transport call of it carries
   ├─ dispatch    the one transport call of a prepared package, under a live action; dispatcher waits for prerequisites
-  ├─ receive/    the gate before the vault, the receipt as one observation, and what a receipt owes afterwards
+  ├─ receive/    the gate before the vault, the receipt as one observation admitted or not before its lock is released, and what a receipt owes afterwards
   ├─ effects     what an established input earns on its own: the receipt it asks for, a handler's reply
   ├─ handlers/   trust-ping 2.0 · basicmessage 2.0 · user-profile 1.0 · report-problem 2.0 · empty 1.0, through the handler seam
   ├─ rotate      a local rotation frozen with its proof; privacy: a disclosed address gives way to a private successor
@@ -37,7 +37,11 @@ Agent            a vault running: one receiver, one dispatcher, a line to each m
 A message is decided over the fold read under the vault's writer lock
 and committed as an intent, then as a package, before its one transport
 call. That call is made under a live action: the user's send, the input
-a live receipt answered, or an explicit manual step. Opening, importing
+a live receipt answered, or an explicit manual step. A receipt is live
+when it recorded the first observation the vault holds of its input
+and the admission pass under its lock admitted that observation as
+the witness its input speaks through; one whose admission waited for
+evidence is not, whatever admits it later. Opening, importing
 or restoring a vault mints none, so whatever such a runtime finds
 waiting is shown as pending work, each item naming the manual procedure
 (`agent.manual`) that completes it.
@@ -45,8 +49,23 @@ waiting is shown as pending work, each item naming the manual procedure
 An inbound envelope is opened with the one key of this vault it names,
 its sender read from what the vault already holds and never from the
 network, and recorded as an observation with its rotation proof as it
-came. Whether the proof verifies, which channel the input is
-established in and what it earns are the fold's to say.
+came. Before the receipt's lock is released, the vault's ordered
+admission pass decides, among every observation still owed one in
+first-receipt order, whether this one is admitted for application use,
+so that the writer lock is the one sequence every receipt and
+admission goes through whichever way the delivery came. Whether the
+proof verifies, which channel the input is established in and what it
+earns are the fold's to say, over the admitted observations alone.
+Over a pickup, that sequence holds a delivery's local work alone: the
+mediator is told of the delivery, and the calls it decided are made,
+off its turn, so the delivery behind it is received meanwhile.
+Evidence that arrives outside a receipt — the document a preparation
+resolves, an import the host tells the agent of — is reconciled when
+it arrives, admitting what waited for it and dispatching nothing:
+a preparation runs that pass under its lock once the message has a
+package to send, made then or held already, and a dispatch prepares
+first, so a pass a refused commit cut short is completed by the next
+message that reaches that point.
 
 ## Usage
 

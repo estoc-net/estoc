@@ -35,6 +35,7 @@ describe("first messages that race", () => {
     }
     // Both wait at the mediator, in the order it took them; the pickup that finds them may also find what the peers answer meanwhile.
     expect(await alice.agent.connect()).toMatchObject([{ unreachable: null, drained: { ended: "empty" } }]);
+    await alice.agent.settled();
     expect(alice.inbounds.slice(0, 2).map(({ received, after, address }) => [received.outcome === "received" && received.live, after!.consumed.length, address!.outcome])).toEqual([
       [true, 1, "rotated"],
       [true, 0, "rotated"],
@@ -79,7 +80,9 @@ describe("first messages that race", () => {
     ]);
     expect(sent).toMatchObject([{ dispatched: { outcome: "submitted" } }, { dispatched: { outcome: "submitted" } }]);
     await Promise.all([alice.agent.connect(), bob.agent.connect()]);
+    await Promise.all([alice.agent.settled(), bob.agent.settled()]);
     await Promise.all([alice.agent.connect(), bob.agent.connect()]);
+    await Promise.all([alice.agent.settled(), bob.agent.settled()]);
 
     for (const [party, mine, channel] of [
       [alice, FROM_ALICE, channelOf(a0, b0)],

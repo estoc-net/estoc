@@ -14,15 +14,25 @@
  *
  * Only two things here authorize a transport call by themselves: the
  * user's send, and the first observation the vault holds of an input,
- * in the call that recorded it. Such a live input has what the vault
- * owes recorded, then its automatic effects decided and called, then
- * the private-address policy applied; each step stands alone, so that
- * one that fails leaves the others done and the observation recorded
- * all the same. An input the vault already held is no live input when
- * it is delivered again, whether this agent recorded it or one before
- * it, and whether or not what it earned was ever sent: it is observed
- * again, what the vault owes is recorded, and a reply it still earns
- * stays listed for the user.
+ * in the call that recorded it and had it admitted under the receipt's
+ * lock as the witness its input speaks through. Such a live input has
+ * what the vault owes recorded, then its automatic effects and the
+ * private-address policy decided, then their calls made; each step
+ * stands alone, so that one that fails leaves the others done and the
+ * observation recorded all the same. A first observation the receipt
+ * left waiting for evidence is not live, and stays so: the evidence,
+ * whenever and however it comes, admits the observation, and what the
+ * input then earns is listed for the user. Over a pickup, the local
+ * steps run in the turn the delivery came in, and the calls off it:
+ * neither they nor the acknowledgement to the mediator hold the
+ * receipt of the delivery behind. An input the vault already held is
+ * no live input when it is delivered again, whether this agent
+ * recorded it or one before it, and whether or not what it earned was
+ * ever sent: it is observed again, what the vault owes is recorded,
+ * and a reply it still earns stays listed for the user. Evidence the
+ * host recovered outside the agent — an import, a document — is told
+ * to it, and what the vault owes over it is recorded then,
+ * dispatching nothing.
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
@@ -33,14 +43,14 @@ import { LiveInput, type LiveAction } from "./action.js";
 import { disclose, didOf, routeOf, type Disclosed, type Disclosure } from "./dids.js";
 import type { Dispatched } from "./dispatch.js";
 import { Dispatcher, type DispatcherOptions, type PendingOutbound } from "./dispatcher.js";
-import { messageOf, reactTo, type Called, type EffectOptions, type Reacted } from "./effects.js";
+import { callEffects, decideEffects, messageOf, type Called, type EffectOptions, type Reacted } from "./effects.js";
 import { didcommDocumentOf } from "./evidence.js";
 import { effectTypesOf, handlersOf } from "./handlers/index.js";
 import { Keyring } from "./keyring.js";
 import { MediatorLink } from "./link.js";
 import { establish, mediationOf, reconcile, watchUnknownRegistrations, type Established, type Reconciled } from "./mediation.js";
 import { Pickup, type Delivered, type Drained, type Fate, type Handle } from "./pickup.js";
-import { privateAddress, type PrivateAddress } from "./privacy.js";
+import { callPrivateAddress, decidePrivateAddress, type PrivateAddress } from "./privacy.js";
 import { afterReceipt, recordOwed, type AfterReceipt, type Owed } from "./receive/after.js";
 import { receiptOf } from "./receive/receipt.js";
 import { Receiver, type Discarded, type Received, type ReceiverOptions, type WaitingDelivery } from "./receive/receiver.js";
@@ -70,6 +80,9 @@ export interface Inbound {
   reacted: Reacted | null;
   address: PrivateAddress | null;
 }
+
+/** What is left of a delivery once its local work is done: its transport calls, then the host told of it. */
+type Finish = () => Promise<Inbound>;
 
 /** How the line to one arrangement's mediator stands. */
 export interface Connection {
@@ -107,6 +120,8 @@ export class Agent {
   private closed = false;
   /** by arrangement, from the first attempt to connect it: one whose line could not even be made has a connection to say why */
   private readonly attempts = new Map<MediationId, Connection>();
+  /** the calls of the pickup deliveries taken so far, run off their turns and one delivery after another, so the host is told of them in the order the mail came */
+  private calling: Promise<void> = Promise.resolve();
 
   /** Every manual procedure, each transport call of theirs through this agent's dispatcher. */
   readonly manual: Manual;
@@ -210,14 +225,26 @@ export class Agent {
   }
 
   /**
-   * Something the waiting deliveries may wait for changed outside this
-   * agent — a DID created, a route configured, an arrangement granted:
-   * each one whose wait ended is retried, and followed like any other.
+   * The vault's local state changed outside this agent — a DID
+   * created, a route configured, an arrangement granted, evidence
+   * imported or a document resolved. What the vault owes over it is
+   * recorded first, an admission a proof waited for included, and
+   * dispatched by nothing; then each waiting delivery whose wait ended
+   * is retried, and followed like any other.
    */
   async localStateChanged(): Promise<Inbound[]> {
+    await recordOwed(this.runtime, this.keys);
     const inbounds: Inbound[] = [];
     for (const received of await this.receiver.localStateChanged()) inbounds.push(await this.follow(received));
     return inbounds;
+  }
+
+  /** Resolves once the calls of every pickup delivery taken so far are made, or given up on, and the host told; at once when none is running. */
+  async settled(): Promise<void> {
+    for (let tail = this.calling; ; tail = this.calling) {
+      await tail;
+      if (tail === this.calling) return;
+    }
   }
 
   records(): Promise<Recorder> {
@@ -343,30 +370,52 @@ export class Agent {
     return line;
   }
 
-  /** The receiver's pickup handle, with what follows a delivery run before the mediator is told of it. */
+  /** The receiver's pickup handle: a delivery's local work done in its turn, before the mediator is told of it, and its calls run off the turn. */
   private handleOf(mediationId: MediationId): Handle {
     const handle = this.receiver.pickupHandle(mediationId);
     const take = async (delivered: Delivered): Promise<Fate> => {
       if ("unreadable" in delivered) return handle(delivered);
       const received = await this.receiver.receive({ packed: delivered.packed, source: { kind: "pickup", mediationId, deliveryId: delivered.attachmentId }, parent: delivered.parent });
-      await this.follow(received);
+      this.detach(await this.decide(received));
       return received.outcome === "deferred" ? "skip" : "acked";
     };
     return Object.assign(take, { acknowledged: handle.acknowledged });
   }
 
   private async follow(received: Received): Promise<Inbound> {
+    return (await this.decide(received))();
+  }
+
+  /**
+   * A delivery's local work: what the vault owes recorded and, for a
+   * live input, its automatic effects and the private-address policy
+   * decided under the lock, each intent committed with the action the
+   * input minted for it. What is returned makes the calls, in order,
+   * and tells the host.
+   */
+  private async decide(received: Received): Promise<Finish> {
     const inbound: Inbound = { received, after: null, reacted: null, address: null };
-    if (received.outcome !== "received") return this.tell(inbound);
+    if (received.outcome !== "received") return async () => this.tell(inbound);
     const { handlers, acknowledge, now, trace } = this.options;
     inbound.after = await this.step("what the vault owes", () => afterReceipt(this.runtime, this.keys, received.cid, { trace }));
-    if (received.live) {
-      const live = new LiveInput(received.cid);
-      const dispatch = (action: LiveAction): Promise<Dispatched> => this.dispatcher.run(action);
-      inbound.reacted = await this.step("the automatic effects", () => reactTo(this.runtime, this.keys, live, { handlers, acknowledge, now, trace, dispatch }));
-      if (this.options.privateAddresses ?? true) inbound.address = await this.step("the private address", () => privateAddress(this.runtime, this.keys, live, { now, trace, dispatch }));
-    }
-    return this.tell(inbound);
+    if (!received.live) return async () => this.tell(inbound);
+    const live = new LiveInput(received.cid);
+    const effects = await this.step("the automatic effects", () => decideEffects(this.runtime, this.keys, live, { handlers, acknowledge, now, trace }));
+    const address = (this.options.privateAddresses ?? true) ? await this.step("the private address", () => decidePrivateAddress(this.runtime, this.keys, live, { now, trace })) : null;
+    const dispatch = (action: LiveAction): Promise<Dispatched> => this.dispatcher.run(action);
+    return async () => {
+      if (effects !== null) inbound.reacted = await this.step("the calls of the automatic effects", () => callEffects(effects, { dispatch, trace }));
+      if (address !== null) inbound.address = await this.step("the notification of the private address", () => callPrivateAddress(address, { dispatch, trace }));
+      return this.tell(inbound);
+    };
+  }
+
+  /** The calls of a pickup delivery, run off its turn after those of the delivery before; what they throw is logged, since nothing waits for them. */
+  private detach(finish: Finish): void {
+    this.calling = this.calling.then(finish).then(
+      () => undefined,
+      (err: unknown) => this.log(`the calls of a received message failed: ${messageOf(err)}`)
+    );
   }
 
   private tell(inbound: Inbound): Inbound {

@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **`message.admitted`**, the runtime's durable acceptance of one exact
+  observation for application use: `{ sourceEventCid }`, no roots.
+  `foldAdmissions` reads each record against its source into
+  `effective`, `pending` or `invalid` (`AdmissionFold`), and
+  `foldDispositions` gives every observation its `Disposition` —
+  `refused`, `admitted`, `ignored-superseded` or `pending-admission`
+  with what stands in the way; a verified replacement of the peer
+  precedes every pending state, a saved admission still waiting for
+  its evidence included — and lists the `candidates` no
+  effective or pending admission names, in first-receipt order, each
+  `eligible`, `deferred`, `refused` by current policy, `invalid` or in
+  an `integrity-conflict`. Both are on `VaultFold` as `admissions` and
+  `dispositions`.
+- **An input speaks through its admitted observations** (behaviour
+  change): `Member.admitted`; the intent of an execution is the one its
+  admitted members agree on, a conflict is their disagreement, and an
+  input is `complete` only through an admitted complete witness, now
+  `Execution.firstWitness`. A positive observation no admission names
+  whose intent differs from the admitted one is listed in
+  `Execution.contradicting` and raises no conflict. An observation
+  caught in a receipt-integrity conflict is admitted by nothing, so
+  its input is not established.
+- **The ordered admission pass**: `admissionDrafts` is one round — the
+  first eligible observation of each input — and `admitReceipts` runs
+  round after round under a lock already held, committing each round
+  and refolding over the extended set, until none is owed;
+  `reconcileAdmissions` takes the lock and runs it. A consistent
+  duplicate is admitted the round after the first, a contradicting one
+  refused for good.
+- An invitation's candidate that is not yet admitted is `deferred`
+  until the pass admits it, and one whose admission current policy
+  refuses is `refused`; a candidate an admission waits on is deferred
+  too. The notification of a source-derived decision and the private
+  successor a live input selects require the exact source admitted.
+- Gone from the invitations module: `Eligibility`, now the admission
+  module's and shared.
+
 - **Continuity is derived by `@estoc/continuity`.** The vault projects
   its evidence into the package's facts (`projectFacts`) under IDs every
   replica derives from the event CIDs — `receipt:<cid>:observation`,

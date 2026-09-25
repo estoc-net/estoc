@@ -306,9 +306,9 @@ describe("the candidates", () => {
     expect(vault.inbound.ofSource(besideSiblings.cid)!.status.status).toBe("complete");
     expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "available" });
     expect(vault.invitations.invitations.get(disclosure.cid)!.candidates.map(({ eligibility }) => eligibility)).toEqual([
-      { status: "invalid", because: "the input is in an intent conflict: 2 intents are authenticated for one input" },
-      { status: "invalid", because: "the input is in an intent conflict: 2 intents are authenticated for one input" },
-      { status: "invalid", because: "the input is in an intent conflict: 2 intents are authenticated for one input" },
+      { status: "invalid", because: "the input is in an intent conflict: 2 intents are admitted for one input" },
+      { status: "invalid", because: "the input is in an intent conflict: 2 intents are admitted for one input" },
+      { status: "invalid", because: "the input is in an intent conflict: 2 intents are admitted for one input" },
       { status: "eligible" },
       { status: "eligible" },
     ]);

@@ -7,9 +7,11 @@
  * mediator tells a retry of the package from another package. What
  * goes on the wire is the envelope stored with the package, every time.
  * Before the call: the message is prepared when it still needs a
- * package, a mediated sender the peer has not written to is made to be
- * held by its mediator so that an answer has somewhere to arrive, and
- * the fold is read again under the lock, where a message submitted or
+ * package, and what the vault owes is recorded either way, under the
+ * lock the preparation runs in; a mediated sender the peer has not
+ * written to is made to be held by its mediator so that an answer has
+ * somewhere to arrive; and the fold is read again under the lock,
+ * where a message submitted or
  * terminated meanwhile, one whose expiry has come, whose sender or
  * route was retired, whose channel was blocked or whose envelope is no
  * longer here is not sent. The action's one invocation is consumed in
@@ -52,7 +54,7 @@ import { reconcile, registered } from "./mediation.js";
 import { closedBecause, expireUnderLock, expiryPhase, hasExpired, outboundWorkKey, prepareUnderLock, scanOptions, type PrepareOptions, type Settled } from "./prepare.js";
 import { serially } from "./procedure.js";
 import { knownLongForms, resolve, type ResolverOptions, type Resolved } from "./resolver.js";
-import { note, noteAll, type AgentTrace, type Note } from "./trace.js";
+import { note, noteAll, type AgentTrace } from "./trace.js";
 
 /** How long one attempt may take by default: the mediator resolved, the forward sealed and the call answered. */
 export const DISPATCH_TIMEOUT_MS = 15_000;
@@ -143,28 +145,16 @@ interface Ready {
 
 /**
  * Under the lock: the message prepared when it still needs a package,
- * then what its one package needs for the wire read off the fold and
- * the object store. Expiry is observed first, before whatever else
- * holds the message up.
+ * which observes its expiry first and records what the vault owes,
+ * then what its one package needs for the wire read off the fold as
+ * that left it and the object store.
  */
 async function ready(held: Held, keys: Keys, messageId: MessageId, options: DispatchOptions): Promise<Settled<Dispatched | Ready>> {
-  const notes: Note[] = [];
+  const { result, notes } = await prepareUnderLock(held, keys, messageId, options);
   const done = (result: Dispatched): Settled<Dispatched | Ready> => ({ result, notes });
-  let fold = await scanVault(held, keys, scanOptions(options));
-  let outbound = fold.outbound.outbounds.get(messageId);
-  if (outbound === undefined) throw new UnknownEntity("message", messageId);
-  const closed = closedBecause(outbound);
-  if (closed !== null) return done({ outcome: "none", messageId, because: closed });
-  const intent = (outbound.intent as { data: MessageOut }).data;
-  if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
-  if (outbound.work.kind === "prepare") {
-    const prepared = await prepareUnderLock(held, keys, messageId, options);
-    notes.push(...prepared.notes);
-    const { result } = prepared;
-    if (result.outcome === "none" || result.outcome === "pending" || result.outcome === "expired") return done(result);
-    fold = await scanVault(held, keys, scanOptions(options));
-    outbound = fold.outbound.outbounds.get(messageId)!;
-  }
+  if (result.outcome !== "prepared" && result.outcome !== "reused") return done(result);
+  const fold = await scanVault(held, keys, scanOptions(options));
+  const outbound = fold.outbound.outbounds.get(messageId)!;
   const { work } = outbound;
   if (work.kind === "none") return done({ outcome: "none", messageId, because: work.because });
   if (work.kind === "prepare") return done({ outcome: "pending", messageId, because: "no package is prepared" });

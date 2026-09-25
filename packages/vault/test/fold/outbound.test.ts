@@ -434,7 +434,7 @@ describe("an outbound message", () => {
 
     receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 4, wire: source.data.wireMessageId, overrides: { intentHash: OTHER_HASH, pleaseAck: [""], thid: "thread", createdTime: 1_700_000_000 } });
     vault = await fold(scene, keys);
-    expect(variant(scene, vault.checks, ack, variants).effect).toEqual({ status: "conflict", because: "the source's input is in conflict: 2 intents are authenticated for one input" });
+    expect(variant(scene, vault.checks, ack, variants).effect).toEqual({ status: "conflict", because: "the source's input is in conflict: 2 intents are admitted for one input" });
     expect(outboundOf(vault, pong).effect).toEqual({ status: "complete" });
     expectSameOverEveryOrder(scene, vault.checks);
   });

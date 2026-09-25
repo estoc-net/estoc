@@ -23,11 +23,12 @@ import {
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { secretsResolverFor } from "../src/protocol/didcomm.js";
 import { AgentTrace, Keyring, UnknownEntity, createDid, createVault, pinnedResolver, prepare, prepareAll, send, unpack, type Content, type PrepareOptions, type Prepared, type Unpacked } from "../src/index.js";
-import { didcomm, directParty, memoryDriver, received, ticking, type DirectParty } from "./helpers.js";
+import { carrierWaitingForIssuer, didcomm, directParty, memoryDriver, received, refuseCommits, ticking, type DirectParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const ALICE_NEXT = "019b0000-0000-7000-8000-00000000000c" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
+const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
 const CAROL = "019b0000-0000-7000-8000-0000000000c0" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
 const SECOND = "019b0000-0000-7000-8000-000000000102" as MessageId;
@@ -303,6 +304,43 @@ describe("prepare", () => {
     expect((result as { because: string }).because).toMatch(/pending: the source it names is not here/);
     expect((await fold(alice)).set.of("message.prepared")).toEqual([]);
     await closeAll(alice, bob);
+  });
+
+  it("a resolution it commits is evidence recovered: an observation whose proof waited for that issuer's document is admitted under the same lock, dispatching nothing, and the package stands", async () => {
+    const { alice, bob } = await parties();
+    const { cid, prior } = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR);
+    const carried = { cid };
+    expect((await fold(alice)).dispositions.disposition(carried.cid)).toEqual({ status: "pending-admission", because: "the source's proof is not yet verified" });
+
+    await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, prior.did), recipientDid: prior.longFormDid }, HELLO, { messageId: MESSAGE });
+    const trace = await AgentTrace.open(alice.runtime.local);
+    const result = prepared(await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace })));
+    const after = await fold(alice);
+    expect([after.continuity.status(carried.cid), after.dispositions.disposition(carried.cid).status, after.set.of("message.admitted").map(({ data }) => data.sourceEventCid)]).toEqual([{ status: "verified" }, "admitted", [carried.cid]]);
+    expect([after.outbound.outbounds.get(MESSAGE)!.package!.event.cid, after.set.of("message.out").length, await trace.read({ type: "diag.admission" })]).toEqual([result.prepared.cid, 1, []]);
+    await closeAll(alice, bob);
+  });
+
+  it("owes that pass at every preparation: a commit refused once the resolution is durable — the package's, or the pass's own — leaves the carrier to the next preparation, which admits it once, whether it makes the package or reuses it", async () => {
+    for (const refused of ["message.prepared", "message.admitted"] as const) {
+      const { alice, bob } = await parties();
+      const { cid, prior } = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR);
+      await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, prior.did), recipientDid: prior.longFormDid }, HELLO, { messageId: MESSAGE });
+      const trace = await AgentTrace.open(alice.runtime.local);
+      refuseCommits(alice.runtime, refused, 1);
+      if (refused === "message.prepared") await expect(prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).rejects.toThrow("the disk is full for now");
+      else prepared(await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace })));
+      let f = await fold(alice);
+      expect([f.continuity.status(cid), f.dispositions.disposition(cid), f.set.of("peer.resolved").filter(({ data }) => data.did === prior.did).length, f.set.of("message.prepared").length]).toEqual([{ status: "verified" }, { status: "pending-admission", because: "the observation is not yet reconciled" }, 1, refused === "message.prepared" ? 0 : 1]);
+      expect((await trace.read({ type: "diag.admission" })).map((entry) => entry.data)).toEqual(refused === "message.prepared" ? [] : [{ messageId: MESSAGE, reason: "the pass the preparation runs stopped: the disk is full for now" }]);
+
+      expect((await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).outcome).toBe(refused === "message.prepared" ? "prepared" : "reused");
+      f = await fold(alice);
+      expect([f.dispositions.disposition(cid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.set.of("message.prepared").length, f.set.of("message.out").length]).toEqual(["admitted", [cid], 1, 1]);
+      expect((await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).outcome).toBe("reused");
+      expect((await fold(alice)).set.of("message.admitted")).toHaveLength(1);
+      await closeAll(alice, bob);
+    }
   });
 
   it("prepares nothing the fold asks no package for, and terminates an intent whose expiry has passed", async () => {

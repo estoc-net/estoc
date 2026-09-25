@@ -199,6 +199,7 @@ const ALL: { [T in VaultEventType]: [Data<T>, readonly string[]] } = {
     [BODY, PHOTO],
   ],
   "message.erased": [{ messageId: OUT, dropCids: [BODY, PHOTO], because: "user" } as Data<"message.erased">, []],
+  "message.admitted": [{ sourceEventCid: SOURCE_IN } as Data<"message.admitted">, []],
 };
 
 const OUT_DATA = ALL["message.out"][0] as MessageOut;
@@ -207,7 +208,7 @@ const IN_DATA = ALL["message.in"][0] as MessageIn;
 describe("readVaultEvent", () => {
   it("knows exactly the version-4 types", () => {
     expect([...VAULT_EVENT_TYPES].sort()).toEqual(Object.keys(ALL).sort());
-    expect(VAULT_EVENT_TYPES).toHaveLength(28);
+    expect(VAULT_EVENT_TYPES).toHaveLength(29);
     expect(isVaultEventType("message.out")).toBe(true);
     expect(isVaultEventType("relationship.bound")).toBe(false);
     expect(() => readVaultEvent(event("relationship.bound", {}))).toThrow(/^relationship\.bound: not a version-4 event type/);

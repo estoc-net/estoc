@@ -159,6 +159,7 @@ export type VaultData = {
   "did.disclosed": { didId: DidId; as: DisclosureAs; uses: DisclosureUses; oobId: string | null; goal: string | null };
   "did.retired": { didId: DidId; because: string };
   "invitation.consumed": { disclosureEventCid: EventReference<"did.disclosed">; sourceEventCid: EventReference<"message.in"> };
+  "message.admitted": { sourceEventCid: EventReference<"message.in"> };
   "did.rotationSelected": { fromDidId: DidId; peerDid: Did; toDidId: DidId; sourceEventCid: EventReference<"message.in"> | null; fromPrior: string };
   "channel.blocked": { localDid: Did; peerDid: Did; includeSuccessors: boolean };
   "contact.created": { contactId: ContactId; because: ContactOrigin };
