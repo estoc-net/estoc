@@ -1,22 +1,21 @@
 /**
- * The event set a fold reads: every event once, by ID, in whatever
- * order it arrived. Each event of a version-3 type is read against its
+ * The event set a fold reads: every event once, by CID, in whatever
+ * order it arrived. Each event of a version-4 type is read against its
  * schema on entry; one that fails stays listed with its fault, and one
  * of a type this version does not name is kept as it is, so both keep
  * holding their roots. A fold asks for a type's events in canonical
  * order and for the target of a typed reference, and never sees arrival
- * order. The events are a store's accepted events, one content per ID:
- * a second content under an ID already here is dropped, the store
- * having reported that conflict itself.
+ * order. The events are a store's accepted events, one per CID: the
+ * same CID offered again is the same event, and is not added twice.
  */
 
-import { canonicalText, compareEvents, type AuthorId, type Event, type EventId } from "@estoc/event-store";
+import { canonicalText, compareEvents, type AuthorId, type Event, type EventCid } from "@estoc/event-store";
 
 import { InvalidPayload } from "../errors.js";
 import { isVaultEventType, readVaultEvent, type VaultEvent } from "../schema.js";
 import type { EventReference, VaultEventType } from "../types.js";
 
-/** An event of a version-3 type whose payload or roots break that type's schema. */
+/** An event of a version-4 type whose payload or roots break that type's schema. */
 export type InvalidVaultEvent = { event: Event; error: InvalidPayload };
 
 /**
@@ -27,8 +26,8 @@ export type InvalidVaultEvent = { event: Event; error: InvalidPayload };
 export type Resolved<T extends VaultEventType> = { status: "present"; event: VaultEvent<T> } | { status: "missing" } | { status: "mismatched"; event: Event };
 
 export class VaultEventSet {
-  private readonly read = new Map<EventId, VaultEvent>();
-  private readonly kept = new Map<EventId, Event>();
+  private readonly read = new Map<EventCid, VaultEvent>();
+  private readonly kept = new Map<EventCid, Event>();
   private readonly byType = new Map<VaultEventType, VaultEvent[]>();
   private readonly sorted = new Map<VaultEventType, VaultEvent[]>();
   readonly invalid: InvalidVaultEvent[] = [];
@@ -45,11 +44,11 @@ export class VaultEventSet {
     return set;
   }
 
-  /** Add one event; false when the set already holds its ID. */
+  /** Add one event; false when the set already holds its CID. */
   add(event: Event): boolean {
-    if (this.read.has(event.eventId) || this.kept.has(event.eventId)) return false;
+    if (this.read.has(event.cid) || this.kept.has(event.cid)) return false;
     if (!isVaultEventType(event.type)) {
-      this.kept.set(event.eventId, event);
+      this.kept.set(event.cid, event);
       return true;
     }
     let read: VaultEvent;
@@ -58,10 +57,10 @@ export class VaultEventSet {
     } catch (err) {
       if (!(err instanceof InvalidPayload)) throw err;
       this.invalid.push({ event, error: err });
-      this.kept.set(event.eventId, event);
+      this.kept.set(event.cid, event);
       return true;
     }
-    this.read.set(event.eventId, read);
+    this.read.set(event.cid, read);
     const list = this.byType.get(read.type);
     if (list === undefined) this.byType.set(read.type, [read]);
     else list.push(read);
@@ -115,13 +114,13 @@ export class VaultEventSet {
 }
 
 /** The complete canonical key of an event: what orders it among others. */
-export type SourceKey = { readonly at: string; readonly eventId: EventId; readonly author: AuthorId };
+export type SourceKey = { readonly at: string; readonly cid: EventCid };
 
-export const keyOf = (event: { at: string; eventId: EventId; author: AuthorId }): SourceKey => ({ at: event.at, eventId: event.eventId, author: event.author });
+export const keyOf = (event: { at: string; cid: EventCid }): SourceKey => ({ at: event.at, cid: event.cid });
 
-/** Canonical order: by `at`, then event ID, then author. */
+/** Canonical order: by `at`, then the event CID's text. */
 export function compareKeys(a: SourceKey, b: SourceKey): number {
-  return cmp(a.at, b.at) || cmp(a.eventId, b.eventId) || cmp(a.author, b.author);
+  return cmp(a.at, b.at) || cmp(a.cid, b.cid);
 }
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);

@@ -7,7 +7,7 @@
  * matches evidence held elsewhere — is for the folds.
  */
 
-import { isEventId, isJsonObject, isRawCid, type Draft, type Event } from "@estoc/event-store";
+import { isEventCid, isJsonObject, isRawCid, type Draft, type Event } from "@estoc/event-store";
 
 import { InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey } from "./errors.js";
 import { anonymousMessageId, automaticMessageId, compareChannels, didKeyName, effectKey, mediationKeyName } from "./ids.js";
@@ -89,7 +89,7 @@ const headers: Check<VaultData["message.out"]["headers"]> = (value, at) => {
 const minted = <T extends string>(): Check<T> => (value, at) => (isMintedId(value) ? (value as T) : fail(at, "a canonical UUIDv7"));
 const derived = <T extends string>(): Check<T> => (value, at) => (isDerivedId(value) ? (value as T) : fail(at, "a canonical UUIDv5"));
 const entity = <T extends string>(): Check<T> => (value, at) => (isEntityId(value) ? (value as T) : fail(at, "a canonical UUIDv5 or UUIDv7"));
-const ref = <T extends string>(): Check<EventReference<T>> => (value, at) => (isEventId(value) ? (value as EventReference<T>) : fail(at, "an event ID"));
+const ref = <T extends string>(): Check<EventReference<T>> => (value, at) => (isEventCid(value) ? (value as EventReference<T>) : fail(at, "an event CID"));
 
 const nullable =
   <T>(check: Check<T>): Check<T | null> =>
@@ -205,15 +205,15 @@ const messageOut = checked(
     executionId: nullable(derived<ExecutionId>()),
     effectType: nullable(nonEmpty),
     effectKey: nullable(text),
-    sourceEventId: nullable(ref<"message.in">()),
-    rotationEventId: nullable(ref<"did.rotationSelected">()),
+    sourceEventCid: nullable(ref<"message.in">()),
+    rotationEventCid: nullable(ref<"did.rotationSelected">()),
   }),
   (data) => {
     expiryAfterCreation(data);
     const effect = [data.executionId, data.effectType, data.effectKey];
     const present = effect.filter((member) => member !== null).length;
     if (present !== 0 && present !== effect.length) throw new Fault("executionId, effectType and effectKey are all null or all present");
-    if ((data.sourceEventId !== null) !== (present !== 0)) throw new Fault("sourceEventId is present exactly for an effect derived from an observation");
+    if ((data.sourceEventCid !== null) !== (present !== 0)) throw new Fault("sourceEventCid is present exactly for an effect derived from an observation");
     if (present === 0) {
       if (!isMintedId(data.messageId)) throw new Fault("a locally initiated send mints a UUIDv7 messageId");
       if (data.ack.length > 0) throw new Fault("a locally initiated send has ack []");
@@ -235,7 +235,7 @@ const messageIn = checked(
     plaintextHash: hash,
     localKeyName: keyName,
     msgType: nonEmpty,
-    peerResolutionEventId: nullable(ref<"peer.resolved">()),
+    peerResolutionEventCid: nullable(ref<"peer.resolved">()),
     presentedDid: nullable(peerDid),
     did: nullable(channelDid),
     thid: nullable(nonEmpty),
@@ -249,9 +249,9 @@ const messageIn = checked(
   }),
   (data) => {
     expiryAfterCreation(data);
-    const anonymous = data.peerResolutionEventId === null;
+    const anonymous = data.peerResolutionEventCid === null;
     if (anonymous !== (data.did === null) || anonymous !== (data.presentedDid === null)) {
-      throw new Fault("peerResolutionEventId, did and presentedDid are null together, for an anonymous observation");
+      throw new Fault("peerResolutionEventCid, did and presentedDid are null together, for an anonymous observation");
     }
     if (anonymous) {
       const messageId = anonymousMessageId(data.localKeyName, data.wireMessageId);
@@ -330,9 +330,9 @@ const SCHEMAS: { [T in VaultEventType]: Schema<T> } = {
     none
   ),
   "did.retired": schema(shape({ didId: idMembers.didId, because: nonEmpty }), none),
-  "invitation.consumed": schema(shape({ disclosureEventId: ref<"did.disclosed">(), sourceEventId: ref<"message.in">() }), none),
+  "invitation.consumed": schema(shape({ disclosureEventCid: ref<"did.disclosed">(), sourceEventCid: ref<"message.in">() }), none),
   "did.rotationSelected": schema(
-    checked(shape({ fromDidId: idMembers.didId, peerDid: channelDid, toDidId: idMembers.didId, sourceEventId: nullable(ref<"message.in">()), fromPrior: compactJwt }), (data) => {
+    checked(shape({ fromDidId: idMembers.didId, peerDid: channelDid, toDidId: idMembers.didId, sourceEventCid: nullable(ref<"message.in">()), fromPrior: compactJwt }), (data) => {
       if (data.fromDidId === data.toDidId) throw new Fault("fromDidId and toDidId differ: a rotation moves to another DID entity");
     }),
     none
@@ -364,7 +364,7 @@ const SCHEMAS: { [T in VaultEventType]: Schema<T> } = {
         senderDidId: idMembers.didId,
         localKeyName: keyName,
         recipientDid: peerDid,
-        peerResolutionEventId: ref<"peer.resolved">(),
+        peerResolutionEventCid: ref<"peer.resolved">(),
         fromPrior: nullable(compactJwt),
         intentHash: hash,
         plaintextHash: hash,

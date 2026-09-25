@@ -76,7 +76,7 @@ async function hosting(alice: DirectParty, answer: (post: Post) => Response = ac
   const receive = async (peer: DirectParty, extra: Partial<IMessage>, to: string = alice.longFormDid): Promise<EventReference<"message.in">> => {
     const outcome = await receiver.receive({ packed: await sealed(await peerSealer(peer), to, extra), source: DIRECT });
     if (outcome.outcome !== "received") throw new Error(`not received: ${JSON.stringify(outcome)}`);
-    return outcome.eventId;
+    return outcome.cid;
   };
   const channel = async (pair: Channel): Promise<ChannelRecord> => (await readRecords(alice.runtime, alice.keys, { handlers })).channel(pair);
   return { wire, dispatcher, manual, receive, channel };
@@ -207,17 +207,17 @@ describe("records", () => {
     const { alice, bob } = await parties();
     const { receive } = await hosting(alice);
     const pair = { localDid: alice.did, peerDid: bob.did };
-    const eventId = await receive(bob, { id: crypto.randomUUID(), type: PROFILE, body: { profile: { displayName: "Bob" } }, please_ack: [""] });
+    const cid = await receive(bob, { id: crypto.randomUUID(), type: PROFILE, body: { profile: { displayName: "Bob" } }, please_ack: [""] });
 
     const read = objectReader(alice.runtime.vault.objects);
     const whole = await scanVault(alice.runtime.vault, alice.keys);
-    const source = whole.channels.sources.get(eventId)!;
-    const partial = VaultEventSet.of([...whole.set.all()].filter((event) => event.eventId !== source.event.data.peerResolutionEventId));
+    const source = whole.channels.sources.get(cid)!;
+    const partial = VaultEventSet.of([...whole.set.all()].filter((event) => event.cid !== source.event.data.peerResolutionEventCid));
     const before = recorder(foldVault(partial, await checkVault(partial, alice.keys, read)), read);
     expect(before.channels()).toEqual([pair]);
     const record = await before.channel(pair);
     expect([record.messages, record.peerName]).toEqual([[], null]);
-    expect(record.unplaced).toEqual([{ sourceEventId: eventId, messageId: source.event.data.messageId, channel: pair, at: source.event.at, standing: "incomplete", because: expect.any(String) }]);
+    expect(record.unplaced).toEqual([{ sourceEventCid: cid, messageId: source.event.data.messageId, channel: pair, at: source.event.at, standing: "incomplete", because: expect.any(String) }]);
     expect([await before.unplaced(), before.pending().missingResponses]).toEqual([{ inputs: [], outputs: [] }, []]);
 
     const after = await (await readRecords(alice.runtime, alice.keys)).channel(pair);
@@ -358,20 +358,20 @@ describe("records", () => {
     await receive(bob, { id: crypto.randomUUID(), body: { content: "hi" } });
 
     const rotated = await manual.rotate({ localDidId: ALICE, peerDid: bob.did });
-    expect(rotated).toMatchObject({ existed: false, decision: { data: { sourceEventId: null } }, notification: { outcome: "created", dispatched: { outcome: "submitted" } } });
+    expect(rotated).toMatchObject({ existed: false, decision: { data: { sourceEventCid: null } }, notification: { outcome: "created", dispatched: { outcome: "submitted" } } });
     expect(wire.posts).toHaveLength(1);
     const fold = await scanVault(alice.runtime.vault, alice.keys);
     const successor = { localDid: fold.routes.dids.get(rotated.successor)!.created!.did, peerDid: bob.did };
-    const rotationEventId = rotated.decision.eventId as EventReference<"did.rotationSelected">;
+    const rotationEventCid = rotated.decision.cid as EventReference<"did.rotationSelected">;
     const notified = only(await channel(successor), "out");
-    expect(notified).toMatchObject({ msg: { type: EMPTY_MESSAGE_TYPE }, outcome: { status: "submitted" }, verification: fold.continuity.status(rotationEventId), manualAction: "none", diagnostics: [] });
+    expect(notified).toMatchObject({ msg: { type: EMPTY_MESSAGE_TYPE }, outcome: { status: "submitted" }, verification: fold.continuity.status(rotationEventCid), manualAction: "none", diagnostics: [] });
 
-    const other = manualNotificationDraft(fold, uuidv7() as MessageId, successor, { type: EMPTY_MESSAGE_TYPE, body: {}, pleaseAck: [""], ack: [] }, rotationEventId);
+    const other = manualNotificationDraft(fold, uuidv7() as MessageId, successor, { type: EMPTY_MESSAGE_TYPE, body: {}, pleaseAck: [""], ack: [] }, rotationEventCid);
     await alice.runtime.vault.commit(other.objects, [other.draft]);
     const records = await readRecords(alice.runtime, alice.keys);
     for (const message of (await records.channel(successor)).messages) expect(message).toMatchObject({ outcome: { status: "conflict" }, manualAction: "none", diagnostics: [{ kind: "outcome", because: "another notification is selected for the rotation" }] });
     const pending = records.pending();
-    expect(pending.notificationConflicts).toEqual([{ rotationEventId, messageIds: [notified.messageId, other.draft.data.messageId].sort(), entries: [] }]);
+    expect(pending.notificationConflicts).toEqual([{ rotationEventCid, messageIds: [notified.messageId, other.draft.data.messageId].sort(), entries: [] }]);
     expect(pending.pendingOutbounds).toEqual([]);
     await closeAll(alice, bob);
   });
@@ -435,7 +435,7 @@ describe("records", () => {
     const { receive } = await hosting(alice);
     const disclosed = await disclose(null, alice.runtime, alice.keys, ALICE, { as: "oob", uses: "one" });
     const before = (await readRecords(alice.runtime, alice.keys)).invitations();
-    expect(before).toMatchObject([{ disclosureEventId: disclosed.disclosed.eventId, didId: ALICE, localDid: alice.did, uses: "one", state: { status: "available" }, consumer: null }]);
+    expect(before).toMatchObject([{ disclosureEventCid: disclosed.disclosed.cid, didId: ALICE, localDid: alice.did, uses: "one", state: { status: "available" }, consumer: null }]);
 
     await afterReceipt(alice.runtime, alice.keys, await receive(bob, { id: crypto.randomUUID(), pthid: before[0]!.oobId, body: { content: "hello" } }));
     expect((await readRecords(alice.runtime, alice.keys)).invitations()).toMatchObject([{ state: { status: "consumed", consumer: bob.did }, consumer: bob.did }]);

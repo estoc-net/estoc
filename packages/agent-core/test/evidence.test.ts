@@ -55,14 +55,14 @@ describe("peer.resolved", () => {
     });
     expect(await a.runtime.vault.objects.has(resolution.cid)).toBe(true);
     let fold = await scanVault(a.runtime.vault, a.keys);
-    expect(fold.checks.resolutionChecks.get(event.eventId)).toBe("verified");
+    expect(fold.checks.resolutionChecks.get(event.cid)).toBe("verified");
     expect(fold.held.has(resolution.cid)).toBe(true);
 
-    expect((await commitResolution(a.runtime, evidence)).eventId).toBe(event.eventId);
+    expect((await commitResolution(a.runtime, evidence)).cid).toBe(event.cid);
     const fresh = await commitResolution(a.runtime, evidence, { fresh: true });
-    expect(fresh.eventId).not.toBe(event.eventId);
+    expect(fresh.cid).not.toBe(event.cid);
     const otherKey = await commitResolution(a.runtime, { ...evidence, localKeyName: didKeyName("019b0000-0000-7000-8000-00000000000c" as DidId, "key-agreement") });
-    expect(otherKey.eventId).not.toBe(event.eventId);
+    expect(otherKey.cid).not.toBe(event.cid);
     fold = await scanVault(a.runtime.vault, a.keys);
     expect(fold.set.of("peer.resolved")).toHaveLength(3);
     expect([...fold.checks.resolutionChecks.values()]).toEqual(["verified", "verified", "verified"]);
@@ -83,12 +83,12 @@ describe("peer.resolved", () => {
     expect(await copy.vault.objects.has(resolution.cid)).toBe(false);
     expect(await readResolution(event, read)).toBeNull();
     const repaired = await commitResolution(copy, evidence);
-    expect(repaired.eventId).not.toBe(event.eventId);
+    expect(repaired.cid).not.toBe(event.cid);
     expect(await copy.vault.objects.has(resolution.cid)).toBe(true);
     expect(await readResolution(event, read)).toEqual(resolution);
-    expect([event.eventId, repaired.eventId]).toContain((await commitResolution(copy, evidence)).eventId);
+    expect([event.cid, repaired.cid]).toContain((await commitResolution(copy, evidence)).cid);
     const fold = await scanVault(copy.vault, a.keys);
-    expect(fold.set.of("peer.resolved").map((e) => e.eventId)).toEqual([event.eventId, repaired.eventId]);
+    expect(fold.set.of("peer.resolved").map((e) => e.cid)).toEqual([event.cid, repaired.cid]);
     expect([...fold.checks.resolutionChecks.values()]).toEqual(["verified", "verified"]);
     await a.runtime.close();
   });
@@ -114,10 +114,10 @@ describe("peer.resolved", () => {
     const short = await resolve(shortForm, knownLongForms(await scanVault(a.runtime.vault, a.keys)));
     if (short.outcome !== "resolved") throw new Error(short.reason);
     const second = await commitResolution(a.runtime, { resolution: short.resolution, localKeyName: LOCAL_KEY, peerPublicKey: keyAgreementKey(short.resolution) });
-    expect(second.eventId).not.toBe(first.eventId);
+    expect(second.cid).not.toBe(first.cid);
     expect(second.data).toMatchObject({ presentedDid: shortForm, did: shortForm, documentCid: first.data.documentCid });
     const fold = await scanVault(a.runtime.vault, a.keys);
-    expect(fold.checks.resolutionChecks.get(second.eventId)).toBe("verified");
+    expect(fold.checks.resolutionChecks.get(second.cid)).toBe("verified");
     const read = objectReader(a.runtime.vault.objects);
     const [fromLong, fromShort] = [await readResolution(first, read), await readResolution(second, read)];
     expect(fromShort?.document).toEqual(fromLong?.document);

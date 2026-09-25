@@ -89,7 +89,7 @@ export type Watch = (fold: VaultFold) => string;
  * record for another reason throws instead, and the delivery is not
  * kept.
  */
-export type ReceiptOutcome = { outcome: "received"; eventId: EventReference<"message.in">; first: boolean } | { outcome: "terminal"; reason: string } | { outcome: "deferred"; reason: string; watch: Watch };
+export type ReceiptOutcome = { outcome: "received"; cid: EventReference<"message.in">; first: boolean } | { outcome: "terminal"; reason: string } | { outcome: "deferred"; reason: string; watch: Watch };
 
 export type Receipt = (authenticated: Authenticated) => Promise<ReceiptOutcome>;
 
@@ -102,7 +102,7 @@ export type Receipt = (authenticated: Authenticated) => Promise<ReceiptOutcome>;
  * live, and neither is a delivery only told how it ended before.
  */
 export type Received =
-  | { outcome: "received"; key: string; eventId: EventReference<"message.in">; live: boolean }
+  | { outcome: "received"; key: string; cid: EventReference<"message.in">; live: boolean }
   | { outcome: "terminal"; key: string | null; reason: string }
   | { outcome: "deferred"; key: string; reason: string };
 
@@ -405,7 +405,7 @@ export class Receiver {
     }
     switch (outcome.outcome) {
       case "received":
-        return this.record(key, delivery, outcome.eventId, outcome.first);
+        return this.record(key, delivery, outcome.cid, outcome.first);
       case "terminal":
         return this.finish(key, delivery, outcome.reason);
       case "deferred":
@@ -447,12 +447,12 @@ export class Receiver {
     return { outcome: "deferred", key, reason: left };
   }
 
-  private async record(key: string, delivery: Delivery, eventId: EventReference<"message.in">, live: boolean): Promise<Received> {
+  private async record(key: string, delivery: Delivery, cid: EventReference<"message.in">, live: boolean): Promise<Received> {
     this.waits.delete(key);
     this.release(key);
-    const ended: Ended = { outcome: "received", key, eventId, live };
+    const ended: Ended = { outcome: "received", key, cid, live };
     if (!this.closed) this.remember(key, ended);
-    await this.diag(delivery, { outcome: "received", eventId });
+    await this.diag(delivery, { outcome: "received", cid });
     return ended;
   }
 

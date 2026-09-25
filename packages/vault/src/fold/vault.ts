@@ -13,7 +13,7 @@
 import { DamagedObject, ObjectTooLarge, type Retained, type Vault, type VaultObjects } from "@estoc/event-store";
 
 import type { Keys } from "../identity.js";
-import type { Cid, DidId, EventId, MediationId } from "../types.js";
+import type { Cid, DidId, EventCid, MediationId } from "../types.js";
 import { foldAuthors, foldLabel, type AuthorActivity } from "./author.js";
 import { foldChannelEvidence, verifyProofs, type ChannelEvidence } from "./channels.js";
 import { foldContacts, type ContactFold } from "./contacts.js";
@@ -32,8 +32,8 @@ import { foldViews, type Views } from "./views.js";
 export type VaultChecks = {
   mediationKeys?: ReadonlyMap<MediationId, KeyCheck>;
   didKeys?: ReadonlyMap<DidId, KeyCheck>;
-  resolutionChecks?: ReadonlyMap<EventId, EvidenceCheck>;
-  proofChecks?: ReadonlyMap<EventId, EvidenceCheck>;
+  resolutionChecks?: ReadonlyMap<EventCid, EvidenceCheck>;
+  proofChecks?: ReadonlyMap<EventCid, EvidenceCheck>;
 };
 
 export interface VaultFold {

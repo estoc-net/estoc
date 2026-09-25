@@ -84,9 +84,9 @@ function handmade(body: (db: SqliteDriver) => void): string {
 }
 
 function fill(db: SqliteDriver, kind: "runtime" | "portable", meta: { format?: string; version?: number; ready?: number; anchor?: string } = {}): SqliteDriver {
-  db.exec(`PRAGMA application_id = 1163088963; PRAGMA user_version = 1`);
+  db.exec(`PRAGMA application_id = 1163088963; PRAGMA user_version = 2`);
   createTables(db, kind);
-  db.prepare("INSERT INTO vault_meta VALUES (1, ?, ?, ?, ?, ?)").run(meta.format ?? "estoc-sqlite", meta.version ?? 3, kind, meta.ready ?? 1, meta.anchor ?? ANCHOR);
+  db.prepare("INSERT INTO vault_meta VALUES (1, ?, ?, ?, ?, ?)").run(meta.format ?? "estoc-sqlite", meta.version ?? 4, kind, meta.ready ?? 1, meta.anchor ?? ANCHOR);
   db.prepare("INSERT INTO keystore VALUES (1, 3, ?)").run(new TextEncoder().encode(WRAPPED.seedJwe));
   if (kind === "runtime") db.exec(`INSERT INTO store_state VALUES (1, '${EVENT_ID}', '${EVENT_ID}', 0)`);
   return db;
@@ -94,7 +94,7 @@ function fill(db: SqliteDriver, kind: "runtime" | "portable", meta: { format?: s
 
 /** The runtime's tables with the constraints the schema's DDL has left out, so values the constraints would stop can be put in. */
 function fillLoose(db: SqliteDriver, format: string, version: number, kind: string, ready: number): void {
-  db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 1");
+  db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 2");
   db.exec("CREATE TABLE vault_meta (singleton INTEGER PRIMARY KEY, format TEXT NOT NULL, vault_version INTEGER NOT NULL, kind TEXT NOT NULL, ready INTEGER NOT NULL, anchor TEXT NOT NULL) STRICT");
   db.prepare("INSERT INTO vault_meta VALUES (1, ?, ?, ?, ?, ?)").run(format, version, kind, ready, ANCHOR);
 }
@@ -145,8 +145,8 @@ describe("createRuntime", () => {
     expect(vault.author).not.toBe(vault.generation);
     expect(await vault.keystore(locked).read()).toEqual(WRAPPED);
     expect(vault.driver.prepare("PRAGMA application_id").get()).toEqual({ application_id: 0x45535443 });
-    expect(vault.driver.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-    expect(vault.driver.prepare("SELECT * FROM vault_meta").get()).toEqual({ singleton: 1, format: "estoc-sqlite", vault_version: 3, kind: "runtime", ready: 1, anchor: ANCHOR });
+    expect(vault.driver.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    expect(vault.driver.prepare("SELECT * FROM vault_meta").get()).toEqual({ singleton: 1, format: "estoc-sqlite", vault_version: 4, kind: "runtime", ready: 1, anchor: ANCHOR });
     expect(vault.driver.prepare("SELECT replica_id, store_generation, last_seq FROM store_state").get()).toEqual({ replica_id: vault.author, store_generation: vault.generation, last_seq: 0 });
     vault.close();
     expect(Array.from((await readFile(file)).subarray(18, 20)), "a runtime is a WAL file").toEqual([2, 2]);
@@ -245,10 +245,12 @@ describe("openRuntime", () => {
     const cases: { name: string; file: string; message: RegExp }[] = [
       { name: "an empty database", file: handmade(() => undefined), message: /application_id 0 is not a vault's/ },
       { name: "another application's", file: handmade((db) => db.exec("PRAGMA application_id = 7")), message: /application_id 7/ },
-      { name: "a later schema version", file: handmade((db) => db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 2")), message: /schema version 2 is not supported/ },
-      { name: "no metadata table", file: handmade((db) => db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 1")), message: /vault_meta cannot be read/ },
+      { name: "a later schema version", file: handmade((db) => db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 3")), message: /schema version 3 is not supported/ },
+      { name: "the earlier schema version, which no migration reads", file: handmade((db) => db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 1")), message: /schema version 1 is not supported/ },
+      { name: "no metadata table", file: handmade((db) => db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 2")), message: /vault_meta cannot be read/ },
       { name: "another format", file: handmade((db) => fillLoose(db, "estoc-other", 3, "runtime", 1)), message: /format "estoc-other"/ },
-      { name: "another vault version", file: handmade((db) => fillLoose(db, "estoc-sqlite", 4, "runtime", 1)), message: /vault version 4/ },
+      { name: "the earlier vault version, which no migration reads", file: handmade((db) => fillLoose(db, "estoc-sqlite", 3, "runtime", 1)), message: /vault version 3/ },
+      { name: "a later vault version", file: handmade((db) => fillLoose(db, "estoc-sqlite", 5, "runtime", 1)), message: /vault version 5/ },
       { name: "a portable snapshot", file: handmade((db) => fill(db, "portable")), message: /a portable one, not a runtime/ },
       { name: "an unready runtime", file: handmade((db) => fill(db, "runtime", { ready: 0 })), message: /not ready/ },
       { name: "no metadata row", file: handmade((db) => fill(db, "runtime").exec("DELETE FROM vault_meta")), message: /vault_meta has 0 rows/ },
@@ -275,12 +277,12 @@ describe("openRuntime", () => {
     const refused: [string, string, RegExp][] = [
       ["an extra table", "CREATE TABLE scratch (x INTEGER) STRICT", /table scratch is not in the runtime schema/],
       ["a table named like an inherited property", 'CREATE TABLE "constructor" (x INTEGER) STRICT', /table constructor is not in the runtime schema/],
-      ["a view", "CREATE VIEW recent AS SELECT event_id FROM events", /the schema has a view, recent/],
+      ["a view", "CREATE VIEW recent AS SELECT cid FROM events", /the schema has a view, recent/],
       ["a trigger", "CREATE TRIGGER t AFTER INSERT ON events BEGIN SELECT 1; END", /the schema has a trigger, t/],
-      ["a missing column", "ALTER TABLE events DROP COLUMN type", /table events is not schema version 1's/],
-      ["an extra column", "ALTER TABLE objects ADD COLUMN note TEXT", /table objects is not schema version 1's/],
+      ["a missing column", "ALTER TABLE events DROP COLUMN type", /table events is not schema version 2's/],
+      ["an extra column", "ALTER TABLE objects ADD COLUMN note TEXT", /table objects is not schema version 2's/],
       ["a generated column", "ALTER TABLE objects ADD COLUMN twice INTEGER GENERATED ALWAYS AS (size * 2) VIRTUAL", /column twice is generated/],
-      ["a renamed column", "ALTER TABLE keystore RENAME COLUMN seed_jwe TO jwe", /table keystore is not schema version 1's/],
+      ["a renamed column", "ALTER TABLE keystore RENAME COLUMN seed_jwe TO jwe", /table keystore is not schema version 2's/],
       ["a dropped control table", "DROP TABLE event_positions", /table event_positions is missing/],
     ];
     for (const [name, sql, message] of refused) {
@@ -322,12 +324,12 @@ describe("openRuntime", () => {
       ["a key that orders descending", remade("objects", "CREATE TABLE objects (cid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY (cid DESC)) STRICT"), /KEY\(cid DESC\)/],
       [
         "a column that collates NOCASE",
-        remade("events", "CREATE TABLE events (event_id TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, author TEXT NOT NULL, type TEXT COLLATE NOCASE NOT NULL, canonical BLOB NOT NULL) STRICT"),
+        remade("events", "CREATE TABLE events (cid TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, author TEXT NOT NULL, type TEXT COLLATE NOCASE NOT NULL, canonical BLOB NOT NULL) STRICT"),
         /table events: column type does not compare as BINARY/,
       ],
       [
         "a column that collates RTRIM",
-        remade("events", "CREATE TABLE events (event_id TEXT PRIMARY KEY NOT NULL, at TEXT COLLATE RTRIM NOT NULL, author TEXT NOT NULL, type TEXT NOT NULL, canonical BLOB NOT NULL) STRICT"),
+        remade("events", "CREATE TABLE events (cid TEXT PRIMARY KEY NOT NULL, at TEXT COLLATE RTRIM NOT NULL, author TEXT NOT NULL, type TEXT NOT NULL, canonical BLOB NOT NULL) STRICT"),
         /table events: column at does not compare as BINARY/,
       ],
       ["a UNIQUE the schema does not have", remade("store_state", "CREATE TABLE store_state (singleton INTEGER PRIMARY KEY, replica_id TEXT NOT NULL UNIQUE, store_generation TEXT NOT NULL, last_seq INTEGER NOT NULL) STRICT"), /found .* KEY\(replica_id\)/],

@@ -15,13 +15,15 @@ two. No event type is known here: what an event means, and the folds
 that read it, are `@estoc/vault`'s.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
-six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
-validation, `roots` being raw DASL CIDs from `@estoc/dasl`; canonical
-order; the `EventStore` interface; and minting — `at` from the clock,
-`eventId` from `uuid`'s standard UUIDv7 generator. `MemoryEventStore` is
-the reference the others are measured against, with `ForkedAuthor` and
-`BadToken`, and `eventStoreSuite` in `test/suite/` is the conformance
-suite every version-3 store runs.
+five-field envelope `at`/`author`/`type`/`roots`/`data` and its
+validation, `roots` being raw DASL CIDs from `@estoc/dasl`; the event's
+identity, `cid`, the raw DASL CID of the envelope's canonical bytes —
+derived, never among them, so that equal envelopes are one event and a
+reference names exact content; canonical order `(at, cid)`, the CID as
+text; the `EventStore` interface; and `sampleAt` — `at` from the clock.
+`MemoryEventStore` is the reference the others are measured against,
+with `ForkedAuthor` and `BadToken`, and `eventStoreSuite` in
+`test/suite/` is the conformance suite every version-4 store runs.
 
 The object model: raw DASL objects hashed as they stream, whole-resource
 identity however large, the `ObjectStore` interface, and
@@ -37,7 +39,7 @@ age: no orphan grace, no read latch; a stream open when its object is
 collected or replaced completes with the bytes it opened on, or fails,
 never truncates.
 
-Over both, the vault: `Vault` — its immutable `metadata` (version 3 and
+Over both, the vault: `Vault` — its immutable `metadata` (version 4 and
 the anchor DID), events to read, objects to read, and `commit(objects,
 drafts)`, the one way a local event is written, which refuses a supplied
 object no draft names as a root before reading a byte and publishes its
@@ -210,14 +212,14 @@ vault publishes a commit's objects with its events, a throw from it
 rolling back what it wrote. A batch is validated index by index, so a
 hole in a sparse array is refused like any value that is not a draft.
 `ingest` reads its whole input first,
-outside any transaction, then classifies each input against what is
-held — duplicate by canonical bytes, conflict, new — checks for a fork
-and accepts, in one transaction; the values it rejected are recorded
-once each in the runtime's `local_conflicts` table, which
-`conflicting()` reads back with the accepted value as `kept` and
-`clearConflicts()` empties. `scan` orders in SQL by `(at, event_id,
-author)` and reads every row before the first yield, one cut; `author`
-and `type` narrow the rows in SQL, bound as bytes cast to text so that
+outside any transaction — each value validated with its `cid`, a CID
+for other bytes refused before any lookup — then classifies each input
+against what is held, by CID: duplicate or new; checks for a fork and
+accepts, in one transaction. `appendAll` hashes each draft's envelope
+the same way and answers a CID already held, or repeated in the batch,
+with the event held, adding no row and no position. `scan` orders in
+SQL by `(at, cid)` and reads every row before the first yield, one cut;
+`cid`, `author` and `type` narrow the rows in SQL, bound as bytes cast to text so that
 a NUL in a type is stored and compared as itself, and the whole filter
 is then applied in code to the parsed event, exact primitive equality,
 so a match is exactly what the filter says. `changes` joins the
@@ -416,9 +418,10 @@ chunk and check after it, the validation included, lies within what
 the caller allowed. It now hands back, beside the metadata and the
 wrapper, `vault`: the snapshot as a read-only `Vault` —
 `PortableVault` — scanning the immutable event set in canonical order
-from the five tables alone, its damage reported, its `conflicting`
-always empty since no diagnostic travels, its objects under the
-ordinary read and damage rules, and `changes` and `commit` refused
+from the five tables alone, its damage reported — `damaged()` hashes
+every row against its CID, as validation does; an ordinary scan hands
+back the stored CID — its objects under the ordinary read and damage
+rules, and `changes` and `commit` refused
 with `UnsupportedOperation`, neither consuming a source nor minting
 anything; a closed snapshot refuses every read with `VaultClosed`.
 A CHECK the file declares is SQL the file supplied: the handle runs
@@ -494,9 +497,8 @@ snapshot is validated in full; its anchor is compared with the
 target's, `AnchorMismatch` for another vault's; and its events and
 object listing are read into memory. Under the lock: a damaged
 target history is `DamagedHistory`; each source event is classified
-against what the target holds — a duplicate, a conflict the target
-wins and reports, or new — and a new or conflicting event under the
-target's own author is `ForkedAuthor`, the whole import refused with
+against what the target holds, by CID — a duplicate or new — and a new
+event under the target's own author is `ForkedAuthor`, the whole import refused with
 nothing written, the recovery being an identity reset; the fold runs
 on the target as it is and on the prospective union, held as a vault
 in memory; every root a new event retains in the union, and every

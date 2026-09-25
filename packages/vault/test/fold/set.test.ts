@@ -1,4 +1,4 @@
-import type { Event } from "@estoc/event-store";
+import { compareEvents, type Event } from "@estoc/event-store";
 import { describe, expect, it } from "vitest";
 
 import { InvalidPayload, VaultEventSet, latest, samePayload, type ContactId, type EventReference } from "../../src/index.js";
@@ -20,11 +20,12 @@ describe("VaultEventSet", () => {
     const first = scene.add("contact.petname", { contactId: CONTACT, name: "a" });
     const second = scene.add("contact.petname", { contactId: CONTACT, name: "b" });
     const third = scene.add("contact.petname", { contactId: CONTACT, name: "c" }, { at: second.at, author: AUTHOR2 });
+    const tied = [second, third].sort(compareEvents); // one `at`: the CIDs' text order decides, not the author
     for (let seed = 1; seed <= 4; seed++) {
       const set = VaultEventSet.of(shuffled(scene.events, seed));
-      expect(set.of("contact.petname").map((event) => event.data.name)).toEqual(["a", "b", "c"]);
+      expect(set.of("contact.petname").map((event) => event.data.name)).toEqual([first, ...tied].map((event) => event.data.name));
     }
-    expect(latest(scene.events)).toBe(third);
+    expect(latest(scene.events)).toBe(tied[1]);
     expect(first.at < second.at).toBe(true);
   });
 
@@ -39,7 +40,7 @@ describe("VaultEventSet", () => {
     expect(set.invalid).toHaveLength(1);
     expect(set.invalid[0]?.event).toBe(bad);
     expect(set.invalid[0]?.error).toBeInstanceOf(InvalidPayload);
-    expect([...set.unapplied()].map((event) => event.eventId).sort()).toEqual([bad.eventId, foreign.eventId].sort());
+    expect([...set.unapplied()].map((event) => event.cid).sort()).toEqual([bad.cid, foreign.cid].sort());
     expect([...set.all()]).toHaveLength(3);
   });
 
@@ -49,9 +50,9 @@ describe("VaultEventSet", () => {
     const other = scene.add("contact.created", { contactId: CONTACT, because: "user" });
     const foreign = scene.foreign("extension.installed");
     const set = scene.set();
-    expect(set.resolve(named.eventId as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "present", event: named });
-    expect(set.resolve(other.eventId as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "mismatched", event: other });
-    expect(set.resolve(foreign.eventId as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "mismatched", event: foreign });
+    expect(set.resolve(named.cid as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "present", event: named });
+    expect(set.resolve(other.cid as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "mismatched", event: other });
+    expect(set.resolve(foreign.cid as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "mismatched", event: foreign });
     expect(set.resolve("019b2a99-0000-7000-8000-000000000000" as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "missing" });
   });
 

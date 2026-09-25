@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { BadToken, MemoryEventStore, type Event } from "../src/index.js";
 import { eventStoreSuite, type OpenOptions } from "./suite/event-store-suite.js";
-import { all, altered, authorN, clock } from "./suite/helpers.js";
+import { all, authorN, clock, reordered } from "./suite/helpers.js";
 
 eventStoreSuite("MemoryEventStore", async (options: OpenOptions = {}) => new MemoryEventStore(options));
 
@@ -41,11 +41,11 @@ describe("MemoryEventStore", () => {
     const one = await store.append({ type: "t", data: {} });
     const { token } = await store.changes();
     const parsed = JSON.parse(token) as { generation: string; seq: number; last: string };
-    expect(parsed).toEqual({ generation: store.generation, seq: 1, last: one.eventId });
+    expect(parsed).toEqual({ generation: store.generation, seq: 1, last: one.cid });
     const forge = (patch: object): string => JSON.stringify({ ...parsed, ...patch });
-    await expect(store.changes(undefined, forge({ seq: 2, last: one.eventId }))).rejects.toBeInstanceOf(BadToken);
+    await expect(store.changes(undefined, forge({ seq: 2, last: one.cid }))).rejects.toBeInstanceOf(BadToken);
     await expect(store.changes(undefined, forge({ last: authorN(9) }))).rejects.toBeInstanceOf(BadToken);
-    await expect(store.changes(undefined, forge({ seq: 0, last: one.eventId }))).rejects.toBeInstanceOf(BadToken);
+    await expect(store.changes(undefined, forge({ seq: 0, last: one.cid }))).rejects.toBeInstanceOf(BadToken);
     await expect(store.changes(undefined, forge({ generation: "g" }))).rejects.toBeInstanceOf(BadToken);
     for (const seq of [-1, 1.5, "1", null]) {
       await expect(store.changes(undefined, forge({ seq })), String(seq)).rejects.toBeInstanceOf(BadToken);
@@ -62,8 +62,7 @@ describe("MemoryEventStore", () => {
   it("ingest reads its input outside the lock and classifies inside it: a write that lands while it reads is seen", async () => {
     const c = clock("2026-09-06T10:00:00.000Z");
     const store = new MemoryEventStore({ author: authorN(1), now: c.now });
-    const [a] = await new MemoryEventStore({ author: authorN(2), now: c.now }).appendAll([{ type: "t", data: { v: "a" } }]);
-    const b = altered(a as Event); // same eventId, other content
+    const [a, b] = await new MemoryEventStore({ author: authorN(2), now: c.now }).appendAll([{ type: "t", data: { v: "a" } }, { type: "t", data: { v: "b" } }]);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let readBoth!: () => void;
@@ -76,11 +75,11 @@ describe("MemoryEventStore", () => {
     }
     const pending = store.ingest(slow());
     await read;
-    expect(await store.ingest([b])).toEqual({ added: 1, duplicates: 0, conflicts: [], rejected: [] });
+    expect(await store.ingest([reordered(b as Event)])).toEqual({ added: 1, duplicates: 0, rejected: [] });
     release();
     const outcome = await pending;
-    expect(outcome).toEqual({ added: 0, duplicates: 1, conflicts: [{ eventId: a?.eventId, kept: b, rejected: a }], rejected: [] });
-    expect(await all(store.scan())).toEqual([b]);
+    expect(outcome).toEqual({ added: 1, duplicates: 1, rejected: [] });
+    expect(await all(store.scan())).toEqual([a, b].sort((x, y) => (x!.cid < y!.cid ? -1 : 1)));
   });
 
   it("scan walks a snapshot: an append during the walk is not yielded, and a later scan has it", async () => {
@@ -103,7 +102,7 @@ describe("MemoryEventStore", () => {
     const c = clock("2026-09-06T10:00:00.000Z");
     const store = new MemoryEventStore({ author: authorN(1), now: c.now });
     const other = new MemoryEventStore({ author: authorN(2), now: c.now });
-    const foreign = await other.appendAll([{ type: "f", data: {} }, { type: "f", data: {} }]);
+    const foreign = await other.appendAll([{ type: "f", data: { n: 1 } }, { type: "f", data: { n: 2 } }]);
     const results = await Promise.all([
       store.append({ type: "t", data: { n: 1 } }),
       store.ingest(foreign),

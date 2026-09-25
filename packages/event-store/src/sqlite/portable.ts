@@ -18,9 +18,9 @@ type Problem = { where: string; error: string };
 
 /**
  * A portable snapshot as a `Vault`: `metadata` as the file states it;
- * `events` scanning the immutable event set in canonical order, its
- * damage reported and its `conflicting` empty, since no diagnostic
- * travels; `objects` under the ordinary read and damage rules. It has
+ * `events` scanning the immutable event set in canonical order under
+ * its stored CIDs, its damage reported by `damaged`, which hashes every
+ * row; `objects` under the ordinary read and damage rules. It has
  * no author, no positions and no change frontier, so `changes` is
  * refused, and `commit` with it, neither consuming a source nor
  * minting anything. `check` is asked before every read: what the
@@ -35,7 +35,7 @@ export class PortableVault implements Vault {
     const scan = (filter?: Filter): Event[] => {
       const { conditions, bound } = eventFilterSql(filter);
       const events: Event[] = [];
-      readEventRows(driver, `SELECT ${EVENT_COLUMNS} FROM events e${conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`} ORDER BY e.at, e.event_id, e.author`, bound, (decoded) => {
+      readEventRows(driver, `SELECT ${EVENT_COLUMNS} FROM events e${conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`} ORDER BY e.at, e.cid`, bound, (decoded) => {
         if ("event" in decoded && matches(decoded.event, filter)) events.push(decoded.event);
       });
       return events;
@@ -49,14 +49,16 @@ export class PortableVault implements Vault {
       damaged: async () => {
         check();
         const out: Damaged[] = [];
-        readEventRows(driver, `SELECT ${EVENT_COLUMNS} FROM events e ORDER BY e.rowid`, [], (decoded) => {
-          if ("damage" in decoded) out.push(decoded.damage);
-        });
+        readEventRows(
+          driver,
+          `SELECT ${EVENT_COLUMNS} FROM events e ORDER BY e.rowid`,
+          [],
+          (decoded) => {
+            if ("damage" in decoded) out.push(decoded.damage);
+          },
+          { hash: true }
+        );
         return out;
-      },
-      conflicting: async () => {
-        check();
-        return [];
       },
     };
     this.objects = {
@@ -103,12 +105,12 @@ export interface Validated {
 
 /**
  * Checks that the open snapshot `portable` is a complete, sound
- * version-3 snapshot, and says what it holds; `InvalidSnapshot`
+ * version-4 snapshot, and says what it holds; `InvalidSnapshot`
  * naming every problem found otherwise. In order: SQLite's foreign-key
  * check; the chunks holding no more bytes than the objects declare,
  * from record headers alone; SQLite's integrity check, which nothing
- * is read past when it fails; every event row decoding to the event
- * its columns name; every `objects` row keyed by a CID with a size
+ * is read past when it fails; every event row decoding to the envelope
+ * its columns name and hashing to its CID; every `objects` row keyed by a CID with a size
  * that is a count; the object set equal to `heldRoots` of the events,
  * folded by the caller; and every object's chunks read through,
  * contiguous and of the format's lengths, and hashing to the CID. What

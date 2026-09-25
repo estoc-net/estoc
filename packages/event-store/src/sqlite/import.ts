@@ -12,8 +12,7 @@
  */
 
 import { AnchorMismatch, DamagedHistory, DamagedObject, ForkedAuthor, IncompleteImport, InvalidSnapshot, ReadOnlyVault } from "../errors.js";
-import type { Cid, Conflict, Event, EventId } from "../event.js";
-import { canonicalText } from "../jcs.js";
+import type { Cid, Event, EventCid } from "../event.js";
 import { rawCidOf, sortCids } from "../objects.js";
 import { MemoryVault, heldRootsOf, type Held, type Retained, type RetainedRoots, type Vault, type VaultObjects, type VaultRuntime } from "../vault.js";
 import type { PortableDatabase } from "./open.js";
@@ -27,10 +26,8 @@ export interface ImportOptions {
 export interface Imported {
   /** source events the target did not hold, now accepted */
   added: number;
-  /** source events the target already held with the same canonical bytes */
+  /** source events the target already held: the same CID, the same canonical bytes */
   duplicates: number;
-  /** source events under an ID the target holds with other canonical bytes: the target's kept, the source's reported */
-  conflicts: Conflict[];
   /** objects the union holds that the target lacked, now held from the source's verified bytes */
   objects: number;
   /** objects the union holds that the target knew damaged, replaced whole from the source's verified bytes */
@@ -45,9 +42,9 @@ export interface Imported {
  * another vault's), and its events and object listing read into
  * memory. Under the lock: a damaged target history refuses the import
  * (`DamagedHistory`); each source event is classified against what
- * the target holds — a duplicate, a conflict the target wins, or new
- * — and a new or conflicting event under the target's own author is a
- * fork that refuses the whole import with nothing written
+ * the target holds — a duplicate or new, by CID — and a new event
+ * under the target's own author is a fork that refuses the whole
+ * import with nothing written
  * (`ForkedAuthor`); the caller's fold is run on the target as it is
  * and on the prospective union; every root a new event retains in the
  * union, and every root the union holds that the target did not, must
@@ -86,7 +83,7 @@ export async function importVault(target: VaultRuntime, source: PortableDatabase
       const plan = await planned(target, held, incoming, offered, source.vault.objects, options.retainedRoots);
       const objects = plan.staged.filter((object) => !object.repair).length;
       const repaired = plan.staged.length - objects;
-      if (plan.fresh.length === 0 && plan.staged.length === 0 && plan.conflicts.length === 0) return { added: 0, duplicates: plan.duplicates, conflicts: [], objects, repaired };
+      if (plan.fresh.length === 0 && plan.staged.length === 0) return { added: 0, duplicates: plan.duplicates, objects, repaired };
       let sourceRead = false;
       try {
         const outcome = await held.ingest(incoming, async (prepared) => {
@@ -98,7 +95,7 @@ export async function importVault(target: VaultRuntime, source: PortableDatabase
           sourceRead = true;
           for (const cid of plan.reused) prepared.reuse(cid);
         });
-        return { added: outcome.added, duplicates: outcome.duplicates, conflicts: outcome.conflicts, objects, repaired };
+        return { added: outcome.added, duplicates: outcome.duplicates, objects, repaired };
       } catch (err) {
         // With the source read, `DamagedObject` is the publication refusing a reused object a read found damaged meanwhile: the transaction rolled back and the staging dropped, the import plans again.
         if (!sourceRead || !(err instanceof DamagedObject)) throw err;
@@ -113,7 +110,6 @@ const NOT_IN_SOURCE = "required by the union, known damaged in the target and no
 interface ImportPlan {
   fresh: Event[];
   duplicates: number;
-  conflicts: Conflict[];
   staged: { cid: Cid; repair: boolean }[];
   /** the union-held objects the target holds sound and the import relies on as they are: those the source could replace, and those the union requires */
   reused: Cid[];
@@ -121,26 +117,19 @@ interface ImportPlan {
 
 async function planned(target: VaultRuntime, held: Held, incoming: Event[], offered: Set<Cid>, sourceObjects: VaultObjects, retainedRoots: RetainedRoots): Promise<ImportPlan> {
   const before: Event[] = [];
-  const have = new Map<EventId, Event>();
+  const have = new Set<EventCid>();
   for await (const event of held.events.scan()) {
     before.push(event);
-    have.set(event.eventId, event);
+    have.add(event.cid);
   }
-  const plan: ImportPlan = { fresh: [], duplicates: 0, conflicts: [], staged: [], reused: [] };
+  const plan: ImportPlan = { fresh: [], duplicates: 0, staged: [], reused: [] };
   const forked: Event[] = [];
   for (const event of incoming) {
-    const kept = have.get(event.eventId);
-    const own = event.author === target.author;
-    if (kept !== undefined) {
-      if (canonicalText(kept) === canonicalText(event)) {
-        plan.duplicates += 1;
-        continue;
-      }
-      plan.conflicts.push({ eventId: event.eventId, kept, rejected: event });
-      if (own) forked.push(event);
+    if (have.has(event.cid)) {
+      plan.duplicates += 1;
       continue;
     }
-    if (own) {
+    if (event.author === target.author) {
       forked.push(event);
       continue;
     }
@@ -153,9 +142,9 @@ async function planned(target: VaultRuntime, held: Held, incoming: Event[], offe
   await union.ingest([...before, ...plan.fresh]);
   const unionRetains = await unionRetention(retainedRoots, union.vault, held, offered, sourceObjects);
   const heldAfter = rootsOf(unionRetains);
-  const fresh = new Set(plan.fresh.map((event) => event.eventId));
+  const fresh = new Set(plan.fresh.map((event) => event.cid));
   const required = new Set<Cid>();
-  for (const { eventId, root } of unionRetains) if (fresh.has(eventId)) required.add(root);
+  for (const { cid, root } of unionRetains) if (fresh.has(cid)) required.add(root);
   for (const root of heldAfter) if (!heldBefore.has(root)) required.add(root);
   const problems: { where: string; error: string }[] = [];
   for (const cid of sortCids(heldAfter)) {
@@ -247,7 +236,7 @@ async function unionRetention(retainedRoots: RetainedRoots, union: Vault, held: 
 
 async function checkedRetention(retainedRoots: RetainedRoots, vault: Vault): Promise<Retained[]> {
   const out: Retained[] = [];
-  for (const { eventId, root } of await retainedRoots(vault)) out.push({ eventId, root: rawCidOf(root).text as Cid });
+  for (const { cid, root } of await retainedRoots(vault)) out.push({ cid, root: rawCidOf(root).text as Cid });
   return out;
 }
 

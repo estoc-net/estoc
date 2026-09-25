@@ -37,7 +37,7 @@ export interface Restored extends Validated {
 }
 
 const FORMAT = "estoc-sqlite";
-const VAULT_VERSION = 3;
+const VAULT_VERSION = 4;
 
 /**
  * Restores `source`, a portable snapshot open read-only, into the
@@ -94,12 +94,12 @@ function lay(writer: SqliteDriver, source: PortableDatabase, control: { author: 
     run(writer, "INSERT INTO vault_meta (singleton, format, vault_version, kind, ready, anchor) VALUES (1, ?, ?, 'runtime', 0, ?)", FORMAT, VAULT_VERSION, source.metadata.anchor);
     run(writer, "INSERT INTO keystore (singleton, version, seed_jwe) VALUES (1, 3, ?)", new TextEncoder().encode(source.wrapped.seedJwe));
     run(writer, "INSERT INTO store_state (singleton, replica_id, store_generation, last_seq) VALUES (1, ?, ?, ?)", control.author, control.generation, events.length);
-    const insertEvent = writer.prepare("INSERT INTO events (event_id, at, author, type, canonical) VALUES (?, ?, ?, CAST(? AS TEXT), ?)");
-    const insertPosition = writer.prepare("INSERT INTO event_positions (accepted_seq, event_id) VALUES (?, ?)");
+    const insertEvent = writer.prepare("INSERT INTO events (cid, at, author, type, canonical) VALUES (?, ?, ?, CAST(? AS TEXT), ?)");
+    const insertPosition = writer.prepare("INSERT INTO event_positions (accepted_seq, cid) VALUES (?, ?)");
     try {
       events.forEach((event, i) => {
-        insertEvent.run(event.eventId, event.at, event.author, new TextEncoder().encode(event.type), canonicalEventBytes(event));
-        insertPosition.run(i + 1, event.eventId);
+        insertEvent.run(event.cid, event.at, event.author, new TextEncoder().encode(event.type), canonicalEventBytes(event));
+        insertPosition.run(i + 1, event.cid);
       });
     } finally {
       insertEvent.finalize();

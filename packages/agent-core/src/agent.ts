@@ -359,9 +359,9 @@ export class Agent {
     const inbound: Inbound = { received, after: null, reacted: null, address: null };
     if (received.outcome !== "received") return this.tell(inbound);
     const { handlers, acknowledge, now, trace } = this.options;
-    inbound.after = await this.step("what the vault owes", () => afterReceipt(this.runtime, this.keys, received.eventId, { trace }));
+    inbound.after = await this.step("what the vault owes", () => afterReceipt(this.runtime, this.keys, received.cid, { trace }));
     if (received.live) {
-      const live = new LiveInput(received.eventId);
+      const live = new LiveInput(received.cid);
       const dispatch = (action: LiveAction): Promise<Dispatched> => this.dispatcher.run(action);
       inbound.reacted = await this.step("the automatic effects", () => reactTo(this.runtime, this.keys, live, { handlers, acknowledge, now, trace, dispatch }));
       if (this.options.privateAddresses ?? true) inbound.address = await this.step("the private address", () => privateAddress(this.runtime, this.keys, live, { now, trace, dispatch }));

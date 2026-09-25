@@ -1,8 +1,8 @@
 # Estoc version 4 specification suite
 
-Status: **version-4 target specified, implementation pending**. Content-addressed
-events, continuity integration, durable application admission and strict rotation
-restrictions are not yet implemented; see
+Status: **version-4 target specified, implementation in progress**. Content-addressed
+events are implemented; continuity integration, durable application admission and
+strict rotation restrictions are not yet implemented; see
 [conformance status](conformance-status.md#rotation-admission-revision).
 Phase 1 has one active writable full vault runtime, seven
 specifications. SQLite is the sole persistent vault and portable interchange

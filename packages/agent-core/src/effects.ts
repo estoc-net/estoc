@@ -90,7 +90,7 @@ export type EffectOutcome =
   | { effectType: string; outcome: "refused"; because: string };
 
 export interface Reacted {
-  eventId: EventReference<"message.in">;
+  cid: EventReference<"message.in">;
   /** null while the observation is in no established input: anonymous, or its input not yet established */
   executionId: ExecutionId | null;
   /** why no operation was asked: the observation is in no input here, or the input is not established */
@@ -107,14 +107,14 @@ export interface Reacted {
 export async function reactTo(runtime: VaultRuntime, keys: Keys, live: LiveInput, options: EffectOptions): Promise<Reacted> {
   const decided = await runtime.locked(async (held) => {
     const fold = await scan(held, keys, options);
-    const execution = fold.inbound.ofSource(live.eventId);
+    const execution = fold.inbound.ofSource(live.cid);
     if (execution === null) return { executionId: null, because: "the observation is anonymous or in no input here", effects: [] };
     const settled = await settle(held, fold, execution, options);
     return { executionId: execution.id, because: settled.because, effects: settled.drafted.map((draft) => (draft.outcome === "created" ? { ...draft, action: live.mint(draft.messageId) } : draft)) };
   });
   const effects: EffectOutcome[] = [];
   for (const draft of decided.effects) effects.push(await dispatched(draft, decided.executionId, options));
-  return { eventId: live.eventId, ...decided, effects };
+  return { cid: live.cid, ...decided, effects };
 }
 
 /**
@@ -206,7 +206,7 @@ function acknowledgement(fold: VaultFold, source: Source, acknowledge: boolean):
   const { data } = source.event;
   if (data.pleaseAck === null || data.pleaseAck.length === 0) return [];
   if (!acknowledge) return [{ effectType: PURE_ACK_EFFECT, content: null, because: "receipts are not given here" }];
-  const targets: readonly WireMessageId[] = fold.outbound.ackTargets(source.event.eventId);
+  const targets: readonly WireMessageId[] = fold.outbound.ackTargets(source.event.cid);
   if (targets.length === 0) return [{ effectType: PURE_ACK_EFFECT, content: null, because: "the request names no input of the channel that is established and unambiguous" }];
   const content: EffectContent = { type: EMPTY_MESSAGE_TYPE, body: {}, thid: data.thid ?? data.wireMessageId, pthid: data.pthid, createdTime: data.createdTime, expiresTime: null, pleaseAck: null, ack: targets };
   return [{ effectType: PURE_ACK_EFFECT, content }];

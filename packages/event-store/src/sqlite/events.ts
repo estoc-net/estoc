@@ -1,41 +1,48 @@
 /**
- * The version-3 event store over an open SQLite runtime: the `events`
- * table, the local control that gives every accepted event a position
- * — what a change token names — and a local table of the values
- * `ingest` rejected, for `conflicting()`. The connection is the
- * runtime's, synchronous and owned outright, so a write is one
- * transaction on it, atomic as SQLite makes it, and two writes never
- * interleave: no lock of the store's own is needed. What is handed out
- * is always what the stored canonical bytes parse to, decoded fresh
- * for each call; a row that no longer decodes to the event its columns
- * name is damage, left out of every scan, reported by `damaged()`, and
- * from the moment it is found — or looked for, which every write does
- * once — the reason no write is accepted: the history is incomplete.
+ * The version-4 event store over an open SQLite runtime: the `events`
+ * table, keyed by event CID, and the local control that gives every
+ * accepted event a position — what a change token names. The
+ * connection is the runtime's, synchronous and owned outright, so a
+ * write is one transaction on it, atomic as SQLite makes it, and two
+ * writes never interleave: no lock of the store's own is needed. What
+ * is handed out is always what the stored canonical bytes parse to,
+ * decoded fresh for each call, under the CID the row is keyed by; a
+ * row whose bytes do not decode to the event its columns name is
+ * damage, left out of every scan, reported by `damaged()`, and from the
+ * moment it is found — or looked for, which every write does once —
+ * the reason no write is accepted: the history is incomplete. An
+ * ordinary read checks the bytes against the columns; the survey
+ * `damaged()` makes, and acceptance, also hash them against the CID.
  */
 
 import { BadToken, DamagedControl, DamagedHistory, ForkedAuthor, ReadOnlyVault } from "../errors.js";
 import {
+  canonicalEnvelope,
+  canonicalEvent,
+  canonicalEventBytes,
+  checkFilter,
+  eventCidOfBytes,
+  isEventCid,
   matches,
+  sampleAt,
   validateDraft,
-  validateEvent,
+  validateEnvelope,
   type AuthorId,
   type ChangeToken,
-  type Conflict,
   type Damaged,
   type Draft,
   type Event,
-  type EventId,
+  type EventCid,
   type EventStore,
   type EventTally,
   type Filter,
   type Ingested,
 } from "../event.js";
-import { canonicalize, parseStrict } from "../jcs.js";
+import { parseStrict } from "../jcs.js";
 import type { JsonObject } from "../json.js";
-import { mint } from "../mint.js";
 import { decodeText, decodeUtf8, type SqliteDriver, type SqliteStatement, type SqlRow, type SqlValue } from "./driver.js";
 import type { RuntimeDatabase } from "./open.js";
-import { hasTable, query, run } from "./schema.js";
+import { query, run } from "./schema.js";
 
 export interface SqliteEventStoreOptions {
   /** the wall clock in Unix milliseconds; default `Date.now`, pinned by tests */
@@ -59,14 +66,7 @@ export type DecodedEventRow = { event: Event } | { damage: Damaged };
  * table as `e`: text as its stored bytes, since a JSON string may hold
  * what a SQLite text value cannot carry across the boundary, a NUL.
  */
-export const EVENT_COLUMNS = "e.rowid AS rowid, CAST(e.event_id AS BLOB) AS event_id, CAST(e.at AS BLOB) AS at, CAST(e.author AS BLOB) AS author, CAST(e.type AS BLOB) AS type, e.canonical AS canonical";
-
-const CONFLICTS_DDL = `CREATE TABLE IF NOT EXISTS local_conflicts (
-  seen     INTEGER PRIMARY KEY,
-  event_id TEXT NOT NULL,
-  rejected BLOB NOT NULL,
-  UNIQUE (event_id, rejected)
-) STRICT`;
+export const EVENT_COLUMNS = "e.rowid AS rowid, CAST(e.cid AS BLOB) AS cid, CAST(e.at AS BLOB) AS at, CAST(e.author AS BLOB) AS author, CAST(e.type AS BLOB) AS type, e.canonical AS canonical";
 
 const UTF8 = new TextEncoder();
 
@@ -79,6 +79,8 @@ export class SqliteEventStore implements EventStore {
   private readonly now: () => number;
   /** The first damage any read of this store met, or the survey found; once set, no write is accepted. */
   private damage: Damaged | undefined;
+  /** Where every damaged row met so far is: what no scan or delta yields again, however its bytes read on an ordinary decode. */
+  private readonly known = new Set<string>();
   private surveyed = false;
 
   constructor(db: EventStoreDatabase, options: SqliteEventStoreOptions = {}) {
@@ -96,41 +98,55 @@ export class SqliteEventStore implements EventStore {
 
   /**
    * `drafts` appended as one transaction; `publish`, when given, runs
-   * inside it, after the batch is minted and before any of it is
-   * accepted, on the same connection and so without a transaction of
-   * its own: what it writes and the events land together. How the
-   * SQLite vault publishes a commit's objects with its events. A throw
-   * before the commit — from a draft, the clock, the generator,
-   * `publish`, a damaged history or SQLite — accepts no event and
-   * takes what `publish` wrote with it. A commit whose outcome SQLite
-   * could not report comes back as its error, and what landed is
-   * learned by reopening: stopping work until then is the runtime's.
+   * inside it, after the batch is hashed and classified and before any
+   * of it is accepted, on the same connection and so without a
+   * transaction of its own, with how many events are new: what it
+   * writes and the events land together. How the SQLite vault
+   * publishes a commit's objects with its events. A throw before the
+   * commit — from a draft, the clock, the hashing, `publish`, a
+   * damaged history or SQLite — accepts no event and takes what
+   * `publish` wrote with it. A commit whose outcome SQLite could not
+   * report comes back as its error, and what landed is learned by
+   * reopening: stopping work until then is the runtime's.
    */
-  async appendAll<D extends JsonObject>(drafts: Draft<D>[], publish?: () => void): Promise<Event<D>[]> {
+  async appendAll<D extends JsonObject>(drafts: Draft<D>[], publish?: (adding: number) => void): Promise<Event<D>[]> {
     // `Array.from` visits every index, so a hole in a sparse array is refused as a draft that is not an object.
     const clean = Array.from(drafts, (draft) => validateDraft(draft));
     if (clean.length === 0 && publish === undefined) return [];
     this.requireWritable("append");
-    const { at, eventIds } = mint(clean.length, this.now);
-    const held = clean.map((draft, i) => canonical({ eventId: eventIds[i], at, author: this.author, type: draft.type, roots: draft.roots, data: draft.data }));
+    const { at } = sampleAt(this.now);
+    const held = clean.map((draft) => canonicalEnvelope({ at, author: this.author, type: draft.type, roots: draft.roots, data: draft.data }));
     return this.driver.transaction("immediate", () => {
       this.requireSound();
-      publish?.();
-      this.accept(held);
-      return held.map((h) => h.event) as Event<D>[];
+      const staged = new Map<EventCid, Held>();
+      const lookup = this.driver.prepare(`SELECT ${EVENT_COLUMNS} FROM events e WHERE e.cid = ?`);
+      let out: Event[];
+      try {
+        out = held.map((incoming) => {
+          const have = this.held(lookup, incoming.event.cid) ?? staged.get(incoming.event.cid);
+          if (have !== undefined) return have.event;
+          staged.set(incoming.event.cid, incoming);
+          return incoming.event;
+        });
+      } finally {
+        lookup.finalize();
+      }
+      publish?.(staged.size);
+      this.accept([...staged.values()]);
+      return out as Event<D>[];
     });
   }
 
-  /** Inserts `held`, giving each the next position and advancing `last_seq` by as many; nothing for none. Inside the caller's transaction. */
+  /** Inserts `held`, none of which is held yet, giving each the next position and advancing `last_seq` by as many; nothing for none. Inside the caller's transaction. */
   private accept(held: Held[]): void {
     if (held.length === 0) return;
     const last = this.lastSeq();
-    const insertEvent = this.driver.prepare("INSERT INTO events (event_id, at, author, type, canonical) VALUES (?, ?, ?, CAST(? AS TEXT), ?)");
-    const insertPosition = this.driver.prepare("INSERT INTO event_positions (accepted_seq, event_id) VALUES (?, ?)");
+    const insertEvent = this.driver.prepare("INSERT INTO events (cid, at, author, type, canonical) VALUES (?, ?, ?, CAST(? AS TEXT), ?)");
+    const insertPosition = this.driver.prepare("INSERT INTO event_positions (accepted_seq, cid) VALUES (?, ?)");
     try {
       held.forEach(({ event, bytes }, i) => {
-        insertEvent.run(event.eventId, event.at, event.author, UTF8.encode(event.type), bytes);
-        insertPosition.run(last + i + 1, event.eventId);
+        insertEvent.run(event.cid, event.at, event.author, UTF8.encode(event.type), bytes);
+        insertPosition.run(last + i + 1, event.cid);
       });
     } finally {
       insertEvent.finalize();
@@ -155,28 +171,28 @@ export class SqliteEventStore implements EventStore {
    * them, and a throw from it accepts none.
    */
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>, publish?: (adding: number) => void): Promise<Ingested> {
-    // Read everything first: validation and canonical form are the
-    // input's own and need no transaction, which must not wait on a
-    // source. Then, in one transaction, classify each input against
-    // what is held — duplicate, conflict, new — in input order, check
-    // for a fork, and only then accept; so the outcome names what was
-    // held when the decision was made, and a write that landed while
-    // the input was still being read is seen.
+    // Read everything first: validation, canonical form and the CID
+    // check are the input's own and need no transaction, which must
+    // not wait on a source. Then, in one transaction, classify each
+    // input against what is held — duplicate or new — in input order,
+    // check for a fork, and only then accept; so the outcome names
+    // what was held when the decision was made, and a write that
+    // landed while the input was still being read is seen.
     this.requireWritable("ingest");
     const read: IngestInput[] = [];
     for await (const value of events) {
       try {
-        read.push({ held: canonical(value) });
+        read.push({ held: canonicalEvent(value) });
       } catch (err) {
         read.push({ rejected: { value, error: err instanceof Error ? err.message : String(err) } });
       }
     }
     return this.driver.transaction("immediate", () => {
       this.requireSound();
-      const outcome: Ingested = { added: 0, duplicates: 0, conflicts: [], rejected: [] };
-      const staged = new Map<EventId, Held>();
+      const outcome: Ingested = { added: 0, duplicates: 0, rejected: [] };
+      const staged = new Map<EventCid, Held>();
       const forked: Event[] = [];
-      const lookup = this.driver.prepare(`SELECT ${EVENT_COLUMNS} FROM events e WHERE e.event_id = ?`);
+      const lookup = this.driver.prepare(`SELECT ${EVENT_COLUMNS} FROM events e WHERE e.cid = ?`);
       try {
         for (const item of read) {
           if ("rejected" in item) {
@@ -184,21 +200,15 @@ export class SqliteEventStore implements EventStore {
             continue;
           }
           const incoming = item.held;
-          const have = this.held(lookup, incoming.event.eventId) ?? staged.get(incoming.event.eventId);
-          if (have !== undefined) {
-            if (sameBytes(have.bytes, incoming.bytes)) {
-              outcome.duplicates += 1;
-            } else {
-              outcome.conflicts.push({ eventId: incoming.event.eventId, kept: have.event, rejected: incoming.event });
-              if (incoming.event.author === this.author) forked.push(incoming.event);
-            }
+          if (this.held(lookup, incoming.event.cid) !== undefined || staged.has(incoming.event.cid)) {
+            outcome.duplicates += 1;
             continue;
           }
           if (incoming.event.author === this.author) {
             forked.push(incoming.event);
             continue;
           }
-          staged.set(incoming.event.eventId, incoming);
+          staged.set(incoming.event.cid, incoming);
         }
       } finally {
         lookup.finalize();
@@ -206,45 +216,32 @@ export class SqliteEventStore implements EventStore {
       if (forked.length > 0) throw new ForkedAuthor(this.author, forked);
       publish?.(staged.size);
       this.accept([...staged.values()]);
-      this.remember(outcome.conflicts);
       outcome.added = staged.size;
       return outcome;
     });
   }
 
-  /** What is held under `eventId`, as its canonical bytes and the event they parse to; `undefined` for nothing. A damaged row is a throw: what is held under the ID cannot be told. */
-  private held(lookup: SqliteStatement, eventId: EventId): Held | undefined {
-    const row = lookup.get(eventId);
+  /** What is held under `cid`, as its canonical bytes and the event they parse to; `undefined` for nothing. A damaged row is a throw: what is held under the CID cannot be told. */
+  private held(lookup: SqliteStatement, cid: EventCid): Held | undefined {
+    const row = lookup.get(cid);
     if (row === undefined) return undefined;
     const decoded = this.noteDamage(decodeEventRow(row));
     if ("damage" in decoded) throw new DamagedHistory(decoded.damage);
     return { event: decoded.event, bytes: row["canonical"] as Uint8Array };
   }
 
-  /** Records each rejected value once, by the ID it contended for; the table is made on the first conflict a runtime meets. Inside the caller's transaction. */
-  private remember(conflicts: Conflict[]): void {
-    if (conflicts.length === 0) return;
-    this.driver.exec(CONFLICTS_DDL);
-    const insert = this.driver.prepare("INSERT OR IGNORE INTO local_conflicts (event_id, rejected) VALUES (?, ?)");
-    try {
-      for (const conflict of conflicts) insert.run(conflict.eventId, canonicalize(conflict.rejected));
-    } finally {
-      insert.finalize();
-    }
-  }
-
   async *scan(filter?: Filter): AsyncIterable<Event> {
     const { conditions, bound } = eventFilterSql(filter);
-    const events = this.select(`SELECT ${EVENT_COLUMNS} FROM events e${conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`} ORDER BY e.at, e.event_id, e.author`, bound, filter);
+    const events = this.select(`SELECT ${EVENT_COLUMNS} FROM events e${conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`} ORDER BY e.at, e.cid`, bound, filter);
     for (const event of events) yield event;
   }
 
   async changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }> {
+    const { conditions, bound } = eventFilterSql(filter);
     const upper = this.lastSeq();
     const from = since === undefined ? 0 : this.place(since, upper);
-    const { conditions, bound } = eventFilterSql(filter);
     const events = this.select(
-      `SELECT ${EVENT_COLUMNS} FROM event_positions p JOIN events e ON e.event_id = p.event_id WHERE p.accepted_seq > ? AND p.accepted_seq <= ?${conditions.map((c) => ` AND ${c}`).join("")} ORDER BY p.accepted_seq`,
+      `SELECT ${EVENT_COLUMNS} FROM event_positions p JOIN events e ON e.cid = p.cid WHERE p.accepted_seq > ? AND p.accepted_seq <= ?${conditions.map((c) => ` AND ${c}`).join("")} ORDER BY p.accepted_seq`,
       [from, upper, ...bound],
       filter
     );
@@ -268,12 +265,12 @@ export class SqliteEventStore implements EventStore {
     return seq;
   }
 
-  /** The events the rows of `sql` decode to that match `filter`, read in full now; the damage met on the way is remembered. */
+  /** The events the rows of `sql` decode to that match `filter`, read in full now, rows known damaged left out; the damage met on the way is remembered. */
   private select(sql: string, bound: SqlValue[], filter?: Filter): Event[] {
     const events: Event[] = [];
-    readEventRows(this.driver, sql, bound, (decoded) => {
-      this.noteDamage(decoded);
-      if ("event" in decoded && matches(decoded.event, filter)) events.push(decoded.event);
+    readEventRows(this.driver, sql, bound, (decoded, place) => {
+      this.noteDamage(decoded, place);
+      if ("event" in decoded && !this.known.has(place) && matches(decoded.event, filter)) events.push(decoded.event);
     });
     return events;
   }
@@ -282,13 +279,19 @@ export class SqliteEventStore implements EventStore {
     return this.survey();
   }
 
-  /** Every row of `events` decoded, the damage found listed; after it, a store that found none is known sound. */
+  /** Every row of `events` decoded and hashed against its CID, the damage found listed; after it, a store that found none is known sound. */
   private survey(): Damaged[] {
     const out: Damaged[] = [];
-    readEventRows(this.driver, `SELECT ${EVENT_COLUMNS} FROM events e ORDER BY e.rowid`, [], (decoded) => {
-      this.noteDamage(decoded);
-      if ("damage" in decoded) out.push(decoded.damage);
-    });
+    readEventRows(
+      this.driver,
+      `SELECT ${EVENT_COLUMNS} FROM events e ORDER BY e.rowid`,
+      [],
+      (decoded, place) => {
+        this.noteDamage(decoded, place);
+        if ("damage" in decoded) out.push(decoded.damage);
+      },
+      { hash: true }
+    );
     this.surveyed = true;
     return out;
   }
@@ -298,29 +301,11 @@ export class SqliteEventStore implements EventStore {
     return { events: Number(row?.["n"]), bytes: Number(row?.["bytes"]) };
   }
 
-  async conflicting(): Promise<Conflict[]> {
-    if (!this.hasConflictsTable()) return [];
-    const out: Conflict[] = [];
-    for (const row of query(this.driver, `SELECT ${EVENT_COLUMNS}, c.rejected AS rejected FROM local_conflicts c JOIN events e ON e.event_id = c.event_id ORDER BY c.seen`)) {
-      const kept = this.noteDamage(decodeEventRow(row));
-      if ("damage" in kept) continue; // its accepted value is `damaged()`'s to report
-      out.push({ eventId: kept.event.eventId, kept: kept.event, rejected: parseStrict(row["rejected"] as Uint8Array) as Event });
+  private noteDamage(decoded: DecodedEventRow, place = "damage" in decoded ? decoded.damage.where : ""): DecodedEventRow {
+    if ("damage" in decoded) {
+      this.damage ??= decoded.damage;
+      this.known.add(place);
     }
-    return out;
-  }
-
-  /** Forgets every conflict recorded: the diagnostic history, not the events. */
-  async clearConflicts(): Promise<void> {
-    this.requireWritable("clearConflicts");
-    if (this.hasConflictsTable()) run(this.driver, "DELETE FROM local_conflicts");
-  }
-
-  private hasConflictsTable(): boolean {
-    return hasTable(this.driver, "local_conflicts");
-  }
-
-  private noteDamage(decoded: DecodedEventRow): DecodedEventRow {
-    if ("damage" in decoded) this.damage ??= decoded.damage;
     return decoded;
   }
 
@@ -344,68 +329,86 @@ export class SqliteEventStore implements EventStore {
   }
 }
 
-/**
- * A value as an accepted event would be held: validated, then its
- * canonical bytes and the form they parse to — member order, `-0` and
- * all — so two serializations of one event are one and a local append
- * reads back as its ingest elsewhere would. Throws `InvalidEvent` or
- * `InvalidJson`.
- */
-function canonical(value: unknown): Held {
-  const bytes = canonicalize(validateEvent(value));
-  return { event: parseStrict(bytes) as Event, bytes };
+/** How far `decodeEventRow` checks a row: with `hash`, the bytes are hashed against the CID column too. */
+export interface DecodeOptions {
+  hash?: boolean;
 }
 
 /**
  * The event a row of `EVENT_COLUMNS` holds, or the damage it is: bytes
- * that are not canonical JSON, do not validate as an event, are not
- * the event's own canonical bytes, or disagree with the columns beside
- * them. The damage is placed by the row's ID when that is text, else
- * by rowid.
+ * that are not canonical JSON, do not validate as an envelope, are not
+ * the envelope's own canonical bytes, or disagree with the columns
+ * beside them — the CID column not spelled as a CID, or, when `hash`
+ * is asked, not the one the bytes hash to. The damage is placed by the
+ * row's CID when that is text, else by rowid. The event handed back
+ * carries the stored CID.
  */
-export function decodeEventRow(row: SqlRow): DecodedEventRow {
+export function decodeEventRow(row: SqlRow, options: DecodeOptions = {}): DecodedEventRow {
   const canonical = row["canonical"];
   const bytes = canonical instanceof Uint8Array ? canonical : undefined;
-  let where = `events/rowid ${String(row["rowid"])}`;
+  const where = placeOf(row);
   try {
-    const eventId = row["event_id"];
-    if (eventId instanceof Uint8Array) where = `events/${decodeText(eventId, "event_id")}`;
+    const stored = row["cid"];
     if (bytes === undefined) throw new Error("canonical is not bytes");
-    const event = validateEvent(parseStrict(bytes));
-    if (!sameBytes(canonicalize(event), bytes)) throw new Error("the stored bytes are not the event's canonical bytes");
-    for (const [column, field] of [
-      ["event_id", "eventId"],
-      ["at", "at"],
-      ["author", "author"],
-      ["type", "type"],
-    ] as const) {
-      const stored = row[column];
-      const text = stored instanceof Uint8Array ? decodeUtf8(stored, column) : String(stored);
-      if (text !== event[field]) throw new Error(`column ${column} is ${JSON.stringify(text)}, not the event's ${JSON.stringify(event[field])}`);
+    const envelope = validateEnvelope(parseStrict(bytes));
+    if (!sameBytes(canonicalEventBytes(envelope), bytes)) throw new Error("the stored bytes are not the envelope's canonical bytes");
+    const cid = stored instanceof Uint8Array ? decodeText(stored, "cid") : String(stored);
+    if (!isEventCid(cid)) throw new Error(`column cid ${JSON.stringify(cid)} is not a canonical raw DASL CID`);
+    if (options.hash === true) {
+      const computed = eventCidOfBytes(bytes);
+      if (cid !== computed) throw new Error(`column cid is ${cid}, but the bytes hash to ${computed}`);
     }
-    return { event };
+    for (const column of ["at", "author", "type"] as const) {
+      const value = row[column];
+      const text = value instanceof Uint8Array ? decodeUtf8(value, column) : String(value);
+      if (text !== envelope[column]) throw new Error(`column ${column} is ${JSON.stringify(text)}, not the event's ${JSON.stringify(envelope[column])}`);
+    }
+    return { event: { ...envelope, cid } };
   } catch (err) {
     return { damage: { where, ...(bytes === undefined ? {} : { bytes }), error: err instanceof Error ? err.message : String(err) } };
   }
 }
 
-/**
- * Every row of `sql`, a selection of `EVENT_COLUMNS` with `bound`
- * bound, decoded and handed to `each` in the order SQLite returns
- * them; the rows are read whole before the first is handed over, one
- * cut, which a write during the walk does not move. The SQL only
- * narrows the rows read: a filter is applied to the decoded event by
- * the caller, so that a match is exactly what the filter says,
- * whatever SQLite made of the bound values.
- */
-export function readEventRows(driver: SqliteDriver, sql: string, bound: SqlValue[], each: (decoded: DecodedEventRow) => void): void {
-  for (const row of query(driver, sql, ...bound)) each(decodeEventRow(row));
+/** Where a row of `EVENT_COLUMNS` is, in the store's terms: by its CID column when that is text, else by rowid. */
+export function placeOf(row: SqlRow): string {
+  const stored = row["cid"];
+  if (stored instanceof Uint8Array) {
+    try {
+      return `events/${decodeText(stored, "cid")}`;
+    } catch {
+      // not text: named by rowid below
+    }
+  }
+  return `events/rowid ${String(row["rowid"])}`;
 }
 
-/** The SQL that narrows `events` as `e` to `filter`'s author and type, and the values it binds — as bytes cast to text, which carries a NUL where a bound string cannot. */
+/**
+ * Every row of `sql`, a selection of `EVENT_COLUMNS` with `bound`
+ * bound, decoded and handed to `each` with its place, in the order
+ * SQLite returns them; the rows are read whole before the first is
+ * handed over, one cut, which a write during the walk does not move.
+ * The SQL only narrows the rows read: a filter is applied to the
+ * decoded event by the caller, so that a match is exactly what the
+ * filter says, whatever SQLite made of the bound values.
+ */
+export function readEventRows(driver: SqliteDriver, sql: string, bound: SqlValue[], each: (decoded: DecodedEventRow, place: string) => void, options: DecodeOptions = {}): void {
+  for (const row of query(driver, sql, ...bound)) each(decodeEventRow(row, options), placeOf(row));
+}
+
+/**
+ * The SQL that narrows `events` as `e` to `filter`'s CID, author and
+ * type, and the values it binds — as bytes cast to text, which carries
+ * a NUL where a bound string cannot. A `cid` that is not a canonical
+ * raw CID is refused here, before anything is read.
+ */
 export function eventFilterSql(filter: Filter | undefined): { conditions: string[]; bound: SqlValue[] } {
+  checkFilter(filter);
   const conditions: string[] = [];
   const bound: SqlValue[] = [];
+  if (filter?.cid !== undefined) {
+    conditions.push("e.cid = CAST(? AS TEXT)");
+    bound.push(UTF8.encode(filter.cid));
+  }
   if (filter?.author !== undefined) {
     conditions.push("e.author = CAST(? AS TEXT)");
     bound.push(UTF8.encode(filter.author));

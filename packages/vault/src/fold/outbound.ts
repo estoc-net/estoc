@@ -21,7 +21,7 @@ import { canonicalDidOf } from "../peer-document.js";
 import { expandPleaseAck } from "../projection.js";
 import { agreementKey } from "../public-key.js";
 import type { VaultEvent } from "../schema.js";
-import type { Channel, Did, EventId, MessageId, MessageOut, WireMessageId } from "../types.js";
+import type { Channel, Did, EventCid, MessageId, MessageOut, WireMessageId } from "../types.js";
 import { compareReceiptKeys, keyAgreementTypeOf, receiptOrderKey, type ChannelEvidence, type Source } from "./channels.js";
 import type { Continuity } from "./continuity.js";
 import type { EvidenceCheck } from "./evidence.js";
@@ -146,7 +146,7 @@ export interface OutboundFold {
   /** the messages whose envelope contribution is released */
   readonly released: ReadonlySet<MessageId>;
   /** the notification intents naming a rotation decision, whatever their form: one selects, several conflict and stop each one's work */
-  notificationFor(rotationEventId: EventId): Notification;
+  notificationFor(rotationEventCid: EventCid): Notification;
   /**
    * The ACK targets a carrier's request names, in first-receipt order:
    * each an established input of this channel or a verified
@@ -154,9 +154,9 @@ export interface OutboundFold {
    * conflict, and unambiguous under its wire ID. A carrier that is no
    * complete witness, or requests nothing, names none.
    */
-  ackTargets(sourceEventId: EventId): readonly WireMessageId[];
+  ackTargets(sourceEventCid: EventCid): readonly WireMessageId[];
   /** the outbound a ping-response or problem report answers, when its thread names one this carrier may answer */
-  inReplyTo(sourceEventId: EventId): Outbound | null;
+  inReplyTo(sourceEventCid: EventCid): Outbound | null;
 }
 
 export type OutboundFoldOptions = {
@@ -171,7 +171,7 @@ export function foldOutbound(
   continuity: Continuity,
   inbound: InboundFold,
   erasures: Erasures,
-  resolutionChecks: ReadonlyMap<EventId, EvidenceCheck>,
+  resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>,
   options: OutboundFoldOptions = {}
 ): OutboundFold {
   const known = new Set([...BUILT_IN_EFFECTS, ...(options.effectTypes ?? [])]);
@@ -181,11 +181,11 @@ export function foldOutbound(
   const failures = groupBy(set.of("delivery.failed"), (event) => event.data.messageId);
   const acknowledgements = groupBy(set.of("delivery.acknowledged"), (event) => event.data.messageId);
   const witnesses = witnessesByTarget(evidence, continuity, inbound);
-  const selections = new Map<EventId, MessageId[]>();
+  const selections = new Map<EventCid, MessageId[]>();
   for (const event of set.of("message.out")) {
-    if (event.data.rotationEventId === null) continue;
-    const selected = selections.get(event.data.rotationEventId) ?? [];
-    if (!selected.includes(event.data.messageId)) selections.set(event.data.rotationEventId, [...selected, event.data.messageId].sort());
+    if (event.data.rotationEventCid === null) continue;
+    const selected = selections.get(event.data.rotationEventCid) ?? [];
+    if (!selected.includes(event.data.messageId)) selections.set(event.data.rotationEventCid, [...selected, event.data.messageId].sort());
   }
   const executionsByWire = groupBy(inbound.executions.values(), (execution) => execution.wireMessageId);
 
@@ -217,23 +217,23 @@ export function foldOutbound(
   for (const group of [prepared, submissions, failures, acknowledgements]) {
     for (const [messageId, events] of group) if (!intents.has(messageId)) stray.push(...events);
   }
-  stray.sort((a, b) => cmp(a.at, b.at) || cmp(a.eventId, b.eventId) || cmp(a.author, b.author));
+  stray.sort((a, b) => cmp(a.at, b.at) || cmp(a.cid, b.cid) || cmp(a.author, b.author));
 
   return {
     outbounds,
     stray,
     released,
-    notificationFor: (rotationEventId) => {
-      const messageIds = selections.get(rotationEventId) ?? [];
+    notificationFor: (rotationEventCid) => {
+      const messageIds = selections.get(rotationEventCid) ?? [];
       if (messageIds.length === 0) return { status: "none" };
       return messageIds.length === 1 ? { status: "selected", messageId: messageIds[0]! } : { status: "conflict", messageIds };
     },
-    ackTargets: (sourceEventId) => ackTargetsOf(sourceEventId, evidence, continuity, inbound, executionsByWire),
-    inReplyTo: (sourceEventId) => {
-      const source = evidence.sources.get(sourceEventId);
-      const execution = inbound.ofSource(sourceEventId);
+    ackTargets: (sourceEventCid) => ackTargetsOf(sourceEventCid, evidence, continuity, inbound, executionsByWire),
+    inReplyTo: (sourceEventCid) => {
+      const source = evidence.sources.get(sourceEventCid);
+      const execution = inbound.ofSource(sourceEventCid);
       if (source === undefined || source.channel === null || execution === null || execution.status.status !== "complete") return null;
-      if (continuity.witness(sourceEventId).status !== "complete") return null;
+      if (continuity.witness(sourceEventCid).status !== "complete") return null;
       const { data } = source.event;
       const thread = execution.kind === "ping-response" ? data.thid : execution.kind === "error" ? data.pthid : null;
       if (thread === null) return null;
@@ -255,8 +255,8 @@ function witnessesByTarget(evidence: ChannelEvidence, continuity: Continuity, in
   const byTarget = new Map<string, Source[]>();
   const sources = [...evidence.sources.values()].sort((a, b) => compareReceiptKeys(receiptOrderKey(a.event), receiptOrderKey(b.event)));
   for (const source of sources) {
-    if (source.channel === null || source.event.data.ack.length === 0 || continuity.witness(source.event.eventId).status !== "complete") continue;
-    if (inbound.ofSource(source.event.eventId)?.status.status === "conflict") continue;
+    if (source.channel === null || source.event.data.ack.length === 0 || continuity.witness(source.event.cid).status !== "complete") continue;
+    if (inbound.ofSource(source.event.cid)?.status.status === "conflict") continue;
     for (const target of new Set(source.event.data.ack)) {
       const list = byTarget.get(target);
       if (list === undefined) byTarget.set(target, [source]);
@@ -278,10 +278,10 @@ type Inputs = {
   continuity: Continuity;
   inbound: InboundFold;
   erasures: Erasures;
-  resolutionChecks: ReadonlyMap<EventId, EvidenceCheck>;
+  resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>;
   known: ReadonlySet<string>;
   /** the distinct notification message IDs naming each rotation */
-  selections: ReadonlyMap<EventId, readonly MessageId[]>;
+  selections: ReadonlyMap<EventCid, readonly MessageId[]>;
   executionsByWire: ReadonlyMap<WireMessageId, Execution[]>;
 };
 
@@ -379,7 +379,7 @@ function packageStatus(event: VaultEvent<"message.prepared">, data: MessageOut |
   const recipient = canonicalRecipient(pkg.recipientDid);
   if (recipient === null) return conflict("the package's recipient is no valid did:peer:4");
   if (channel !== null && recipient !== channel.peerDid) return conflict("the package's recipient is not the intent's");
-  const resolved = inputs.set.resolve(pkg.peerResolutionEventId, "peer.resolved");
+  const resolved = inputs.set.resolve(pkg.peerResolutionEventCid, "peer.resolved");
   if (resolved.status === "missing") return { status: "pending", because: "the resolution it names is not here" };
   if (resolved.status === "mismatched") return conflict(`the resolution it names is a ${resolved.event.type}`);
   const resolution = resolved.event.data;
@@ -392,7 +392,7 @@ function packageStatus(event: VaultEvent<"message.prepared">, data: MessageOut |
     if (!(err instanceof InvalidPublicKey)) throw err;
     return conflict(err.message);
   }
-  const check = inputs.resolutionChecks.get(resolved.event.eventId);
+  const check = inputs.resolutionChecks.get(resolved.event.cid);
   if (check === "invalid") return conflict("the resolution's snapshot is not its document's");
   const localKeyType = sender === null ? null : keyAgreementTypeOf(sender);
   if (localKeyType !== null && peerKeyType !== localKeyType) return conflict(`the peer key is ${peerKeyType} and the sender's key-agreement key ${localKeyType}: no key is agreed across curves`);
@@ -462,7 +462,7 @@ function acknowledgementOf(event: VaultEvent<"delivery.acknowledged">, packaged:
     if (carrier.messageId !== data.ackMessageId || carriers.some((witness) => witness.source === source)) continue;
     if (carrier.wireMessageId !== data.ackWireMessageId || carrier.localKeyName !== data.localKeyName || !carrier.ack.includes(data.messageId)) continue;
     if (source.resolution !== null && source.resolution.data.peerPublicKey !== data.peerPublicKey) continue;
-    const witness = continuity.witness(source.event.eventId);
+    const witness = continuity.witness(source.event.cid);
     if (witness.status === "pending") return { event, status: { status: "pending", because: `the carrier it names is no complete witness yet: ${witness.because}` } };
     if (witness.status === "complete") return { event, status: { status: "pending", because: "the carrier it names has no verified path to this message's channel yet" } };
   }
@@ -484,26 +484,26 @@ function effectOf(data: MessageOut, channel: Channel | null, inputs: Inputs): Ef
 
   let source: Source | null = null;
   let execution: Execution | null = null;
-  if (data.sourceEventId !== null) {
-    const resolved = inputs.set.resolve(data.sourceEventId, "message.in");
+  if (data.sourceEventCid !== null) {
+    const resolved = inputs.set.resolve(data.sourceEventCid, "message.in");
     if (resolved.status === "mismatched") return conflict(`the source it names is a ${resolved.event.type}`);
     if (resolved.status === "missing") missing.push("the source it names is not here");
     else {
-      source = inputs.evidence.sources.get(data.sourceEventId)!;
-      if (source.event.data.peerResolutionEventId === null) return conflict("the source is anonymous, in no channel");
+      source = inputs.evidence.sources.get(data.sourceEventCid)!;
+      if (source.event.data.peerResolutionEventCid === null) return conflict("the source is anonymous, in no channel");
       if (source.standing.status === "conflict") return conflict(`the source's authentication is in conflict: ${source.standing.because}`);
-      execution = inputs.inbound.ofSource(data.sourceEventId);
+      execution = inputs.inbound.ofSource(data.sourceEventCid);
       if (execution !== null) {
         if (execution.id !== data.executionId) return conflict(`the execution ID is not the one the source's input derives, ${execution.id}`);
         if (execution.status.status === "conflict") return conflict(`the source's input is in conflict: ${execution.status.because}`);
       }
-      const witness = inputs.continuity.witness(data.sourceEventId);
+      const witness = inputs.continuity.witness(data.sourceEventCid);
       if (witness.status === "invalid" || witness.status === "conflict") return conflict(`the source is no complete witness: ${witness.because}`);
       if (witness.status === "pending") missing.push(`the source is no complete witness yet: ${witness.because}`);
     }
   }
 
-  if (data.rotationEventId !== null || data.effectType === ROTATION_NOTIFICATION_EFFECT) {
+  if (data.rotationEventCid !== null || data.effectType === ROTATION_NOTIFICATION_EFFECT) {
     const verdict = notificationOf(data, source, channel, inputs, missing);
     if (verdict !== null) return verdict;
   } else if (data.effectType !== null) {
@@ -533,7 +533,7 @@ function continues(data: MessageOut, source: Source, channel: Channel | null, in
   if (inputs.continuity.conflicted(source.channel) || inputs.continuity.conflicted(channel)) return { status: "conflict", because: `${because}: the continuity between them is in conflict` };
   const toward = [...inputs.evidence.decisions.values()]
     .filter((decision) => decision.event.data.peerDid === channel.peerDid && decision.event.data.toDidId === data.senderDidId)
-    .map((decision) => inputs.continuity.status(decision.event.eventId));
+    .map((decision) => inputs.continuity.status(decision.event.cid));
   for (const status of toward) if (status.status === "pending-history") return { status: "pending", because: `${because} yet: ${status.because}` };
   return { status: "pending", because: `${because} yet: no verified rotation to the output's sender is here` };
 }
@@ -630,13 +630,13 @@ function targetOf(wanted: WireMessageId, source: Source, channel: Channel, own: 
 function notificationOf(data: MessageOut, source: Source | null, channel: Channel | null, inputs: Inputs, missing: string[]): EffectStatus | null {
   const conflict = (because: string): EffectStatus => ({ status: "conflict", because });
   if (data.effectType !== null && data.effectType !== ROTATION_NOTIFICATION_EFFECT) return conflict("an intent naming a rotation is a rotation notification");
-  if (data.rotationEventId === null) return conflict("a rotation notification names its rotation");
+  if (data.rotationEventCid === null) return conflict("a rotation notification names its rotation");
   const empty = data.bodyCid === EMPTY_CONTENT_CID && data.attachmentCids.length === 0 && Object.keys(data.headers).length === 0;
   if (data.msgType !== EMPTY_MESSAGE_TYPE || !empty) return conflict("a notification is an Empty message with body {} and nothing else");
   if (data.pleaseAck === null || data.pleaseAck.length !== 1 || data.pleaseAck[0] !== "" || data.ack.length > 0 || data.expiresTime !== null) {
     return conflict("a notification requests its own receipt, carries no ACK and does not expire");
   }
-  if (data.sourceEventId === null) {
+  if (data.sourceEventCid === null) {
     if (data.thid !== null || data.pthid !== null || data.createdTime !== null) return conflict("a manual notification has no thread and no creation time");
   } else if (source !== null) {
     const carried = source.event.data;
@@ -645,18 +645,18 @@ function notificationOf(data: MessageOut, source: Source | null, channel: Channe
     }
     if (kindOf(carried) !== "application") return conflict(`a control input triggers no notification: the source is ${kindOf(carried)}`);
   }
-  if ((inputs.selections.get(data.rotationEventId) ?? []).length > 1) return conflict("another notification is selected for the rotation");
-  const resolved = inputs.set.resolve(data.rotationEventId, "did.rotationSelected");
+  if ((inputs.selections.get(data.rotationEventCid) ?? []).length > 1) return conflict("another notification is selected for the rotation");
+  const resolved = inputs.set.resolve(data.rotationEventCid, "did.rotationSelected");
   if (resolved.status === "mismatched") return conflict(`the rotation it names is a ${resolved.event.type}`);
   if (resolved.status === "missing") {
     missing.push("the rotation it names is not here");
     return null;
   }
   const { data: rotation } = resolved.event;
-  if (rotation.sourceEventId !== data.sourceEventId) return conflict("a notification is triggered exactly as its decision was, by the same source");
+  if (rotation.sourceEventCid !== data.sourceEventCid) return conflict("a notification is triggered exactly as its decision was, by the same source");
   if (rotation.toDidId !== data.senderDidId) return conflict("a notification is sent from the decision's successor");
   if (channel !== null && channel.peerDid !== rotation.peerDid) return conflict("a notification is sent to the decision's peer");
-  const status = inputs.continuity.status(resolved.event.eventId);
+  const status = inputs.continuity.status(resolved.event.cid);
   if (status.status === "invalid" || status.status === "conflict") return conflict(`the rotation it names is ${status.status}: ${status.because}`);
   if (status.status !== "verified") missing.push(`the rotation it names is not verified yet${"because" in status ? `: ${status.because}` : ""}`);
   return null;
@@ -683,12 +683,12 @@ function workOf(w: WorkInputs): Work {
   return { kind: "dispatch", package: w.package };
 }
 
-function ackTargetsOf(sourceEventId: EventId, evidence: ChannelEvidence, continuity: Continuity, inbound: InboundFold, executionsByWire: ReadonlyMap<WireMessageId, Execution[]>): WireMessageId[] {
-  const source = evidence.sources.get(sourceEventId);
+function ackTargetsOf(sourceEventCid: EventCid, evidence: ChannelEvidence, continuity: Continuity, inbound: InboundFold, executionsByWire: ReadonlyMap<WireMessageId, Execution[]>): WireMessageId[] {
+  const source = evidence.sources.get(sourceEventCid);
   const requested = source?.event.data.pleaseAck;
   if (source === undefined || source.channel === null || requested == null || requested.length === 0) return [];
-  if (continuity.witness(sourceEventId).status !== "complete") return [];
-  const own = inbound.ofSource(sourceEventId);
+  if (continuity.witness(sourceEventCid).status !== "complete") return [];
+  const own = inbound.ofSource(sourceEventCid);
   const targets: Execution[] = [];
   for (const wanted of expandPleaseAck(source.event.data.wireMessageId, requested)) {
     const target = targetOf(wanted as WireMessageId, source, source.channel, own, evidence, continuity, executionsByWire);

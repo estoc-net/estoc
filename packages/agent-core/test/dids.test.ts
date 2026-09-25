@@ -16,7 +16,7 @@ describe("routes", () => {
     await expect(configureRoute(p.runtime, p.keys, { kind: "mediated", mediationId: p.mediationId })).rejects.toBeInstanceOf(Unusable);
     const direct = await configureRoute(p.runtime, p.keys, { kind: "direct", endpoint: ENDPOINT }, ROUTE);
     expect(direct.data).toEqual({ routeId: ROUTE, kind: "direct", mediationId: null, endpoint: ENDPOINT });
-    expect((await configureRoute(p.runtime, p.keys, { kind: "direct", endpoint: ENDPOINT }, ROUTE)).eventId).toBe(direct.eventId);
+    expect((await configureRoute(p.runtime, p.keys, { kind: "direct", endpoint: ENDPOINT }, ROUTE)).cid).toBe(direct.cid);
     await expect(configureRoute(p.runtime, p.keys, { kind: "direct", endpoint: "https://elsewhere.example/" }, ROUTE)).rejects.toBeInstanceOf(EntityConflict);
 
     await establish(p.link, p.runtime, p.keys, p.mediationId);
@@ -43,7 +43,7 @@ describe("communication DIDs", () => {
 
     const again = await createDid(runtime, keys, ROUTE, DID);
     expect(again.existed).toBe(true);
-    expect(again.created.eventId).toBe(first.created.eventId);
+    expect(again.created.cid).toBe(first.created.cid);
     expect(again.minted.did).toBe(first.minted.did);
     const fold = await scanVault(runtime.vault, keys);
     expect(fold.set.of("did.created")).toHaveLength(1);
@@ -79,7 +79,7 @@ describe("communication DIDs", () => {
     await createDid(runtime, keys, ROUTE, DID);
     const retired = await retireDid(runtime, keys, DID, "user");
     expect(retired.data).toEqual({ didId: DID, because: "user" });
-    expect((await retireDid(runtime, keys, DID, "again")).eventId).toBe(retired.eventId);
+    expect((await retireDid(runtime, keys, DID, "again")).cid).toBe(retired.cid);
     const fold = await scanVault(runtime.vault, keys);
     expect(fold.routes.dids.get(DID)).toMatchObject({ live: false, retired: "user" });
     await expect(disclose(null, runtime, keys, DID, { as: "direct", uses: "many" })).rejects.toBeInstanceOf(Unusable);
@@ -112,10 +112,10 @@ describe("disclosure", () => {
     const invitation = { as: "oob", uses: "one", oobId: "invite-1", goal: "Write to Alice" } as const;
     const first = await disclose(null, runtime, keys, DID, invitation);
     const again = await disclose(null, runtime, keys, DID, invitation);
-    expect(again.disclosed.eventId).toBe(first.disclosed.eventId);
+    expect(again.disclosed.cid).toBe(first.disclosed.cid);
     expect(again.invitation).toEqual(first.invitation);
     const [x, y] = await Promise.all([disclose(null, runtime, keys, DID, { ...invitation, oobId: "invite-2" }), disclose(null, runtime, keys, DID, { ...invitation, oobId: "invite-2" })]);
-    expect(y.disclosed.eventId).toBe(x.disclosed.eventId);
+    expect(y.disclosed.cid).toBe(x.disclosed.cid);
     await expect(disclose(null, runtime, keys, DID, { ...invitation, goal: "Write to Bob" })).rejects.toBeInstanceOf(EntityConflict);
     await expect(disclose(null, runtime, keys, DID, { ...invitation, uses: "many" })).rejects.toBeInstanceOf(EntityConflict);
     await expect(disclose(null, runtime, keys, other.created.data.didId, invitation)).rejects.toThrow(/another DID/);

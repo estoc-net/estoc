@@ -11,7 +11,7 @@ import { parseStrict } from "./jcs.js";
 import { isJsonObject } from "./json.js";
 
 /** The vault's identity as every copy states it: the format version, and the anchor DID the seed derives. */
-export type VaultMetadata = Readonly<{ version: 3; anchor: string }>;
+export type VaultMetadata = Readonly<{ version: 4; anchor: string }>;
 
 /** The wrapped seed as the API carries it: the keystore package's compact JWE string, as it is. */
 export type WrappedSeed = Readonly<{ version: 3; seedJwe: string }>;
@@ -32,9 +32,9 @@ export interface KeystoreAccess {
 export function checkMetadata(value: unknown): VaultMetadata {
   if (typeof value !== "object" || value === null) throw new NotAVault("vault metadata is an object");
   const { version, anchor } = value as { version?: unknown; anchor?: unknown };
-  if (version !== 3) throw new NotAVault(`vault version ${JSON.stringify(version)} is not 3`);
+  if (version !== 4) throw new NotAVault(`vault version ${JSON.stringify(version)} is not 4`);
   if (typeof anchor !== "string" || !anchor.startsWith("did:") || anchor.length <= 4) throw new NotAVault("the anchor is a DID");
-  return Object.freeze({ version: 3, anchor });
+  return Object.freeze({ version: 4, anchor });
 }
 
 /**

@@ -103,11 +103,10 @@ export interface DaemonEvents {
   log(line: string): void;
 }
 
-/** What a merge brought, counted: `conflicts` are events under an ID this vault holds with other content, which keeps its own. */
+/** What a merge brought, counted. */
 export interface Merged {
   added: number;
   duplicates: number;
-  conflicts: number;
   objects: number;
   repaired: number;
   /**
@@ -179,7 +178,7 @@ export interface Daemon {
   retry(messageId: MessageId): Promise<Outcome>;
   cancel(messageId: MessageId): Promise<Outcome>;
   completeResponse(executionId: ExecutionId, effectType: string): Promise<Outcome>;
-  completeNotification(rotationEventId: EventReference<"did.rotationSelected">): Promise<Outcome>;
+  completeNotification(rotationEventCid: EventReference<"did.rotationSelected">): Promise<Outcome>;
   /** The user's own rotation of `localDidId` toward `peerDid`: a fresh successor, and its notification called. */
   rotate(localDidId: DidId, peerDid: Did): Promise<Outcome & { successor: DidId; existed: boolean }>;
 

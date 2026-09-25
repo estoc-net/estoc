@@ -17,7 +17,7 @@ function threadOf(channels: readonly ChannelRecord[]): MessageRecord[] {
 
 function unplacedOf(channels: readonly ChannelRecord[]): UnplacedInput[] {
   const inputs = new Map<string, UnplacedInput>();
-  for (const channel of channels) for (const input of channel.unplaced) inputs.set(input.sourceEventId, input);
+  for (const channel of channels) for (const input of channel.unplaced) inputs.set(input.sourceEventCid, input);
   return [...inputs.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 

@@ -1,5 +1,5 @@
 /**
- * The SQLite driver the version-3 stores are written against: one
+ * The SQLite driver the version-4 stores are written against: one
  * synchronous connection, prepared statements with positional
  * parameters, and transactions. Two adapters implement it — `node:sqlite`
  * under `@estoc/event-store/node`, `@sqlite.org/sqlite-wasm` over the

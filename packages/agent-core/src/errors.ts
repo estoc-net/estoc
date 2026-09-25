@@ -113,10 +113,10 @@ export class ReceiverClosed extends Error {
 /** Several notification intents name one rotation decision: none is selected, and no completion or retry may choose among them. */
 export class NotificationConflict extends Error {
   constructor(
-    readonly rotationEventId: string,
+    readonly rotationEventCid: string,
     readonly messageIds: readonly string[]
   ) {
-    super(`rotation ${rotationEventId} has ${messageIds.length} notification intents: ${messageIds.join(", ")}`);
+    super(`rotation ${rotationEventCid} has ${messageIds.length} notification intents: ${messageIds.join(", ")}`);
     this.name = "NotificationConflict";
   }
 }

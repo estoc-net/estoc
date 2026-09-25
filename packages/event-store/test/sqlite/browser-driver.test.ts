@@ -212,7 +212,7 @@ describe.skipIf(outcome === undefined)("sqlite-wasm driver (in a Chromium Worker
         expect(await inspectPortable(back)).toEqual(exchanged.continued);
         const { vault } = await vaultOver(openNodeSqlite(sampleVault, { mode: "readwrite" }), clock().now);
         try {
-          expect(await importVault(vault, back, { retainedRoots: retainedOf })).toEqual({ added: 1, duplicates: sample.events.length, conflicts: [], objects: 1, repaired: 0 });
+          expect(await importVault(vault, back, { retainedRoots: retainedOf })).toEqual({ added: 1, duplicates: sample.events.length, objects: 1, repaired: 0 });
         } finally {
           await vault.close();
         }

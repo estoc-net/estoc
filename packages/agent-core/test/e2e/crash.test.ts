@@ -127,8 +127,8 @@ describe("a process that dies", () => {
     expect(forwardsSeen(mediator)).toBe(sentBefore);
 
     const { missingNotifications } = await alice.agent.pending();
-    expect(missingNotifications).toMatchObject([{ rotationEventId: rotated.decision.eventId, entries: ["completeNotification"] }]);
-    expect(await alice.agent.manual.completeNotification(missingNotifications[0]!.rotationEventId as EventReference<"did.rotationSelected">)).toMatchObject({ outcome: "created", action: { kind: "manual" }, dispatched: { outcome: "submitted" } });
+    expect(missingNotifications).toMatchObject([{ rotationEventCid: rotated.decision.cid, entries: ["completeNotification"] }]);
+    expect(await alice.agent.manual.completeNotification(missingNotifications[0]!.rotationEventCid as EventReference<"did.rotationSelected">)).toMatchObject({ outcome: "created", action: { kind: "manual" }, dispatched: { outcome: "submitted" } });
     await until("bob has the notification", () => bob.inbounds.length === 2);
     expect(bob.inbounds[1]).toMatchObject({ after: { proof: { status: "verified" } } });
     const successor = (await foldOf(alice)).routes.dids.get(rotated.successor)!.created!.did;

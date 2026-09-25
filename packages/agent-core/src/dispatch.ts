@@ -169,7 +169,7 @@ async function ready(held: Held, keys: Keys, messageId: MessageId, options: Disp
   if (work.kind === "none") return done({ outcome: "none", messageId, because: work.because });
   if (work.kind === "prepare") return done({ outcome: "pending", messageId, because: "no package is prepared" });
   const pkg = work.package;
-  const resolved = fold.set.resolve(pkg.event.data.peerResolutionEventId, "peer.resolved");
+  const resolved = fold.set.resolve(pkg.event.data.peerResolutionEventCid, "peer.resolved");
   if (resolved.status !== "present") return done({ outcome: "pending", messageId, because: "the resolution the package names is not here" });
   const bytes = await objectReader(held.objects, MAX_ENVELOPE_BYTES)(pkg.event.data.envelopeCid);
   if (bytes === null) return done({ outcome: "pending", messageId, because: `the envelope ${pkg.event.data.envelopeCid} is not here` });

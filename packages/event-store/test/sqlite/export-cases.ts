@@ -10,6 +10,7 @@ import {
   MemoryVault,
   SqliteVault,
   canonicalEventBytes,
+  eventCidOf,
   createRuntime,
   exportVault,
   hashSource,
@@ -91,7 +92,7 @@ export async function settled(p: Promise<unknown>): Promise<boolean> {
   return done;
 }
 
-const ids = (events: Event[]): string[] => events.map((e) => e.eventId).sort();
+const ids = (events: Event[]): string[] => events.map((e) => e.cid).sort();
 
 function expectedValidated(events: Event[], objects: number, objectBytes: number): Validated {
   return { events: events.length, eventBytes: events.reduce((n, e) => n + canonicalEventBytes(e).length, 0), objects, objectBytes };
@@ -441,10 +442,9 @@ export const exportCases: ExportCase[] = [
         const v = snapshot.vault;
         assertEqual(v.metadata, META, "the vault's metadata");
         assertEqual(ids(await all(v.events.scan())), ids(events), "every event, the one whose root was released included");
-        assertEqual((await all(v.events.scan({ type: "test.event", data: { i: 1 } }))).map((e) => e.eventId), [events[1]?.eventId], "a filtered scan");
+        assertEqual((await all(v.events.scan({ type: "test.event", data: { i: 1 } }))).map((e) => e.cid), [events[1]?.cid], "a filtered scan");
         assertEqual(await all(v.events.scan({ type: "other" })), [], "a scan of another type");
         assertEqual(await v.events.damaged(), [], "no damage");
-        assertEqual(await v.events.conflicting(), [], "no conflict travels");
         await assertRejects(() => v.events.changes(), "UnsupportedOperation", "changes");
         await assertRejects(() => v.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]), "UnsupportedOperation", "commit");
         assertEqual(await all(v.objects.list()), [HELLO_CID, BIG_CID, EMPTY_CID].sort(), "exactly the held objects");
@@ -495,17 +495,14 @@ export const exportCases: ExportCase[] = [
       };
       assertEqual((await refused("an absent root", async (v) => [...(await rootsOf(v)), WORLD_CID])).map((p) => p.where), [`objects/${WORLD_CID}`], "the absent root named");
       assertEqual((await refused("over the bound", rootsOf, 4)).length, 0, "the bound");
-      assertEqual(await vault.ingest([foreign]), { added: 1, duplicates: 0, conflicts: [], rejected: [] }, "the foreign event");
-      const conflicting = { ...(foreign as Event), data: { from: "other", altered: true } };
-      assertEqual((await vault.ingest([conflicting])).conflicts.length, 1, "a conflict recorded");
+      assertEqual(await vault.ingest([foreign]), { added: 1, duplicates: 0, rejected: [] }, "the foreign event");
+      assertEqual(await vault.ingest([foreign, { ...(foreign as Event), data: { from: "other", altered: true } }]), { added: 0, duplicates: 1, rejected: [{ value: { ...(foreign as Event), data: { from: "other", altered: true } }, error: `cid ${(foreign as Event).cid} is not the envelope's, ${eventCidOf({ ...(foreign as Event), data: { from: "other", altered: true } })}` }] }, "other bytes under its CID are refused, not recorded");
       const fine = h.fresh();
       const accepted = await all(vault.vault.events.scan());
-      assertEqual(await exportVault(vault, destination(h, fine), { heldRoots: rootsOf }), expectedValidated(accepted, 1, 5), "exported with the conflict on record: a diagnostic, not damage");
-      assertEqual((await vault.vault.events.conflicting()).length, 1, "the diagnostic stays with the runtime");
+      assertEqual(await exportVault(vault, destination(h, fine), { heldRoots: rootsOf }), expectedValidated(accepted, 1, 5), "exported");
       const carried = await opened(h, fine);
       try {
-        assertEqual((await all(carried.vault.events.scan({ author: foreign?.author }))).map((e) => e.data), [foreign?.data], "the accepted value travels");
-        assertEqual(await carried.vault.events.conflicting(), [], "the diagnostic does not");
+        assertEqual((await all(carried.vault.events.scan({ author: foreign?.author }))).map((e) => [e.cid, e.data]), [[foreign?.cid, foreign?.data]], "the foreign event travels under its CID");
       } finally {
         carried.close();
       }
@@ -516,7 +513,7 @@ export const exportCases: ExportCase[] = [
       assert(/hash/.test(damaged[0]?.error ?? ""), `what was wrong: ${damaged[0]?.error}`);
       await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID], { repaired: true })]);
       damageEvent(driver, foreign as Event);
-      assertEqual((await refused("a damaged event")).map((p) => p.where), [`events/${foreign?.eventId}`], "the damaged event named");
+      assertEqual((await refused("a damaged event")).map((p) => p.where), [`events/${foreign?.cid}`], "the damaged event named");
       await vault.close();
       // a lazy failure: the bytes are wrong but no read has found it yet
       const { vault: lazy, driver: lazyDriver } = await make(h, h.fresh(), c.now);
@@ -572,7 +569,7 @@ export const exportCases: ExportCase[] = [
       const snapshot = await opened(h, target);
       try {
         assertEqual(snapshot.wrapped, WRAPPED, "the wrapper of the cut");
-        assertEqual((await all(snapshot.vault.events.scan())).map((e) => e.eventId), [first?.eventId], "the event of the cut");
+        assertEqual((await all(snapshot.vault.events.scan())).map((e) => e.cid), [first?.cid], "the event of the cut");
         assertBytes((await snapshot.vault.objects.read(WORLD_CID, 5)) as Uint8Array, WORLD, "the world, collected from the runtime since");
         assertEqual(await validatePortable(snapshot, { heldRoots: rootsOf }), expectedValidated(events, 2, 10), "validated");
       } finally {
@@ -625,7 +622,7 @@ export const exportCases: ExportCase[] = [
         ["a held object missing", (d) => d.exec(`DELETE FROM object_chunks WHERE cid = '${HELLO_CID}'; DELETE FROM objects WHERE cid = '${HELLO_CID}'`), new RegExp(`^objects/${HELLO_CID}$`), /held by the events but not in the snapshot/],
         ["a damaged chunk", (d) => corruptChunk(d, BIG_CID, 2), new RegExp(`^objects/${BIG_CID}$`), /do not hash/],
         ["a missing chunk", (d) => exec(d, "DELETE FROM object_chunks WHERE cid = ? AND chunk_no = 1", BIG_CID), new RegExp(`^objects/${BIG_CID}$`), /chunk 1 is missing/],
-        ["an altered event", (d, events) => damageEvent(d, events[1] as Event), /^events\/[0-9a-f-]{36}$/, /unterminated/],
+        ["an altered event", (d, events) => damageEvent(d, events[1] as Event), /^events\/b[a-z2-7]{58}$/, /unterminated/],
         ["a size that lies", (d) => exec(d, "UPDATE objects SET size = 6 WHERE cid = ?", HELLO_CID), new RegExp(`^objects/${HELLO_CID}$`), /5 bytes, not the 6/],
       ];
       for (const [what, alter, where, error] of alterations) {

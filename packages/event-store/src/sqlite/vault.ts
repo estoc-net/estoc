@@ -1,5 +1,5 @@
 /**
- * The version-3 vault over an open SQLite runtime: `SqliteEventStore`
+ * The version-4 vault over an open SQLite runtime: `SqliteEventStore`
  * and `SqliteObjectStore` on the runtime's one connection under one
  * `Runtime`, a commit's objects and events published in one
  * transaction, the keystore and the runtime's local state behind the
@@ -74,7 +74,7 @@ export class SqliteVault extends Runtime {
           const prepared = objects.prepare();
           try {
             const drafts = await body(prepared);
-            const published = await events.appendAll(drafts, () => publish(prepared, drafts.length));
+            const published = await events.appendAll(drafts, (adding) => publish(prepared, adding));
             prepared.settle();
             return published;
           } finally {

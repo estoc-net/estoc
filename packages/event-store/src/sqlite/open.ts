@@ -1,5 +1,5 @@
 /**
- * Creating and opening the version-3 vault in SQLite: what a database
+ * Creating and opening the version-4 vault in SQLite: what a database
  * must show before anything in it is trusted, checked in an order that
  * reads nothing ahead of what vouches for it, and what the caller gets
  * once it has. Ownership is the driver's. A create or open that fails,
@@ -80,7 +80,7 @@ export interface OpenRuntimeOptions {
 }
 
 const FORMAT = "estoc-sqlite";
-const VAULT_VERSION = 3;
+const VAULT_VERSION = 4;
 
 /**
  * Makes a runtime in the empty database `driver` was opened to create:
@@ -323,7 +323,7 @@ function checkControl(driver: SqliteDriver): { author: AuthorId; generation: str
   const events = count(driver, "events");
   const positions = count(driver, "event_positions");
   if (positions !== events) throw new DamagedControl(`${events} events have ${positions} positions: every accepted event has one`);
-  const unplaced = count(driver, "events WHERE event_id NOT IN (SELECT event_id FROM event_positions)");
+  const unplaced = count(driver, "events WHERE cid NOT IN (SELECT cid FROM event_positions)");
   if (unplaced !== 0) throw new DamagedControl(`${unplaced} event(s) have no position`);
   return { author: author as AuthorId, generation };
 }

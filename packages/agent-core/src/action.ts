@@ -48,7 +48,7 @@ export class LiveAction {
  * manual completion.
  */
 export class LiveInput {
-  constructor(readonly eventId: EventReference<"message.in">) {}
+  constructor(readonly cid: EventReference<"message.in">) {}
 
   /** The initial action of an intent this input decided. */
   mint(messageId: MessageId): LiveAction {

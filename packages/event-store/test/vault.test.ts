@@ -54,14 +54,15 @@ describe("WriterLock", () => {
 });
 
 describe("Vault facade", () => {
-  it("carries the replica context — author and generation — and refuses metadata that is not a version-3 anchor", () => {
+  it("carries the replica context — author and generation — and refuses metadata that is not a version-4 anchor", () => {
     const vault = new MemoryVault({ metadata: META, wrapped: WRAPPED, author: authorN(1) });
     expect(vault.author).toBe(authorN(1));
     expect(typeof vault.generation).toBe("string");
     expect(new MemoryVault({ metadata: META }).author).not.toBe(new MemoryVault({ metadata: META }).author);
     expect(() => new MemoryVault({ metadata: { version: 2, anchor: META.anchor } as unknown as VaultMetadata })).toThrow(NotAVault);
-    expect(() => new MemoryVault({ metadata: { version: 3, anchor: "z6Mk" } })).toThrow(NotAVault);
-    expect(() => new MemoryVault({ metadata: { version: 3, anchor: "did:" } })).toThrow(NotAVault);
+    expect(() => new MemoryVault({ metadata: { version: 3, anchor: META.anchor } as unknown as VaultMetadata }), "the UUID-addressed version, which no migration reads").toThrow(NotAVault);
+    expect(() => new MemoryVault({ metadata: { version: 4, anchor: "z6Mk" } })).toThrow(NotAVault);
+    expect(() => new MemoryVault({ metadata: { version: 4, anchor: "did:" } })).toThrow(NotAVault);
     expect(() => new MemoryVault({ metadata: null as unknown as VaultMetadata })).toThrow(NotAVault);
   });
 });

@@ -92,10 +92,10 @@ async function reacting(alice: DirectParty, over: Partial<EffectOptions> = {}, a
   const receive = async (peer: DirectParty, extra: Partial<IMessage>, as?: string): Promise<EventReference<"message.in">> => {
     const received = await receiver.receive({ packed: await sealed(await peerSealer(peer, as), alice.longFormDid, extra), source: DIRECT });
     if (received.outcome !== "received") throw new Error(`not received: ${JSON.stringify(received)}`);
-    return received.eventId;
+    return received.cid;
   };
   const live = async (peer: DirectParty, extra: Partial<IMessage>): Promise<Reacted> => reactTo(alice.runtime, alice.keys, new LiveInput(await receive(peer, extra)), options);
-  const executionOf = async (eventId: EventReference<"message.in">): Promise<ExecutionId> => (await foldOf(alice)).inbound.ofSource(eventId)!.id;
+  const executionOf = async (cid: EventReference<"message.in">): Promise<ExecutionId> => (await foldOf(alice)).inbound.ofSource(cid)!.id;
   return { receiver, wire, options, effectTypes, receive, live, executionOf };
 }
 
@@ -160,10 +160,10 @@ describe("the automatic effects of a live input", () => {
       recipientDid: bob.did,
       executionId: reacted.executionId,
       effectType: PURE_ACK_EFFECT,
-      sourceEventId: reacted.eventId,
-      rotationEventId: null,
+      sourceEventCid: reacted.cid,
+      rotationEventCid: null,
     });
-    expect(reply!.intent.data).toMatchObject({ msgType: PING_RESPONSE_TYPE, thid: wireId, pthid: null, createdTime: CREATED, expiresTime: null, pleaseAck: null, ack: [], senderDidId: ALICE, recipientDid: bob.did, effectType: PING_RESPONSE_EFFECT, sourceEventId: reacted.eventId });
+    expect(reply!.intent.data).toMatchObject({ msgType: PING_RESPONSE_TYPE, thid: wireId, pthid: null, createdTime: CREATED, expiresTime: null, pleaseAck: null, ack: [], senderDidId: ALICE, recipientDid: bob.did, effectType: PING_RESPONSE_EFFECT, sourceEventCid: reacted.cid });
     expect(wire.posts.map((post) => post.url)).toEqual([BOB_ENDPOINT, BOB_ENDPOINT]);
 
     let fold = await foldOf(alice);
@@ -259,8 +259,8 @@ describe("the automatic effects of a live input", () => {
     const { alice, bob } = await parties();
     const { wire, options, receive, executionOf } = await reacting(alice);
     const wireId = crypto.randomUUID() as WireMessageId;
-    const eventId = await receive(bob, ping(wireId));
-    const executionId = await executionOf(eventId);
+    const cid = await receive(bob, ping(wireId));
+    const executionId = await executionOf(cid);
     let fold = await foldOf(alice);
     expect(unfinishedWork(fold).responses.map((response) => [response.execution.id, response.effectType])).toEqual([
       [executionId, PURE_ACK_EFFECT],
@@ -345,10 +345,10 @@ describe("the automatic effects of a live input", () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const { wire, options, receive, live } = await reacting(alice, { trace });
-    const eventId = await receive(bob, ping(crypto.randomUUID()));
-    const executionId = (await foldOf(alice)).inbound.ofSource(eventId)!.id;
+    const cid = await receive(bob, ping(crypto.randomUUID()));
+    const executionId = (await foldOf(alice)).inbound.ofSource(cid)!.id;
     refuseReads(alice.runtime, await bodyCidOf(alice, executionId), 1);
-    const unread = await reactTo(alice.runtime, alice.keys, new LiveInput(eventId), options);
+    const unread = await reactTo(alice.runtime, alice.keys, new LiveInput(cid), options);
     expect(outcomes(unread.effects)).toEqual([
       [PURE_ACK_EFFECT, "created", "submitted"],
       [PING_RESPONSE_EFFECT, "refused", "the disk refuses the read"],
@@ -421,8 +421,8 @@ describe("the automatic effects of a live input", () => {
     const routeId = (await foldOf(alice)).routes.dids.get(ALICE)!.created!.boundRouteId;
     const { minted: next } = await createDid(alice.runtime, alice.keys, routeId, ALICE_NEXT);
     const fromPrior = await signFromPrior(alice.keys, { didId: ALICE, longFormDid: alice.longFormDid }, next.longFormDid, IAT);
-    const [decision] = await alice.runtime.vault.commit([], [vaultDraft("did.rotationSelected", { fromDidId: ALICE, peerDid: bob.did, toDidId: ALICE_NEXT, sourceEventId: null, fromPrior })]);
-    expect((await foldOf(alice)).continuity.status(decision!.eventId)).toEqual({ status: "verified" });
+    const [decision] = await alice.runtime.vault.commit([], [vaultDraft("did.rotationSelected", { fromDidId: ALICE, peerDid: bob.did, toDidId: ALICE_NEXT, sourceEventCid: null, fromPrior })]);
+    expect((await foldOf(alice)).continuity.status(decision!.cid)).toEqual({ status: "verified" });
 
     const ack = created(await completeResponse(alice.runtime, alice.keys, executionId, PURE_ACK_EFFECT, options));
     expect([ack.intent.data.senderDidId, ack.intent.data.recipientDid, ack.dispatched.outcome]).toEqual([ALICE, bob.did, "submitted"]);
@@ -435,7 +435,7 @@ describe("the automatic effects of a live input", () => {
     expect(await openedByBob(bob, alice, reply.messageId)).toMatchObject({ type: PING_RESPONSE_TYPE, from: next.longFormDid, from_prior: fromPrior });
 
     const { minted: other } = await createDid(alice.runtime, alice.keys, routeId, ALICE_OTHER);
-    await alice.runtime.vault.commit([], [vaultDraft("did.rotationSelected", { fromDidId: ALICE, peerDid: bob.did, toDidId: ALICE_OTHER, sourceEventId: null, fromPrior: await signFromPrior(alice.keys, { didId: ALICE, longFormDid: alice.longFormDid }, other.longFormDid, IAT) })]);
+    await alice.runtime.vault.commit([], [vaultDraft("did.rotationSelected", { fromDidId: ALICE, peerDid: bob.did, toDidId: ALICE_OTHER, sourceEventCid: null, fromPrior: await signFromPrior(alice.keys, { didId: ALICE, longFormDid: alice.longFormDid }, other.longFormDid, IAT) })]);
     const later = await executionOf(await receive(bob, ping(crypto.randomUUID())));
     expect(outcomes([await completeResponse(alice.runtime, alice.keys, later, PURE_ACK_EFFECT, options)])).toEqual([[PURE_ACK_EFFECT, "none", "the channel's continuity is in conflict"]]);
     await closeAll(alice, bob);
@@ -464,8 +464,8 @@ describe("the automatic effects of a live input", () => {
 
     const anonymous = await receiver.receive({ packed: await sealed(null, alice.longFormDid, { type: BASIC_MESSAGE, please_ack: [""] }), source: DIRECT });
     if (anonymous.outcome !== "received") throw new Error(`not received: ${JSON.stringify(anonymous)}`);
-    const reacted = await reactTo(alice.runtime, alice.keys, new LiveInput(anonymous.eventId), options);
-    expect(reacted).toEqual({ eventId: anonymous.eventId, executionId: null, because: "the observation is anonymous or in no input here", effects: [] });
+    const reacted = await reactTo(alice.runtime, alice.keys, new LiveInput(anonymous.cid), options);
+    expect(reacted).toEqual({ cid: anonymous.cid, executionId: null, because: "the observation is anonymous or in no input here", effects: [] });
     await closeAll(alice, bob);
   });
 });

@@ -18,7 +18,6 @@
  * others and whatever became of it.
  */
 
-import { v7 as uuidv7 } from "uuid";
 
 import type { Held, VaultRuntime } from "@estoc/event-store";
 import {
@@ -26,6 +25,7 @@ import {
   InvalidPlaintext,
   anonymousMessageId,
   inboundMessageId,
+  rawCidOfBytes,
   readPlaintext,
   readVaultEvent,
   scanVault,
@@ -49,7 +49,7 @@ export function receiptOf(runtime: VaultRuntime, keys: Keys): Receipt {
   return (authenticated) => recordReceipt(runtime, keys, authenticated);
 }
 
-type Observed = Omit<MessageIn, "receiptOrdinal" | "peerResolutionEventId">;
+type Observed = Omit<MessageIn, "receiptOrdinal" | "peerResolutionEventCid">;
 
 type Objects = { cid: Cid; source: Uint8Array }[];
 
@@ -129,9 +129,11 @@ function observationOf({ recipient, sender, delivery }: Authenticated, read: Rea
  * The ordinal and the event reference are not known yet; placeholders
  * of their kind stand in, since only their shape is checked.
  */
+const SOME_RESOLUTION = rawCidOfBytes(new Uint8Array(32)) as unknown as EventReference<"peer.resolved">;
+
 function unrecordable(observed: Observed, authenticated: boolean): string | null {
   try {
-    vaultDraft("message.in", { ...observed, receiptOrdinal: "1" as ReceiptOrdinal, peerResolutionEventId: authenticated ? (uuidv7() as EventReference<"peer.resolved">) : null });
+    vaultDraft("message.in", { ...observed, receiptOrdinal: "1" as ReceiptOrdinal, peerResolutionEventCid: authenticated ? SOME_RESOLUTION : null });
     return null;
   } catch (err) {
     if (err instanceof InvalidPayload) return `the message does not record: ${err.message}`;
@@ -150,6 +152,6 @@ async function settle(held: Held, keys: Keys, { recipient, sender }: Authenticat
   const first = !fold.set.of("message.in").some((event) => event.data.messageId === observed.messageId);
   const receiptOrdinal = String(fold.channels.receipts.nextReceiptOrdinal) as ReceiptOrdinal;
   const resolved = sender === null ? null : await commitResolution(held, { resolution: sender.resolution, localKeyName: recipient.localKeyName, peerPublicKey: sender.peerPublicKey });
-  const [event] = (await held.commit(objects, [vaultDraft("message.in", { ...observed, receiptOrdinal, peerResolutionEventId: (resolved?.eventId ?? null) as EventReference<"peer.resolved"> | null })])).map(readVaultEvent);
-  return { outcome: "received", eventId: (event as VaultEvent<"message.in">).eventId as EventReference<"message.in">, first };
+  const [event] = (await held.commit(objects, [vaultDraft("message.in", { ...observed, receiptOrdinal, peerResolutionEventCid: (resolved?.cid ?? null) as EventReference<"peer.resolved"> | null })])).map(readVaultEvent);
+  return { outcome: "received", cid: (event as VaultEvent<"message.in">).cid as EventReference<"message.in">, first };
 }

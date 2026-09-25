@@ -1,7 +1,6 @@
-import type { AuthorId, Event, EventId } from "@estoc/event-store";
+import { eventCidOf, type AuthorId, type Event, type EventCid, type EventEnvelope, type JsonObject } from "@estoc/event-store";
 import { importSeed } from "@estoc/keystore";
 import { expect } from "vitest";
-import { v7 as uuidv7 } from "uuid";
 
 import {
   Keys,
@@ -48,6 +47,9 @@ export const HASH = "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA";
 const encoder = new TextEncoder();
 export const cidOf = (text: string) => rawCidOfBytes(encoder.encode(text));
 
+/** A raw CID no event here hashes to: what a reference to an event that is not in the set looks like. */
+export const fakeEventCid = (): EventCid => rawCidOfBytes(crypto.getRandomValues(new Uint8Array(32))) as unknown as EventCid;
+
 export async function openKeys(seed = SEED): Promise<Keys> {
   const seedKey = await importSeed(seed);
   return Keys.open(seedKey, await Keys.anchorOf(seedKey));
@@ -61,30 +63,25 @@ export function clock(start = Date.UTC(2026, 8, 13)): Clock {
   return { next: () => new Date(t++).toISOString() };
 }
 
-export type EventOptions = { at?: string; author?: AuthorId; eventId?: EventId };
+export type EventOptions = { at?: string; author?: AuthorId };
 
-/** A scene: events built in order, each a millisecond after the last, checked against its schema. */
+/** A scene: events built in order, each a millisecond after the last, checked against its schema, each under the CID its envelope hashes to. */
 export class Scene {
   readonly events: Event[] = [];
   private readonly clock = clock();
 
   add<T extends VaultEventType>(type: T, data: VaultData[T], options: EventOptions = {}): VaultEvent<T> {
     const draft = vaultDraft(type, data);
-    const event = {
-      eventId: options.eventId ?? (uuidv7() as EventId),
-      at: options.at ?? this.clock.next(),
-      author: options.author ?? AUTHOR,
-      type,
-      roots: draft.roots,
-      data: draft.data,
-    } as VaultEvent<T>;
+    const envelope = { at: options.at ?? this.clock.next(), author: options.author ?? AUTHOR, type, roots: draft.roots, data: draft.data };
+    const event = { ...envelope, cid: eventCidOf(envelope) } as VaultEvent<T>;
     this.events.push(event);
     return event;
   }
 
   /** An event of a type this version does not name. */
   foreign(type: string, data: Record<string, unknown> = {}, options: EventOptions = {}): Event {
-    const event = { eventId: options.eventId ?? (uuidv7() as EventId), at: options.at ?? this.clock.next(), author: options.author ?? AUTHOR, type, roots: [], data } as Event;
+    const envelope: EventEnvelope = { at: options.at ?? this.clock.next(), author: options.author ?? AUTHOR, type, roots: [], data: data as JsonObject };
+    const event = { ...envelope, cid: eventCidOf(envelope) } as Event;
     this.events.push(event);
     return event;
   }

@@ -122,7 +122,7 @@ export async function rootsOf(vault: Vault): Promise<Cid[]> {
 /** Every root of every event, retained by that event: the type-independent retention. */
 export async function retainedOf(vault: Vault): Promise<Retained[]> {
   const retained: Retained[] = [];
-  for await (const event of vault.events.scan()) for (const root of event.roots) retained.push({ eventId: event.eventId, root });
+  for await (const event of vault.events.scan()) for (const root of event.roots) retained.push({ cid: event.cid, root });
   return retained;
 }
 
@@ -157,7 +157,7 @@ export function corruptChunk(driver: SqliteDriver, cid: Cid, chunkNo = 0): void 
 
 /** Cuts the stored canonical bytes of `event` short, as a torn write would. */
 export function damageEvent(driver: SqliteDriver, event: Event): void {
-  exec(driver, "UPDATE events SET canonical = ? WHERE event_id = ?", canonicalEventBytes(event).slice(0, -3), event.eventId);
+  exec(driver, "UPDATE events SET canonical = ? WHERE cid = ?", canonicalEventBytes(event).slice(0, -3), event.cid);
 }
 
 /** The vault over the runtime database, and the connection under it, for what a case reads straight from the tables. */
@@ -202,7 +202,7 @@ export const vaultCases: VaultCase[] = [
       assertEqual(new Set(events.map((e) => e.at)).size, 1, "one timestamp");
       assertEqual(rows(driver, "SELECT cid, size FROM objects ORDER BY cid"), [{ cid: HELLO_CID, size: 5 }, { cid: bigCid, size: MIB + 7 }].sort((a, b) => (a.cid < b.cid ? -1 : 1)), "the object rows");
       assertEqual(rows(driver, "SELECT count(*) AS n FROM object_chunks"), [{ n: 3 }], "the chunks");
-      assertEqual(rows(driver, "SELECT accepted_seq, event_id FROM event_positions ORDER BY accepted_seq"), events.map((e, i) => ({ accepted_seq: i + 1, event_id: e.eventId })), "the positions");
+      assertEqual(rows(driver, "SELECT accepted_seq, cid FROM event_positions ORDER BY accepted_seq"), events.map((e, i) => ({ accepted_seq: i + 1, cid: e.cid })), "the positions");
       assertEqual(rows(driver, "SELECT last_seq FROM store_state"), [{ last_seq: 2 }], "the control");
       const { token } = await vault.vault.events.changes();
       const { author, generation } = vault;
@@ -211,8 +211,8 @@ export const vaultCases: VaultCase[] = [
       try {
         assertEqual([again.author, again.generation], [author, generation], "the identity after a reopen");
         assertEqual(
-          (await all(again.vault.events.scan())).map((e) => e.eventId),
-          events.map((e) => e.eventId).sort(),
+          (await all(again.vault.events.scan())).map((e) => e.cid),
+          events.map((e) => e.cid).sort(),
           "the events after a reopen"
         );
         const delta = await again.vault.events.changes(undefined, token);
@@ -250,7 +250,7 @@ export const vaultCases: VaultCase[] = [
         );
         assertEqual(events.length, 1, "the next commit");
         assertEqual(rows(driver, "SELECT count(*) AS n FROM objects"), [{ n: 2 }], "two object rows");
-        assertEqual(rows(driver, "SELECT accepted_seq, event_id FROM event_positions"), [{ accepted_seq: 1, event_id: events[0]?.eventId }], "one position");
+        assertEqual(rows(driver, "SELECT accepted_seq, cid FROM event_positions"), [{ accepted_seq: 1, cid: events[0]?.cid }], "one position");
       } finally {
         await vault.close();
       }
@@ -335,11 +335,11 @@ export const vaultCases: VaultCase[] = [
         assertEqual(await reset.local.options.get("theme"), { dark: true }, "the options stay");
         assertEqual(await reset.keystore.read(), WRAPPED, "the keystore stays");
         assertEqual(
-          (await all(reset.vault.events.scan())).map((e) => [e.eventId, e.author]),
-          [[event?.eventId, author]],
+          (await all(reset.vault.events.scan())).map((e) => [e.cid, e.author]),
+          [[event?.cid, author]],
           "the event stays, authored as it was"
         );
-        assertEqual(rows(driver, "SELECT accepted_seq, event_id FROM event_positions"), [{ accepted_seq: 1, event_id: event?.eventId }], "the position stays");
+        assertEqual(rows(driver, "SELECT accepted_seq, cid FROM event_positions"), [{ accepted_seq: 1, cid: event?.cid }], "the position stays");
         assertEqual(rows(driver, "SELECT replica_id, store_generation, last_seq FROM store_state"), [{ replica_id: reset.author, store_generation: reset.generation, last_seq: 1 }], "the control row");
         assertBytes((await reset.vault.objects.read(HELLO_CID, 5)) as Uint8Array, HELLO, "the object stays");
         const [next] = await reset.vault.commit([], [draft([HELLO_CID])]);
@@ -347,7 +347,7 @@ export const vaultCases: VaultCase[] = [
         const fresh = await reset.vault.events.changes();
         assertEqual((await all(fresh.events)).length, 2, "the new generation's frontier covers every position");
         // the old identity's event ingested again is a duplicate, not a fork: the replica is another now
-        assertEqual(await reset.ingest([event]), { added: 0, duplicates: 1, conflicts: [], rejected: [] }, "the old event as a duplicate");
+        assertEqual(await reset.ingest([event]), { added: 0, duplicates: 1, rejected: [] }, "the old event as a duplicate");
       } finally {
         await reset.close();
       }
@@ -368,8 +368,8 @@ export const vaultCases: VaultCase[] = [
       const { vault: stopped, driver: reopened } = await reopen(h, target, c.now);
       try {
         assertEqual(stopped.stopped?.name, "DamagedHistory", "stopped by the damage, found by the survey asking makes");
-        assertEqual((await all(stopped.vault.events.scan())).map((e) => e.eventId), [first?.eventId], "the sound event is read; the damaged one is left out");
-        assertEqual((await stopped.vault.events.damaged()).map((d) => d.where), [`events/${second?.eventId}`], "the damage");
+        assertEqual((await all(stopped.vault.events.scan())).map((e) => e.cid), [first?.cid], "the sound event is read; the damaged one is left out");
+        assertEqual((await stopped.vault.events.damaged()).map((d) => d.where), [`events/${second?.cid}`], "the damage");
         await assertRejects(() => stopped.vault.commit([], [draft([HELLO_CID])]), "DamagedHistory", "commit");
         await assertRejects(() => stopped.ingest([foreign]), "DamagedHistory", "ingest");
         await assertRejects(() => stopped.collect(rootsOf), "DamagedHistory", "collect");
@@ -388,7 +388,7 @@ export const vaultCases: VaultCase[] = [
       const inspector = new SqliteVault(openInspector(await h.open(target, "readwrite")), { now: c.now });
       try {
         assertEqual(inspector.writable, false, "an inspector is not writable");
-        assertEqual((await inspector.vault.events.damaged()).map((d) => d.where), [`events/${second?.eventId}`], "the inspector finds the damage");
+        assertEqual((await inspector.vault.events.damaged()).map((d) => d.where), [`events/${second?.cid}`], "the inspector finds the damage");
         assertEqual(await inspector.local.options.get("note"), "still local", "the inspector reads local state");
         await assertRejects(() => inspector.local.options.set("note", "x"), "ReadOnlyVault", "an inspector writes no option");
         await assertRejects(() => inspector.vault.commit([], [draft()]), "ReadOnlyVault", "an inspector commits nothing");
@@ -504,9 +504,9 @@ export const vaultCases: VaultCase[] = [
       try {
         const events = await all(again.vault.events.scan());
         assert(events.length === 1 || events.length === 3, `the batch landed whole or not at all: ${events.length} events`);
-        assertEqual(events[0]?.eventId, first?.eventId, "the earlier commit is there");
+        assertEqual(events[0]?.cid, first?.cid, "the earlier commit is there");
         for (const event of events) {
-          for (const root of event.roots) assertEqual(await again.vault.objects.has(root), true, `root ${root} of ${event.eventId}`);
+          for (const root of event.roots) assertEqual(await again.vault.objects.has(root), true, `root ${root} of ${event.cid}`);
         }
         assertEqual(await again.vault.events.damaged(), [], "no damage");
         assertEqual(await again.local.options.get("kept"), true, "the option");

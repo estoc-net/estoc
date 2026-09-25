@@ -191,9 +191,9 @@ function senderOf(fold: VaultFold, channel: Channel): LocalDidEntity {
   return entity;
 }
 
-type EffectFields = Pick<MessageOut, "executionId" | "effectType" | "effectKey" | "sourceEventId" | "rotationEventId">;
+type EffectFields = Pick<MessageOut, "executionId" | "effectType" | "effectKey" | "sourceEventCid" | "rotationEventCid">;
 
-const LOCAL: EffectFields = { executionId: null, effectType: null, effectKey: null, sourceEventId: null, rotationEventId: null };
+const LOCAL: EffectFields = { executionId: null, effectType: null, effectKey: null, sourceEventCid: null, rotationEventCid: null };
 
 function intentOf(messageId: MessageId, content: Content, ack: readonly string[], effect: EffectFields): { fields: IntentFields; objects: CommitObject[]; roots: readonly Cid[] } {
   const stored = storeMessage(content.body, content.attachments);
@@ -239,7 +239,7 @@ export interface Effect {
   source: Source;
   effectType: string;
   channel: Channel;
-  rotationEventId?: EventReference<"did.rotationSelected"> | null;
+  rotationEventCid?: EventReference<"did.rotationSelected"> | null;
 }
 
 /** The content of an automatic effect: as a send's, with the ACK targets the response algorithm froze. */
@@ -253,9 +253,9 @@ export interface EffectContent extends Content {
  * no source, naming the decision it announces. The caller has looked
  * the decision's notification up first.
  */
-export function manualNotificationDraft(fold: VaultFold, messageId: MessageId, channel: Channel, content: EffectContent, rotationEventId: EventReference<"did.rotationSelected">): { draft: VaultDraft<"message.out">; objects: CommitObject[] } {
+export function manualNotificationDraft(fold: VaultFold, messageId: MessageId, channel: Channel, content: EffectContent, rotationEventCid: EventReference<"did.rotationSelected">): { draft: VaultDraft<"message.out">; objects: CommitObject[] } {
   const sender = senderOf(fold, channel);
-  const { fields, objects } = intentOf(messageId, content, content.ack ?? [], { ...LOCAL, rotationEventId });
+  const { fields, objects } = intentOf(messageId, content, content.ack ?? [], { ...LOCAL, rotationEventCid });
   const data: MessageOut = { ...fields, senderDidId: sender.didId, recipientDid: channel.peerDid };
   return { draft: vaultDraft("message.out", data), objects };
 }
@@ -279,8 +279,8 @@ export function automaticDraft(fold: VaultFold, effect: Effect, content: EffectC
     executionId: tuple.executionId,
     effectType: tuple.effectType,
     effectKey: tuple.effectKey,
-    sourceEventId: effect.source.event.eventId as EventReference<"message.in">,
-    rotationEventId: effect.rotationEventId ?? null,
+    sourceEventCid: effect.source.event.cid as EventReference<"message.in">,
+    rotationEventCid: effect.rotationEventCid ?? null,
   });
   const data: MessageOut = { ...fields, senderDidId: sender.didId, recipientDid: effect.channel.peerDid };
   return { ...tuple, existing: null, draft: vaultDraft("message.out", data), objects };

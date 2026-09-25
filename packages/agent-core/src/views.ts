@@ -56,8 +56,8 @@ export interface Manual extends Record<ManualEntry, unknown> {
   cancel(messageId: MessageId): Promise<Cancelled>;
   retry(messageId: MessageId): Promise<Dispatched>;
   completeResponse(executionId: ExecutionId, effectType: string): Promise<EffectOutcome>;
-  completeNotification(rotationEventId: EventReference<"did.rotationSelected">): Promise<EffectOutcome>;
-  rotate(target: Omit<RotationTarget, "sourceEventId">, successor?: Pick<RotateOptions, "routeId" | "didId">): Promise<Rotated>;
+  completeNotification(rotationEventCid: EventReference<"did.rotationSelected">): Promise<EffectOutcome>;
+  rotate(target: Omit<RotationTarget, "sourceEventCid">, successor?: Pick<RotateOptions, "routeId" | "didId">): Promise<Rotated>;
 }
 
 export function manualProcedures(runtime: VaultRuntime, keys: Keys, dispatcher: Dispatcher, options: ManualOptions = {}): Manual {
@@ -71,7 +71,7 @@ export function manualProcedures(runtime: VaultRuntime, keys: Keys, dispatcher: 
     cancel: (messageId) => dispatcher.cancel(messageId),
     retry: (messageId) => dispatcher.retry(messageId),
     completeResponse: (executionId, effectType) => completeResponse(runtime, keys, executionId, effectType, { ...options, dispatch }),
-    completeNotification: (rotationEventId) => completeNotification(runtime, keys, rotationEventId, { now, trace, dispatch }),
-    rotate: ({ localDidId, peerDid }, successor = {}) => rotate(runtime, keys, { localDidId, peerDid, sourceEventId: null }, { ...successor, now, trace, dispatch }),
+    completeNotification: (rotationEventCid) => completeNotification(runtime, keys, rotationEventCid, { now, trace, dispatch }),
+    rotate: ({ localDidId, peerDid }, successor = {}) => rotate(runtime, keys, { localDidId, peerDid, sourceEventCid: null }, { ...successor, now, trace, dispatch }),
   };
 }

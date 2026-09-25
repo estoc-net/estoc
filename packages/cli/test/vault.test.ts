@@ -82,8 +82,8 @@ describe("initVault", () => {
     const root = path.join(base, "v");
     const { vault, did } = await initVault(root, "v", PASSPHRASE);
     const db = new DatabaseSync(path.join(vault.dir, "vault.sqlite"));
-    const { event_id: eventId, canonical } = db.prepare("SELECT event_id, canonical FROM events LIMIT 1").get() as { event_id: string; canonical: Uint8Array };
-    db.prepare("UPDATE events SET canonical = ? WHERE event_id = ?").run(canonical.slice(0, -3), eventId);
+    const { cid, canonical } = db.prepare("SELECT cid, canonical FROM events LIMIT 1").get() as { cid: string; canonical: Uint8Array };
+    db.prepare("UPDATE events SET canonical = ? WHERE cid = ?").run(canonical.slice(0, -3), cid);
     db.close();
 
     const damaged = expect.stringMatching(/^events\/.* is damaged/);

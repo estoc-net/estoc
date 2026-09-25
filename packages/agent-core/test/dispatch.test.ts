@@ -270,7 +270,7 @@ describe("dispatch to a direct endpoint", () => {
     if (packaged.outcome !== "prepared") throw new Error(`not prepared: ${JSON.stringify(packaged)}`);
     const events: VaultEvent[] = [];
     for await (const event of alice.runtime.vault.events.scan()) events.push(event as VaultEvent);
-    const partial = events.filter((event) => event.eventId !== packaged.resolved.eventId);
+    const partial = events.filter((event) => event.cid !== packaged.resolved.cid);
     const copy = await createVault(memoryDriver(), { seedKey: alice.seedKey, wrapped: alice.keystore, label: "without the resolution", now: ticking() });
     const ingested = await copy.runtime.locked((held) =>
       held.ingest(partial, async (stage) => {

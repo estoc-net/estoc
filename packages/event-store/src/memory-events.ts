@@ -1,36 +1,36 @@
 /**
- * The version-3 event store as a map in memory: the reference for the interface's
+ * The version-4 event store as a map in memory: the reference for the interface's
  * semantics, what the vault folds are tested on, and the store `eventStoreSuite` is
  * first run against. Nothing persists, so the process-durable half of the store's
- * promise is vacuous here; `damaged()` and `conflicting()` are empty by construction,
- * as a database's are. Every event held — appended or ingested — is kept in the form
- * its canonical bytes parse to and frozen, so what is handed out is what was accepted,
- * the same from every store.
+ * promise is vacuous here; `damaged()` is empty by construction, as a sound
+ * database's is. Every event held — appended or ingested — is kept in the form
+ * its canonical bytes parse to, under the CID those bytes hash to, and frozen, so
+ * what is handed out is what was accepted, the same from every store.
  */
 
 import { v7 } from "uuid";
 
 import { BadToken, ForkedAuthor } from "./errors.js";
 import {
+  canonicalEnvelope,
+  canonicalEvent,
+  checkFilter,
   compareEvents,
   matches,
+  sampleAt,
   validateDraft,
-  validateEvent,
   type AuthorId,
   type ChangeToken,
-  type Conflict,
   type Damaged,
   type Draft,
   type Event,
-  type EventId,
+  type EventCid,
   type EventStore,
   type EventTally,
   type Filter,
   type Ingested,
 } from "./event.js";
-import { canonicalText, parseStrict, utf8Length } from "./jcs.js";
 import { deepFreeze, type JsonObject } from "./json.js";
-import { mint } from "./mint.js";
 
 export interface MemoryEventStoreOptions {
   /** the author this store appends as; a fresh UUIDv7 when left out */
@@ -40,24 +40,18 @@ export interface MemoryEventStoreOptions {
 }
 
 /** What one `ingest` read before taking the lock: each input either as an accepted event would be held, or rejected. */
-type Read = { held: Held } | { rejected: { value: unknown; error: string } };
-
-/** One accepted event and the canonical text it is equal by. */
-interface Held {
-  event: Event;
-  text: string;
-}
+type Read = { held: Event; bytes: number } | { rejected: { value: unknown; error: string } };
 
 export class MemoryEventStore implements EventStore {
   readonly author: AuthorId;
   /** the store generation its tokens name: this instance, and no other, so minted here and never given */
   readonly generation: string;
   private readonly now: () => number;
-  /** every event held, by `eventId` */
-  private readonly held = new Map<EventId, Held>();
+  /** every event held, by CID */
+  private readonly held = new Map<EventCid, Event>();
   /** the same events in the order they were accepted; an index into it is what a token names */
   private readonly accepted: Event[] = [];
-  /** the UTF-8 length of every held canonical text, summed as each is accepted: what `tally` reports without encoding one */
+  /** the length of every held canonical byte string, summed as each is accepted: what `tally` reports without encoding one */
   private bytes = 0;
   /** writes run one at a time: the vault's writer lock, as far as one store in memory needs it */
   private chain: Promise<unknown> = Promise.resolve();
@@ -81,37 +75,43 @@ export class MemoryEventStore implements EventStore {
 
   /**
    * `drafts` appended as one batch; `publish`, when given, runs in the
-   * same synchronous step, after the batch is minted and before any of
-   * it is accepted: what it lands and the events land together. A throw
-   * from the clock, the generator or `publish` accepts no event, and
-   * undoes nothing `publish` did before throwing — so `publish` must
-   * finish synchronously and leave nothing visible when it throws. How
-   * the vault in memory publishes a commit's objects with its events.
+   * same synchronous step, after the batch is hashed and classified and
+   * before any of it is accepted, with how many events are new: what it
+   * lands and the events land together. A throw from the clock, the
+   * hashing or `publish` accepts no event, and undoes nothing `publish`
+   * did before throwing — so `publish` must finish synchronously and
+   * leave nothing visible when it throws. How the vault in memory
+   * publishes a commit's objects with its events.
    */
-  async appendAll<D extends JsonObject>(drafts: Draft<D>[], publish?: () => void): Promise<Event<D>[]> {
+  async appendAll<D extends JsonObject>(drafts: Draft<D>[], publish?: (adding: number) => void): Promise<Event<D>[]> {
     const clean = Array.from(drafts, (draft) => validateDraft(draft)); // every index visited, a hole refused as a draft that is not an object
     if (clean.length === 0 && publish === undefined) return [];
     return this.serialise(() => {
-      // One clock reading and one `at` for the batch. Every event of
+      // One clock reading and one `at` for the batch. Every envelope of
       // the batch is brought to the form its canonical bytes parse to
-      // before any is accepted, so what append returns is what scan
-      // and another store's ingest hand out.
-      const { at, eventIds } = mint(clean.length, this.now);
-      const held = clean.map((draft, i) =>
-        canonical({ eventId: eventIds[i], at, author: this.author, type: draft.type, roots: draft.roots, data: draft.data })
-      );
-      publish?.();
-      return held.map((h) => this.accept(h.event, h.text)) as Event<D>[];
+      // and hashed before any is accepted; one already held, or equal
+      // to an earlier draft's, is answered with the event held.
+      const { at } = sampleAt(this.now);
+      const staged = new Map<EventCid, { event: Event; bytes: number }>();
+      const out = clean.map((draft) => {
+        const { event, bytes } = canonicalEnvelope({ at, author: this.author, type: draft.type, roots: draft.roots, data: draft.data });
+        const have = this.held.get(event.cid) ?? staged.get(event.cid)?.event;
+        if (have !== undefined) return have;
+        staged.set(event.cid, { event, bytes: bytes.length });
+        return event;
+      });
+      publish?.(staged.size);
+      for (const { event, bytes } of staged.values()) this.accept(event, bytes);
+      return out as Event<D>[];
     });
   }
 
   /** Add an event this store does not hold: it is frozen and, from here on, what `scan` hands out. */
-  private accept(event: Event, text: string): Event {
+  private accept(event: Event, bytes: number): void {
     deepFreeze(event);
-    this.held.set(event.eventId, { event, text });
+    this.held.set(event.cid, event);
     this.accepted.push(event);
-    this.bytes += utf8Length(text);
-    return event;
+    this.bytes += bytes;
   }
 
   /**
@@ -121,23 +121,25 @@ export class MemoryEventStore implements EventStore {
    * with them, and a throw from it accepts none.
    */
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>, publish?: (adding: number) => void): Promise<Ingested> {
-    // Read everything first: validation and canonical form are
-    // the input's own and need no lock. Then, under the writer lock,
-    // classify each input against what is held — duplicate, conflict,
-    // new — in input order, check for a fork, and only then accept; so the
-    // outcome names what was actually held when the decision was made,
-    // and a write that lands while the input is still being read is seen.
+    // Read everything first: validation, canonical form and the CID
+    // check are the input's own and need no lock. Then, under the
+    // writer lock, classify each input against what is held —
+    // duplicate or new — in input order, check for a fork, and only
+    // then accept; so the outcome names what was actually held when
+    // the decision was made, and a write that lands while the input
+    // is still being read is seen.
     const read: Read[] = [];
     for await (const value of events) {
       try {
-        read.push({ held: canonical(value) });
+        const { event, bytes } = canonicalEvent(value);
+        read.push({ held: event, bytes: bytes.length });
       } catch (err) {
         read.push({ rejected: { value, error: err instanceof Error ? err.message : String(err) } });
       }
     }
     return this.serialise(() => {
-      const outcome: Ingested = { added: 0, duplicates: 0, conflicts: [], rejected: [] };
-      const staged = new Map<EventId, Held>();
+      const outcome: Ingested = { added: 0, duplicates: 0, rejected: [] };
+      const staged = new Map<EventCid, { held: Event; bytes: number }>();
       const forked: Event[] = [];
       for (const item of read) {
         if ("rejected" in item) {
@@ -145,26 +147,20 @@ export class MemoryEventStore implements EventStore {
           continue;
         }
         const incoming = item.held;
-        const have = this.held.get(incoming.event.eventId) ?? staged.get(incoming.event.eventId);
-        if (have !== undefined) {
-          if (have.text === incoming.text) {
-            outcome.duplicates += 1;
-          } else {
-            outcome.conflicts.push({ eventId: incoming.event.eventId, kept: have.event, rejected: incoming.event });
-            if (incoming.event.author === this.author) forked.push(incoming.event);
-          }
+        if (this.held.has(incoming.cid) || staged.has(incoming.cid)) {
+          outcome.duplicates += 1;
           continue;
         }
-        if (incoming.event.author === this.author) {
-          forked.push(incoming.event);
+        if (incoming.author === this.author) {
+          forked.push(incoming);
           continue;
         }
-        staged.set(incoming.event.eventId, incoming);
+        staged.set(incoming.cid, item);
       }
       if (forked.length > 0) throw new ForkedAuthor(this.author, forked);
       publish?.(staged.size);
-      for (const incoming of staged.values()) {
-        this.accept(incoming.event, incoming.text);
+      for (const { held, bytes } of staged.values()) {
+        this.accept(held, bytes);
         outcome.added += 1;
       }
       return outcome;
@@ -172,23 +168,25 @@ export class MemoryEventStore implements EventStore {
   }
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
+    checkFilter(filter);
     // The store sorts, over a snapshot: a write during the walk is not yielded.
-    const events = [...this.held.values()].map((held) => held.event).sort(compareEvents);
+    const events = [...this.held.values()].sort(compareEvents);
     for (const event of events) {
       if (matches(event, filter)) yield event;
     }
   }
 
   async changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }> {
+    checkFilter(filter);
     const to = this.accepted.length;
     const from = since === undefined ? 0 : this.place(since);
     const events = this.accepted.slice(from, to).filter((event) => matches(event, filter));
     return { token: this.token(to), events: iterate(events) };
   }
 
-  /** The frontier at `seq`: this generation, the position, and the ID accepted last before it, which names the event set. */
+  /** The frontier at `seq`: this generation, the position, and the CID accepted last before it, which names the event set. */
   private token(seq: number): ChangeToken {
-    return JSON.stringify({ generation: this.generation, seq, last: seq === 0 ? null : this.accepted[seq - 1]?.eventId });
+    return JSON.stringify({ generation: this.generation, seq, last: seq === 0 ? null : this.accepted[seq - 1]?.cid });
   }
 
   /** The position a token names, or a throw: another generation's, malformed, past what is held, or of another event set. */
@@ -207,7 +205,7 @@ export class MemoryEventStore implements EventStore {
       throw new BadToken("token names a position this store does not hold");
     }
     const last = (parsed as { last?: unknown }).last;
-    if (last !== (seq === 0 ? null : this.accepted[seq - 1]?.eventId)) {
+    if (last !== (seq === 0 ? null : this.accepted[seq - 1]?.cid)) {
       throw new BadToken("token names an event set this store does not hold");
     }
     return seq;
@@ -220,22 +218,6 @@ export class MemoryEventStore implements EventStore {
   async tally(): Promise<EventTally> {
     return { events: this.held.size, bytes: this.bytes };
   }
-
-  async conflicting(): Promise<Conflict[]> {
-    return [];
-  }
-}
-
-/**
- * A value as an accepted event would be held: validated, then the form
- * its canonical bytes parse to — member order, `-0` and all — with that
- * canonical text, so two serializations of one event are one and a
- * local append reads back as its ingest elsewhere would. Throws
- * `InvalidEvent` or `InvalidJson`.
- */
-function canonical(value: unknown): Held {
-  const text = canonicalText(validateEvent(value));
-  return { event: parseStrict(text) as Event, text };
 }
 
 async function* iterate<T>(items: T[]): AsyncIterable<T> {

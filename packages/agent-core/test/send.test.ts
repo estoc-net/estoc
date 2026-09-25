@@ -65,7 +65,7 @@ async function rotated(alice: DirectParty, peer: DirectParty): Promise<{ next: D
   const routeId = (await fold(alice)).routes.dids.get(ALICE)!.created!.boundRouteId;
   const { minted } = await createDid(alice.runtime, alice.keys, routeId, ALICE_NEXT);
   const fromPrior = await signFromPrior(alice.keys, { didId: ALICE, longFormDid: alice.longFormDid }, minted.longFormDid, 1_757_700_000);
-  await alice.runtime.vault.commit([], [vaultDraft("did.rotationSelected", { fromDidId: ALICE, peerDid: peer.did, toDidId: ALICE_NEXT, sourceEventId: null, fromPrior })]);
+  await alice.runtime.vault.commit([], [vaultDraft("did.rotationSelected", { fromDidId: ALICE, peerDid: peer.did, toDidId: ALICE_NEXT, sourceEventCid: null, fromPrior })]);
   return { next: minted.did, longFormDid: minted.longFormDid };
 }
 
@@ -97,7 +97,7 @@ describe("send to a channel", () => {
     expect(sent).toMatchObject({ messageId: MESSAGE, channel: toBob, senderDidId: ALICE, existed: false });
     const { data } = sent.intent;
     expect(data).toMatchObject({ messageId: MESSAGE, senderDidId: ALICE, recipientDid: bob.longFormDid, msgType: BASIC_MESSAGE, thid: "thread-1", pthid: null, createdTime: 1_000, expiresTime: 2_000, pleaseAck: [""], ack: [], headers: { lang: "en" } });
-    expect([data.executionId, data.effectType, data.effectKey, data.sourceEventId, data.rotationEventId]).toEqual([null, null, null, null, null]);
+    expect([data.executionId, data.effectType, data.effectKey, data.sourceEventCid, data.rotationEventCid]).toEqual([null, null, null, null, null]);
     expect(data.attachmentCids).toHaveLength(2);
     expect(sent.intent.roots).toEqual([data.bodyCid, ...data.attachmentCids]);
 
@@ -131,7 +131,7 @@ describe("send to a channel", () => {
     const sent = await send(alice.runtime, alice.keys, { channel: toBob }, HELLO, { messageId: MESSAGE });
     const again = await send(alice.runtime, alice.keys, { channel: { localDid: alice.longFormDid, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
     expect(again.existed).toBe(true);
-    expect(again.intent.eventId).toBe(sent.intent.eventId);
+    expect(again.intent.cid).toBe(sent.intent.cid);
     await expect(send(alice.runtime, alice.keys, { channel: toBob }, { ...HELLO, body: { content: "other" } }, { messageId: MESSAGE })).rejects.toBeInstanceOf(EntityConflict);
     await expect(send(alice.runtime, alice.keys, { channel: toBob, recipientDid: bob.longFormDid }, HELLO, { messageId: MESSAGE })).rejects.toBeInstanceOf(EntityConflict);
     await expect(send(alice.runtime, alice.keys, { channel: toCarol }, HELLO, { messageId: MESSAGE })).rejects.toBeInstanceOf(EntityConflict);
@@ -169,7 +169,7 @@ describe("send to a channel", () => {
     expect(explicit.channel).toEqual(toBob);
     const successor = await send(alice.runtime, alice.keys, { channel: channelOf(next, bob.did) }, HELLO);
     expect(successor).toMatchObject({ senderDidId: ALICE_NEXT, channel: channelOf(next, bob.did) });
-    expect((await send(alice.runtime, alice.keys, { channel: toBob }, HELLO, { messageId: MESSAGE })).intent.eventId).toBe(before.intent.eventId);
+    expect((await send(alice.runtime, alice.keys, { channel: toBob }, HELLO, { messageId: MESSAGE })).intent.cid).toBe(before.intent.cid);
     await closeAll(alice, bob, carol);
   });
 });
@@ -215,11 +215,11 @@ describe("send to a contact", () => {
 describe("automatic effects", () => {
   it("drafts the intent under the ID its tuple derives, in the response channel, and hands back the one already recorded as it is, whatever the channel would be now", async () => {
     const { alice, bob, carol, toBob } = await parties();
-    const sourceEventId = await received(alice, bob, "wire-1", { type: BASIC_MESSAGE, body: { content: "hi" }, please_ack: [""], created_time: 1_000 });
+    const sourceEventCid = await received(alice, bob, "wire-1", { type: BASIC_MESSAGE, body: { content: "hi" }, please_ack: [""], created_time: 1_000 });
     let f = await fold(alice);
-    const execution = f.inbound.ofSource(sourceEventId)!;
+    const execution = f.inbound.ofSource(sourceEventCid)!;
     expect(execution.status).toEqual({ status: "complete" });
-    const source = f.channels.sources.get(sourceEventId)!;
+    const source = f.channels.sources.get(sourceEventCid)!;
     expect(responseChannel(f, execution)).toEqual({ status: "selected", channel: toBob });
     expect(unfinishedWork(f).responses.map((r) => r.effectType)).toEqual([PURE_ACK_EFFECT]);
 
@@ -228,7 +228,7 @@ describe("automatic effects", () => {
     const key = effectKey(execution.id, PURE_ACK_EFFECT);
     expect(drafted).toMatchObject({ executionId: execution.id, effectType: PURE_ACK_EFFECT, effectKey: key, messageId: automaticMessageId(key), existing: null });
     if (drafted.existing !== null) throw new Error("drafted");
-    expect(drafted.draft.data).toMatchObject({ messageId: automaticMessageId(key), senderDidId: ALICE, recipientDid: bob.did, msgType: EMPTY_MESSAGE_TYPE, thid: "wire-1", pthid: null, createdTime: 1_000, expiresTime: null, pleaseAck: null, ack: ["wire-1"], executionId: execution.id, effectType: PURE_ACK_EFFECT, effectKey: key, sourceEventId, rotationEventId: null });
+    expect(drafted.draft.data).toMatchObject({ messageId: automaticMessageId(key), senderDidId: ALICE, recipientDid: bob.did, msgType: EMPTY_MESSAGE_TYPE, thid: "wire-1", pthid: null, createdTime: 1_000, expiresTime: null, pleaseAck: null, ack: ["wire-1"], executionId: execution.id, effectType: PURE_ACK_EFFECT, effectKey: key, sourceEventCid, rotationEventCid: null });
     expect(drafted.objects.map((object) => object.cid)).toEqual([drafted.draft.data.bodyCid]);
 
     await alice.runtime.vault.commit(drafted.objects, [drafted.draft]);
@@ -241,19 +241,19 @@ describe("automatic effects", () => {
     expect(unfinishedWork(f).responses).toEqual([]);
     await retireDid(alice.runtime, alice.keys, ALICE, "user");
     f = await fold(alice);
-    const again = automaticDraft(f, { ...effect, execution: f.inbound.ofSource(sourceEventId)!, source: f.channels.sources.get(sourceEventId)! }, { type: EMPTY_MESSAGE_TYPE, body: { other: true }, ack: ["wire-1"] });
+    const again = automaticDraft(f, { ...effect, execution: f.inbound.ofSource(sourceEventCid)!, source: f.channels.sources.get(sourceEventCid)! }, { type: EMPTY_MESSAGE_TYPE, body: { other: true }, ack: ["wire-1"] });
     expect(again).toMatchObject({ messageId: drafted.messageId, existing: { messageId: drafted.messageId }, draft: null, objects: null });
     await closeAll(alice, bob, carol);
   });
 
   it("refuses a response channel whose local DID cannot send", async () => {
     const { alice, bob, carol, toBob } = await parties();
-    const sourceEventId = await received(alice, bob, "wire-2", { type: BASIC_MESSAGE, body: { content: "hi" }, please_ack: [""] });
+    const sourceEventCid = await received(alice, bob, "wire-2", { type: BASIC_MESSAGE, body: { content: "hi" }, please_ack: [""] });
     await retireDid(alice.runtime, alice.keys, ALICE, "user");
     const f = await fold(alice);
-    const execution = f.inbound.ofSource(sourceEventId)!;
+    const execution = f.inbound.ofSource(sourceEventCid)!;
     expect(responseChannel(f, execution).status).toBe("none");
-    expect(() => automaticDraft(f, { execution, source: f.channels.sources.get(sourceEventId)!, effectType: PURE_ACK_EFFECT, channel: toBob }, { type: EMPTY_MESSAGE_TYPE, body: {}, ack: ["wire-2"] })).toThrow(Unusable);
+    expect(() => automaticDraft(f, { execution, source: f.channels.sources.get(sourceEventCid)!, effectType: PURE_ACK_EFFECT, channel: toBob }, { type: EMPTY_MESSAGE_TYPE, body: {}, ack: ["wire-2"] })).toThrow(Unusable);
     await closeAll(alice, bob, carol);
   });
 });

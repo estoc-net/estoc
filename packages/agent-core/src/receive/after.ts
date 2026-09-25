@@ -9,7 +9,7 @@
  * eligible receipt, and a peer's acknowledgement of an outbound — in
  * one commit under the lock, over the fold read there, for the whole
  * fold: `consumed` and `acknowledged` hold whatever this pass
- * recorded, an earlier observation's included, while `eventId` only
+ * recorded, an earlier observation's included, while `cid` only
  * selects the proof reported and, when it did not verify, left as a
  * diagnostic in the trace. Nothing here is sent. An automatic reply is
  * an operation's effect, decided elsewhere over the same fold, and
@@ -39,10 +39,10 @@ export interface AfterReceiptOptions {
   trace?: AgentTrace;
 }
 
-export async function afterReceipt(runtime: VaultRuntime, keys: Keys, eventId: EventReference<"message.in">, options: AfterReceiptOptions = {}): Promise<AfterReceipt> {
+export async function afterReceipt(runtime: VaultRuntime, keys: Keys, cid: EventReference<"message.in">, options: AfterReceiptOptions = {}): Promise<AfterReceipt> {
   const { fold, ...owed } = await pass(runtime, keys);
-  const proof = fold.continuity.status(eventId);
-  if (proof.status !== "verified" && proof.status !== "not-present") await note(options.trace ?? null, { stream: "diag", what: "proof", data: { eventId, ...proof } });
+  const proof = fold.continuity.status(cid);
+  if (proof.status !== "verified" && proof.status !== "not-present") await note(options.trace ?? null, { stream: "diag", what: "proof", data: { cid, ...proof } });
   return { proof, ...owed };
 }
 

@@ -48,14 +48,14 @@ async function act(action: () => Promise<void>) {
       a reply ({{ response.effectType }}) to {{ shortDid(response.channel.peerDid) }}
       <button v-if="response.entries.includes('completeResponse')" class="link-quiet" :disabled="busy || closed" @click="act(() => completeResponse(response.executionId, response.effectType))">give it</button>
     </p>
-    <p v-for="notification in pending.missingNotifications" :key="notification.rotationEventId" class="status-line" data-missing-notification>
+    <p v-for="notification in pending.missingNotifications" :key="notification.rotationEventCid" class="status-line" data-missing-notification>
       {{ shortDid(notification.channel.peerDid) }} was never told of your new DID
-      <button v-if="notification.entries.includes('completeNotification')" class="link-quiet" :disabled="busy || closed" @click="act(() => completeNotification(notification.rotationEventId))">tell them</button>
+      <button v-if="notification.entries.includes('completeNotification')" class="link-quiet" :disabled="busy || closed" @click="act(() => completeNotification(notification.rotationEventCid))">tell them</button>
     </p>
-    <p v-for="conflict in pending.notificationConflicts" :key="conflict.rotationEventId" class="status-line error">
+    <p v-for="conflict in pending.notificationConflicts" :key="conflict.rotationEventCid" class="status-line error">
       {{ conflict.messageIds.length }} notices announce one rotation and disagree: none is sent
     </p>
-    <p v-for="proof in pending.pendingProofs" :key="proof.sourceEventId" class="status-line" :title="proof.messageId">
+    <p v-for="proof in pending.pendingProofs" :key="proof.sourceEventCid" class="status-line" :title="proof.messageId">
       a new address<template v-if="proof.channel"> of {{ shortDid(proof.channel.peerDid) }}</template> waits for the document that proves it
     </p>
     <p v-if="failure" class="status-line error">{{ failure }}</p>

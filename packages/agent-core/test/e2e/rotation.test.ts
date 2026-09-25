@@ -44,7 +44,7 @@ describe("rotation between two agents", () => {
     expect(address).toMatchObject({ outcome: "rotated", rotation: { existed: false, notification: { effectType: ROTATION_NOTIFICATION_EFFECT, outcome: "created", action: { kind: "initial" }, dispatched: { outcome: "submitted" } } } });
     if (address.outcome !== "rotated") throw new Error("unreachable");
     const a1 = didOf(await foldOf(alice), address.rotation.successor);
-    expect(address.rotation.decision.data).toMatchObject({ fromDidId: ALICE, peerDid: b0, sourceEventId: alice.inbounds[0]!.received.outcome === "received" ? alice.inbounds[0]!.received.eventId : null });
+    expect(address.rotation.decision.data).toMatchObject({ fromDidId: ALICE, peerDid: b0, sourceEventCid: alice.inbounds[0]!.received.outcome === "received" ? alice.inbounds[0]!.received.cid : null });
 
     await until("bob has followed the notification", () => bob.inbounds.length === 1);
     expect(bob.inbounds[0]).toMatchObject({ received: { outcome: "received", live: true }, after: { proof: { status: "verified" } }, reacted: { effects: [{ outcome: "created", dispatched: { outcome: "submitted" } }] }, address: { outcome: "none" } });
@@ -129,7 +129,7 @@ describe("rotation between two agents", () => {
       expect(fold.continuity.conflicts).toEqual([]);
       expect(links(fold).every(([, , , verified]) => verified === "true")).toBe(true);
       for (const local of mine) for (const peer of theirs) expect(fold.continuity.head(channelOf(local, peer))).toEqual(channelOf(mine[1]!, theirs[1]!));
-      expect([...fold.outbound.outbounds.values()].find((output) => output.intents[0]!.data.rotationEventId === decision.decision.eventId)).toMatchObject({ acknowledged: true });
+      expect([...fold.outbound.outbounds.values()].find((output) => output.intents[0]!.data.rotationEventCid === decision.decision.cid)).toMatchObject({ acknowledged: true });
     }
 
     // Bob acknowledged alice's notification from the address it reached, so nothing from his successor has reached hers yet: the join's first package still carries her proof.

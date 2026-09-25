@@ -20,7 +20,7 @@
 
 import { didKeyName } from "../ids.js";
 import type { VaultEvent } from "../schema.js";
-import type { Did, DidId, EventId } from "../types.js";
+import type { Did, DidId, EventCid } from "../types.js";
 import type { ChannelEvidence, Source } from "./channels.js";
 import { compareReceiptKeys, receiptOrderKey } from "./channels.js";
 import type { Continuity } from "./continuity.js";
@@ -93,9 +93,9 @@ export interface Invitation {
 
 export interface InvitationFold {
   /** each one-use OOB disclosure, by its event */
-  readonly invitations: ReadonlyMap<EventId, Invitation>;
+  readonly invitations: ReadonlyMap<EventCid, Invitation>;
   /** every consumption record, by its event, whatever it names */
-  readonly consumptions: ReadonlyMap<EventId, Consumption>;
+  readonly consumptions: ReadonlyMap<EventCid, Consumption>;
   /** the one-use invitations disclosed under one ID, in canonical order; any other OOB disclosure of the ID conflicts them too */
   under(oobId: string): readonly Invitation[];
 }
@@ -106,26 +106,26 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold, evidence:
     (event) => event.data.oobId!
   );
   const disclosures = set.of("did.disclosed").filter(isOneUseInvitation);
-  const records = groupBy(set.of("invitation.consumed"), (event) => event.data.disclosureEventId as EventId);
+  const records = groupBy(set.of("invitation.consumed"), (event) => event.data.disclosureEventCid as EventCid);
   const receipts = groupBy(
     set.of("message.in").filter((event) => event.data.fromPrior === null && event.data.pthid !== null && !erasures.has(event.data.messageId)),
     (event) => `${event.data.localKeyName} ${event.data.pthid}`
   );
 
-  const consumptions = new Map<EventId, Consumption>();
-  for (const event of set.of("invitation.consumed")) consumptions.set(event.eventId, { event, status: consumptionStatus(event, set, evidence, continuity) });
+  const consumptions = new Map<EventCid, Consumption>();
+  for (const event of set.of("invitation.consumed")) consumptions.set(event.cid, { event, status: consumptionStatus(event, set, evidence, continuity) });
 
-  const invitations = new Map<EventId, Invitation>();
+  const invitations = new Map<EventCid, Invitation>();
   for (const disclosure of disclosures) {
     const oobId = disclosure.data.oobId!;
     const entity = routes.dids.get(disclosure.data.didId);
     const lifecycle = lifecycleOf(entity, routes);
-    const own = (records.get(disclosure.eventId) ?? []).map((event) => consumptions.get(event.eventId)!);
+    const own = (records.get(disclosure.cid) ?? []).map((event) => consumptions.get(event.cid)!);
     const candidates = (receipts.get(`${didKeyName(disclosure.data.didId, "key-agreement")} ${oobId}`) ?? [])
       .sort((a, b) => compareReceiptKeys(receiptOrderKey(a), receiptOrderKey(b)))
-      .map((event) => candidateOf(evidence.sources.get(event.eventId)!, lifecycle, evidence, continuity, inbound));
+      .map((event) => candidateOf(evidence.sources.get(event.cid)!, lifecycle, evidence, continuity, inbound));
     const consumer = consumerOf(own);
-    invitations.set(disclosure.eventId, {
+    invitations.set(disclosure.cid, {
       disclosure,
       oobId,
       didId: disclosure.data.didId,
@@ -139,7 +139,7 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold, evidence:
   return {
     invitations,
     consumptions,
-    under: (oobId) => (byOobId.get(oobId) ?? []).filter(isOneUseInvitation).map((event) => invitations.get(event.eventId)!),
+    under: (oobId) => (byOobId.get(oobId) ?? []).filter(isOneUseInvitation).map((event) => invitations.get(event.cid)!),
   };
 }
 
@@ -149,26 +149,26 @@ function consumptionStatus(event: VaultEvent<"invitation.consumed">, set: VaultE
   const invalid = (because: string): ConsumptionStatus => ({ status: "invalid", because });
   const missing: string[] = [];
 
-  const disclosed = set.resolve(event.data.disclosureEventId, "did.disclosed");
+  const disclosed = set.resolve(event.data.disclosureEventCid, "did.disclosed");
   let disclosure: VaultEvent<"did.disclosed"> | null = null;
   if (disclosed.status === "missing") missing.push("the disclosure it names is not here");
   else if (disclosed.status === "mismatched") return invalid(`the disclosure it names is a ${disclosed.event.type}`);
   else if (!isOneUseInvitation(disclosed.event)) return invalid("the disclosure it names is not a one-use invitation");
   else disclosure = disclosed.event;
 
-  const resolved = set.resolve(event.data.sourceEventId, "message.in");
+  const resolved = set.resolve(event.data.sourceEventCid, "message.in");
   if (resolved.status === "missing") missing.push("the source it names is not here");
   else if (resolved.status === "mismatched") return invalid(`the source it names is a ${resolved.event.type}`);
   else {
-    const source = evidence.sources.get(resolved.event.eventId)!;
+    const source = evidence.sources.get(resolved.event.cid)!;
     const { data } = source.event;
     if (data.fromPrior !== null) return invalid("the source carries a proof");
-    if (data.peerResolutionEventId === null) return invalid("the source is anonymous, in no pair");
+    if (data.peerResolutionEventCid === null) return invalid("the source is anonymous, in no pair");
     if (disclosure !== null) {
       if (data.localKeyName !== didKeyName(disclosure.data.didId, "key-agreement")) return invalid("the source is not at the disclosed DID's key-agreement key");
       if (data.pthid !== disclosure.data.oobId) return invalid("the source's pthid is not the invitation's ID");
     }
-    const witness = continuity.witness(source.event.eventId);
+    const witness = continuity.witness(source.event.cid);
     if (witness.status === "invalid") return invalid(`the source is no complete witness: ${witness.because}`);
     if (witness.status === "conflict") return { status: "conflict", because: `the source is no complete witness: ${witness.because}` };
     if (witness.status === "pending") missing.push(`the source is no complete witness: ${witness.because}`);
@@ -240,9 +240,9 @@ function invitationStatus(consumptions: readonly Consumption[], consumer: Did | 
 function candidateOf(source: Source, lifecycle: Lifecycle, evidence: ChannelEvidence, continuity: Continuity, inbound: InboundFold): Candidate {
   const candidate = (eligibility: Eligibility): Candidate => ({ source, eligibility });
   if (evidence.receipts.affected.has(source.event.data.messageId)) return candidate({ status: "integrity-conflict" });
-  const witness = continuity.witness(source.event.eventId);
+  const witness = continuity.witness(source.event.cid);
   if (witness.status === "invalid" || witness.status === "conflict") return candidate({ status: "invalid", because: witness.because });
-  const execution = inbound.ofSource(source.event.eventId);
+  const execution = inbound.ofSource(source.event.cid);
   if (execution?.status.status === "conflict") return candidate({ status: "invalid", because: `the input is in an intent conflict: ${execution.status.because}` });
   if (lifecycle.ended !== null) return candidate({ status: "refused", because: lifecycle.ended });
   const channel = source.channel;

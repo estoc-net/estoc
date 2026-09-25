@@ -29,7 +29,7 @@ const queuedFor = (mediator: FakeMediator, party: Running): number => mediator.q
 
 const didOf = (fold: VaultFold, didId: DidId): Did => fold.routes.dids.get(didId)!.created!.did;
 
-const eventIds = (fold: VaultFold): string[] => [...fold.set.all()].map((event) => event.eventId);
+const eventIds = (fold: VaultFold): string[] => [...fold.set.all()].map((event) => event.cid);
 
 const outcomes = (fold: VaultFold): [MessageId, string][] => [...fold.outbound.outbounds.values()].map((output) => [output.messageId, output.outcome.status]);
 
@@ -180,8 +180,8 @@ describe("two machines of one vault", () => {
     expect(outcomes(await foldOf(bob))).toEqual([[FIRST, "terminal"]]);
     await until("alice has the message", () => alice.inbounds.length === 1);
 
-    expect(await imported(bob, await snapshotOf(other))).toMatchObject({ added: 1, conflicts: [] });
-    expect(await imported(other, await snapshotOf(bob))).toMatchObject({ added: 1, conflicts: [] });
+    expect(await imported(bob, await snapshotOf(other))).toMatchObject({ added: 1 });
+    expect(await imported(other, await snapshotOf(bob))).toMatchObject({ added: 1 });
     const forwards = forwardsSeen(mediator);
     for (const machine of [bob, other]) {
       const fold = await foldOf(machine);

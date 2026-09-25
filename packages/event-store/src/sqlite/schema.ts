@@ -1,5 +1,5 @@
 /**
- * The version-3 vault's SQLite schema, and the check that a database
+ * The version-4 vault's SQLite schema, and the check that a database
  * holds exactly it. The check is structural — what the tables are, not
  * the SQL they were spelled with — through SQLite's own pragmas, plus a
  * probe for what the pragmas do not tell: a column's collation. Every
@@ -13,7 +13,7 @@ import { decodeText, type SqliteDriver, type SqlRow, type SqlValue } from "./dri
 /** `PRAGMA application_id`: the bytes `ESTC`. */
 export const APPLICATION_ID = 0x45535443;
 /** `PRAGMA user_version`: the SQLite schema this module makes and accepts. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type DatabaseKind = "runtime" | "portable";
 
@@ -21,7 +21,7 @@ const COMMON_DDL = [
   `CREATE TABLE vault_meta (
     singleton     INTEGER PRIMARY KEY CHECK (singleton = 1),
     format        TEXT NOT NULL CHECK (format = 'estoc-sqlite'),
-    vault_version INTEGER NOT NULL CHECK (vault_version = 3),
+    vault_version INTEGER NOT NULL CHECK (vault_version = 4),
     kind          TEXT NOT NULL CHECK (kind IN ('runtime', 'portable')),
     ready         INTEGER NOT NULL CHECK (ready IN (0, 1)),
     anchor        TEXT NOT NULL
@@ -32,7 +32,7 @@ const COMMON_DDL = [
     seed_jwe  BLOB NOT NULL
   ) STRICT`,
   `CREATE TABLE events (
-    event_id  TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
+    cid       TEXT COLLATE BINARY PRIMARY KEY NOT NULL,
     at        TEXT COLLATE BINARY NOT NULL,
     author    TEXT COLLATE BINARY NOT NULL,
     type      TEXT COLLATE BINARY NOT NULL,
@@ -59,7 +59,7 @@ const CONTROL_DDL = [
   ) STRICT`,
   `CREATE TABLE event_positions (
     accepted_seq INTEGER PRIMARY KEY CHECK (accepted_seq > 0),
-    event_id     TEXT NOT NULL UNIQUE REFERENCES events(event_id)
+    cid          TEXT COLLATE BINARY NOT NULL UNIQUE REFERENCES events(cid)
   ) STRICT`,
 ];
 
@@ -144,8 +144,8 @@ const COMMON_TABLES = new Map<string, TableShape>([
   [
     "events",
     {
-      columns: [column("event_id", "TEXT", true, 1), column("at", "TEXT"), column("author", "TEXT"), column("type", "TEXT"), column("canonical", "BLOB")],
-      keys: [key("event_id")],
+      columns: [column("cid", "TEXT", true, 1), column("at", "TEXT"), column("author", "TEXT"), column("type", "TEXT"), column("canonical", "BLOB")],
+      keys: [key("cid")],
       foreignKeys: [],
     },
   ],
@@ -162,7 +162,7 @@ const COMMON_TABLES = new Map<string, TableShape>([
 
 const CONTROL_TABLES = new Map<string, TableShape>([
   ["store_state", { columns: [column("singleton", "INTEGER", false, 1), column("replica_id", "TEXT"), column("store_generation", "TEXT"), column("last_seq", "INTEGER")], keys: [], foreignKeys: [] }],
-  ["event_positions", { columns: [column("accepted_seq", "INTEGER", false, 1), column("event_id", "TEXT")], keys: [key("event_id")], foreignKeys: [reference("event_id", "events", "event_id")] }],
+  ["event_positions", { columns: [column("accepted_seq", "INTEGER", false, 1), column("cid", "TEXT")], keys: [key("cid")], foreignKeys: [reference("cid", "events", "cid")] }],
 ]);
 
 /** A table a runtime may keep beside the schema's: its own local state, or the statistics `ANALYZE` leaves. */
@@ -171,7 +171,7 @@ const RUNTIME_EXTRA_TABLE = /^(local_[a-z0-9_]+|sqlite_stat[1-4])$/;
 /**
  * Checks that the database holds exactly the schema of `kind` — every
  * table of it with the columns, types, collations, keys and references
- * of schema version 1, all `STRICT` — and nothing that is not allowed
+ * of schema version 2, all `STRICT` — and nothing that is not allowed
  * beside it: a portable snapshot has the five common tables and the
  * indexes their constraints made, no more; a runtime has the control
  * tables too and may add indexes, `local_*` tables and `ANALYZE`

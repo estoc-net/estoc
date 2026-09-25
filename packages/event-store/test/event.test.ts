@@ -6,35 +6,50 @@ import {
   MAX_T,
   atOf,
   canonicalEventBytes,
+  canonicalEventText,
   compareEvents,
+  envelopeOf,
+  eventCidOf,
   isAuthorId,
   isCanonicalAt,
-  isEventId,
+  isEventCid,
   isRawCid,
   isUuidv7,
   matches,
-  timestampOf,
+  sampleAt,
   validateDraft,
+  validateEnvelope,
   validateEvent,
   type AuthorId,
   type Cid,
   type Draft,
   type Event,
-  type EventId,
+  type EventCid,
+  type EventEnvelope,
   type JsonObject,
 } from "../src/index.js";
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 const cp = (...units: number[]) => String.fromCharCode(...units);
 
-const base: Event = {
-  eventId: "019b2a46-8b36-75c6-a74b-81a2aa5fb407" as EventId,
+const envelope: EventEnvelope = {
   at: "2026-09-03T15:04:05.123Z",
   author: "019b2a43-4a56-7c0f-862f-194c0c4124a0" as AuthorId,
   type: "contact.petname",
   roots: [],
   data: { contactId: "019b2a45-8381-793f-943c-f5d806fd5ca2", name: "Alice" },
 };
+const base: Event = { ...envelope, cid: eventCidOf(envelope) };
+
+// the specification's worked example
+const EXAMPLE: EventEnvelope = {
+  at: "2026-09-25T00:00:00.000Z",
+  author: "019b0000-0000-7000-8000-000000000001" as AuthorId,
+  type: "example.note",
+  roots: [],
+  data: { text: "hello" },
+};
+const EXAMPLE_CID = "bafkreigwmldn6qzody7iex3vwompw3zkdqihb5jzbpp3npvdod6rdnt5zi";
 
 // the raw DASL CID vectors
 const RAW_HELLO = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq";
@@ -43,7 +58,7 @@ const DRISL_EMPTY_MAP = "bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6
 const DAG_PB = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
 
 describe("identity", () => {
-  it("knows a canonical lowercase UUIDv7", () => {
+  it("knows a canonical lowercase UUIDv7, which names an author", () => {
     expect(isUuidv7("0198f5f0-1234-7abc-8def-0123456789ab")).toBe(true);
     expect(isUuidv7("0198f5f0-1234-7abc-cdef-0123456789ab")).toBe(false); // variant
     expect(isUuidv7("0198f5f0-1234-4abc-8def-0123456789ab")).toBe(false); // v4
@@ -51,15 +66,23 @@ describe("identity", () => {
     expect(isUuidv7("0198f5f012347abc8def0123456789ab")).toBe(false); // no dashes
     expect(isUuidv7("urn:uuid:0198f5f0-1234-7abc-8def-0123456789ab")).toBe(false);
     expect(isUuidv7(7)).toBe(false);
-    expect(isEventId(base.eventId)).toBe(true);
     expect(isAuthorId(base.author)).toBe(true);
+    expect(isEventCid(base.author)).toBe(false);
   });
 
-  it("reads the millisecond a UUIDv7 embeds", () => {
-    expect(timestampOf("00000000-03e8-7000-8000-000000000000")).toBe(1000);
-    expect(timestampOf("ffffffff-ffff-7fff-bfff-ffffffffffff")).toBe(2 ** 48 - 1);
-    expect(timestampOf(base.eventId)).toBe(0x019b2a468b36);
-    expect(() => timestampOf("nope")).toThrow(InvalidEvent);
+  it("an event's CID is the raw DASL CID of its five-field canonical bytes: the specification's example, and nothing else in it", async () => {
+    expect(eventCidOf(EXAMPLE)).toBe(EXAMPLE_CID);
+    expect(await rawCid(canonicalEventBytes(EXAMPLE))).toBe(EXAMPLE_CID);
+    expect(canonicalEventText(EXAMPLE)).toBe('{"at":"2026-09-25T00:00:00.000Z","author":"019b0000-0000-7000-8000-000000000001","data":{"text":"hello"},"roots":[],"type":"example.note"}');
+    expect(isEventCid(EXAMPLE_CID)).toBe(true);
+    // member order and whitespace change nothing; a value does; the CID is not among the bytes
+    const shuffled = JSON.parse('{ "type": "example.note", "data": { "text": "hello" }, "roots": [], "author": "019b0000-0000-7000-8000-000000000001", "at": "2026-09-25T00:00:00.000Z" }') as EventEnvelope;
+    expect(eventCidOf(shuffled)).toBe(EXAMPLE_CID);
+    expect(eventCidOf({ ...EXAMPLE, data: { text: "hello!" } })).not.toBe(EXAMPLE_CID);
+    expect(eventCidOf({ ...EXAMPLE, at: "2026-09-25T00:00:00.001Z" })).not.toBe(EXAMPLE_CID);
+    expect(eventCidOf({ ...EXAMPLE, cid: EXAMPLE_CID } as EventEnvelope)).toBe(EXAMPLE_CID);
+    expect(text(canonicalEventBytes({ ...EXAMPLE, cid: EXAMPLE_CID } as EventEnvelope))).not.toContain(EXAMPLE_CID);
+    expect(envelopeOf({ ...EXAMPLE, cid: EXAMPLE_CID } as EventEnvelope)).toEqual(EXAMPLE);
   });
 
   it("accepts as a root only a canonical raw DASL CID", async () => {
@@ -135,60 +158,100 @@ describe("time", () => {
       expect(isCanonicalAt(atOf(t))).toBe(true);
     }
   });
+
+  it("samples the clock once, truncating to the millisecond, and refuses a reading it cannot spell", () => {
+    expect(sampleAt(() => 1756548000123.9)).toEqual({ t: 1756548000123, at: "2025-08-30T10:00:00.123Z" });
+    expect(sampleAt(() => 0)).toEqual({ t: 0, at: "1970-01-01T00:00:00.000Z" });
+    expect(() => sampleAt(() => -1)).toThrow(RangeError);
+    expect(() => sampleAt(() => MAX_T + 1)).toThrow(RangeError);
+    expect(() => sampleAt(() => NaN)).toThrow(RangeError);
+    expect(() => sampleAt(() => {
+      throw new Error("no clock");
+    })).toThrow("no clock");
+    const { t, at } = sampleAt();
+    expect(isCanonicalAt(at)).toBe(true);
+    expect(Math.abs(t - Date.now())).toBeLessThan(5000);
+  });
 });
 
 describe("envelope validation", () => {
-  it("returns the event as data of its own when the eight rules hold", () => {
+  it("returns the envelope as data of its own when its rules hold, and the event with its CID checked", () => {
+    const checked = validateEnvelope(envelope);
+    expect(checked).toEqual(envelope);
+    expect(checked).not.toBe(envelope);
+    expect(checked.data).not.toBe(envelope.data);
+    expect(validateEnvelope({ ...envelope, roots: [RAW_HELLO], data: {} })).toBeDefined();
     const event = validateEvent(base);
     expect(event).toEqual(base);
     expect(event).not.toBe(base);
     expect(event.data).not.toBe(base.data);
-    expect(validateEvent({ ...base, roots: [RAW_HELLO], data: {} })).toBeDefined();
+    expect(validateEvent({ ...EXAMPLE, cid: EXAMPLE_CID })).toEqual({ ...EXAMPLE, cid: EXAMPLE_CID });
   });
 
   it("rejects every rule broken, naming the first", () => {
     const cases: [string, unknown, RegExp][] = [
       ["not an object", "event", /JSON object/],
-      ["an array", [base], /JSON object/],
+      ["an array", [envelope], /JSON object/],
       ["null", null, /JSON object/],
-      ["a class instance", Object.assign(Object.create({ x: 1 }), base), /JSON object/],
-      ["missing data", omit(base, "data"), /missing data/],
-      ["missing roots", omit(base, "roots"), /missing roots/],
-      ["an unknown field", { ...base, extra: 1 }, /unknown top-level field "extra"/],
-      ["v2 spelling", { ...omit(base, "eventId"), eid: base.eventId }, /missing eventId/],
-      ["uppercase eventId", { ...base, eventId: base.eventId.toUpperCase() }, /eventId/],
-      ["v4 eventId", { ...base, eventId: "0198f5f0-1234-4abc-8def-0123456789ab" }, /eventId/],
-      ["at without fraction", { ...base, at: "2026-09-03T15:04:05Z" }, /at is not/],
-      ["at with leap second", { ...base, at: "2026-09-03T15:04:60.000Z" }, /at is not/],
-      ["at as a number", { ...base, at: 1756911845123 }, /at is not/],
-      ["author not a UUIDv7", { ...base, author: "k7q3ma" }, /author/],
-      ["empty type", { ...base, type: "" }, /type/],
-      ["type not a string", { ...base, type: 1 }, /type/],
-      ["roots not an array", { ...base, roots: null }, /roots is not an array/],
-      ["roots as a string", { ...base, roots: RAW_HELLO }, /roots is not an array/],
-      ["a drisl root", { ...base, roots: [DRISL_EMPTY_MAP] }, /not a canonical raw DASL CID/],
-      ["a dag-pb root", { ...base, roots: [DAG_PB] }, /raw DASL CID/],
-      ["an uppercase root", { ...base, roots: [RAW_HELLO.toUpperCase()] }, /raw DASL CID/],
-      ["a non-string root", { ...base, roots: [1] }, /raw DASL CID/],
-      ["data an array", { ...base, data: [] }, /data is not a JSON object/],
-      ["data null", { ...base, data: null }, /data is not a JSON object/],
-      ["data a string", { ...base, data: "x" }, /data is not a JSON object/],
-      ["undefined in data", { ...base, data: { a: undefined } }, /not I-JSON/],
-      ["NaN in data", { ...base, data: { a: NaN } }, /not I-JSON/],
-      ["Infinity in data", { ...base, data: { a: [Infinity] } }, /not I-JSON/],
-      ["a bigint in data", { ...base, data: { a: 1n } }, /not I-JSON/],
-      ["a lone surrogate in data", { ...base, data: { a: cp(0xd800) } }, /not I-JSON/],
-      ["a lone surrogate in a name", { ...base, data: { "\udc00": 1 } }, /not I-JSON/],
-      ["a Date in data", { ...base, data: { a: new Date(0) } }, /not I-JSON/],
-      ["a lone surrogate in type", { ...base, type: "\ud800" }, /not I-JSON/],
+      ["a class instance", Object.assign(Object.create({ x: 1 }), envelope), /JSON object/],
+      ["missing data", omit(envelope, "data"), /missing data/],
+      ["missing roots", omit(envelope, "roots"), /missing roots/],
+      ["an unknown field", { ...envelope, extra: 1 }, /unknown top-level field "extra"/],
+      ["a cid among the envelope fields", base, /unknown top-level field "cid"/],
+      ["an eventId", { ...envelope, eventId: "019b2a46-8b36-75c6-a74b-81a2aa5fb407" }, /unknown top-level field "eventId"/],
+      ["at without fraction", { ...envelope, at: "2026-09-03T15:04:05Z" }, /at is not/],
+      ["at with leap second", { ...envelope, at: "2026-09-03T15:04:60.000Z" }, /at is not/],
+      ["at as a number", { ...envelope, at: 1756911845123 }, /at is not/],
+      ["author not a UUIDv7", { ...envelope, author: "k7q3ma" }, /author/],
+      ["uppercase author", { ...envelope, author: envelope.author.toUpperCase() }, /author/],
+      ["empty type", { ...envelope, type: "" }, /type/],
+      ["type not a string", { ...envelope, type: 1 }, /type/],
+      ["roots not an array", { ...envelope, roots: null }, /roots is not an array/],
+      ["roots as a string", { ...envelope, roots: RAW_HELLO }, /roots is not an array/],
+      ["a drisl root", { ...envelope, roots: [DRISL_EMPTY_MAP] }, /not a canonical raw DASL CID/],
+      ["a dag-pb root", { ...envelope, roots: [DAG_PB] }, /raw DASL CID/],
+      ["an uppercase root", { ...envelope, roots: [RAW_HELLO.toUpperCase()] }, /raw DASL CID/],
+      ["a non-string root", { ...envelope, roots: [1] }, /raw DASL CID/],
+      ["data an array", { ...envelope, data: [] }, /data is not a JSON object/],
+      ["data null", { ...envelope, data: null }, /data is not a JSON object/],
+      ["data a string", { ...envelope, data: "x" }, /data is not a JSON object/],
+      ["undefined in data", { ...envelope, data: { a: undefined } }, /not I-JSON/],
+      ["NaN in data", { ...envelope, data: { a: NaN } }, /not I-JSON/],
+      ["Infinity in data", { ...envelope, data: { a: [Infinity] } }, /not I-JSON/],
+      ["a bigint in data", { ...envelope, data: { a: 1n } }, /not I-JSON/],
+      ["a lone surrogate in data", { ...envelope, data: { a: cp(0xd800) } }, /not I-JSON/],
+      ["a lone surrogate in a name", { ...envelope, data: { "\udc00": 1 } }, /not I-JSON/],
+      ["a Date in data", { ...envelope, data: { a: new Date(0) } }, /not I-JSON/],
+      ["a lone surrogate in type", { ...envelope, type: "\ud800" }, /not I-JSON/],
+    ];
+    for (const [what, value, message] of cases) {
+      expect(() => validateEnvelope(value), what).toThrow(InvalidEvent);
+      expect(() => validateEnvelope(value), what).toThrow(message);
+    }
+  });
+
+  it("an API event has the five fields and cid, exactly, and the cid is the envelope's own", () => {
+    const other = eventCidOf({ ...envelope, data: { ...envelope.data, name: "Alicia" } });
+    const cases: [string, unknown, RegExp][] = [
+      ["no cid", envelope, /missing cid/],
+      ["an eventId beside the cid", { ...base, eventId: "019b2a46-8b36-75c6-a74b-81a2aa5fb407" }, /unknown top-level field "eventId"/],
+      ["cid not a CID", { ...base, cid: "019b2a46-8b36-75c6-a74b-81a2aa5fb407" }, /cid is not a canonical raw DASL CID/],
+      ["cid uppercase", { ...base, cid: base.cid.toUpperCase() }, /cid is not a canonical raw DASL CID/],
+      ["cid a drisl CID", { ...base, cid: DRISL_EMPTY_MAP }, /cid is not a canonical raw DASL CID/],
+      ["cid of other bytes", { ...base, cid: RAW_HELLO }, /is not the envelope's/],
+      ["cid of another envelope", { ...base, cid: other }, /is not the envelope's/],
+      ["the envelope changed under its cid", { ...base, data: { ...base.data, name: "Alicia" } }, /is not the envelope's/],
+      ["cid null", { ...base, cid: null }, /cid is not a canonical raw DASL CID/],
+      ["a broken envelope with a cid", { ...base, at: "2026-09-03T15:04:05Z" }, /at is not/],
     ];
     for (const [what, value, message] of cases) {
       expect(() => validateEvent(value), what).toThrow(InvalidEvent);
       expect(() => validateEvent(value), what).toThrow(message);
     }
+    expect(validateEvent({ ...base, data: { ...base.data, name: "Alicia" }, cid: other })).toEqual({ ...base, data: { ...base.data, name: "Alicia" }, cid: other });
   });
 
-  it("reads each member once: an accessor that answers differently later cannot change the event that was checked", () => {
+  it("reads each member once: an accessor that answers differently later cannot change the envelope that was checked", () => {
     const once = <T>(first: T, later: unknown): (() => unknown) => {
       let reads = 0;
       return () => (++reads === 1 ? first : later);
@@ -199,7 +262,7 @@ describe("envelope validation", () => {
     const roots = Object.defineProperty([] as unknown[], 0, { get: root, enumerable: true, configurable: true });
     roots.length = 1;
     const shifting = {
-      ...base,
+      ...envelope,
       get type() {
         return type();
       },
@@ -210,26 +273,26 @@ describe("envelope validation", () => {
         },
       },
     };
-    const event = validateEvent(shifting);
-    expect(event).toEqual({ ...base, type: "t", roots: [RAW_HELLO], data: { x: "ok" } });
-    expect(new TextDecoder().decode(canonicalEventBytes(event))).toBe(JSON.stringify({ at: base.at, author: base.author, data: { x: "ok" }, eventId: base.eventId, roots: [RAW_HELLO], type: "t" }));
+    const checked = validateEnvelope(shifting);
+    expect(checked).toEqual({ ...envelope, type: "t", roots: [RAW_HELLO], data: { x: "ok" } });
+    expect(text(canonicalEventBytes(checked))).toBe(JSON.stringify({ at: envelope.at, author: envelope.author, data: { x: "ok" }, roots: [RAW_HELLO], type: "t" }));
   });
 
   it("roots are the elements the array holds by index, whatever its iterator yields", () => {
     const silent = (elements: unknown[]): unknown[] => Object.defineProperty(elements.slice(), Symbol.iterator, { value: function* () {} });
-    expect(validateEvent({ ...base, roots: silent([RAW_HELLO]) }).roots).toEqual([RAW_HELLO]);
+    expect(validateEnvelope({ ...envelope, roots: silent([RAW_HELLO]) }).roots).toEqual([RAW_HELLO]);
     expect(validateDraft({ type: "t", roots: silent([RAW_HELLO]), data: {} }).roots).toEqual([RAW_HELLO]);
     for (const elements of [[undefined], ["not a cid"], new Array(1)]) {
-      expect(() => validateEvent({ ...base, roots: silent(elements) })).toThrow(/roots: .* is not a canonical raw DASL CID/);
+      expect(() => validateEnvelope({ ...envelope, roots: silent(elements) })).toThrow(/roots: .* is not a canonical raw DASL CID/);
       expect(() => validateDraft({ type: "t", roots: silent(elements), data: {} })).toThrow(InvalidEvent);
     }
   });
 
-  it("checks eventId and at independently and never compares their timestamps", () => {
-    // the UUID says 1000 ms after the epoch; `at` says 2026 — immutable history is not rejected for it
-    const event = { ...base, eventId: "00000000-03e8-7000-8000-000000000000" };
-    expect(timestampOf(event.eventId)).not.toBe(Date.parse(event.at));
-    expect(validateEvent(event)).toEqual(event);
+  it("checks author and at independently and never compares the author's UUID time with at", () => {
+    // the author's UUID says 1000 ms after the epoch; `at` says 2026 — immutable history is not rejected for it
+    const old = { ...envelope, author: "00000000-03e8-7000-8000-000000000000" as AuthorId };
+    expect(validateEnvelope(old)).toEqual(old);
+    expect(validateEvent({ ...old, cid: eventCidOf(old) })).toEqual({ ...old, cid: eventCidOf(old) });
   });
 
   it("validates a draft the same way and normalizes it into fresh data", () => {
@@ -257,83 +320,89 @@ describe("envelope validation", () => {
       ["noncharacter", { type: "t", data: { a: cp(0xfdd0) } }],
       ["lone surrogate in type", { type: cp(0xd800), data: {} }],
       ["noncharacter in type", { type: `t${cp(0xffff)}`, data: {} }],
-      ["eventId supplied", { type: "t", data: {}, eventId: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
+      ["cid supplied", { type: "t", data: {}, cid: RAW_HELLO }],
       ["at supplied", { type: "t", data: {}, at: "2026-09-07T10:00:00.000Z" }],
       ["author supplied", { type: "t", data: {}, author: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
-      ["eventId supplied as undefined", { type: "t", data: {}, eventId: undefined }],
+      ["cid supplied as undefined", { type: "t", data: {}, cid: undefined }],
+      ["an eventId supplied", { type: "t", data: {}, eventId: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
+      ["any other field", { type: "t", data: {}, note: "x" }],
     ];
     for (const [what, value] of bad) {
       expect(() => validateDraft(value), what).toThrow(InvalidEvent);
     }
   });
 
-  it("a draft it accepts makes an event validateEvent accepts, to the last level of nesting", () => {
+  it("a draft it accepts makes an envelope validateEnvelope accepts, to the last level of nesting", () => {
     const wrapped = (levels: number) => {
       let data: JsonObject = {};
       for (let i = 0; i < levels; i++) data = { x: data };
       return data;
     };
-    const complete = (draft: Required<Draft>): Event => ({
-      eventId: base.eventId,
-      at: base.at,
-      author: base.author,
-      ...draft,
-    });
+    const complete = (draft: Required<Draft>): EventEnvelope => ({ at: envelope.at, author: envelope.author, ...draft });
     // root object + data + 998 wrappers = 1000 containers deep: the limit, allowed
     const deepest = validateDraft({ type: "t", data: wrapped(998) });
-    expect(() => validateEvent(complete(deepest))).not.toThrow();
-    // one more is over the limit for the event, so the draft is refused too
+    expect(() => validateEnvelope(complete(deepest))).not.toThrow();
+    expect(() => eventCidOf(complete(deepest))).not.toThrow();
+    // one more is over the limit for the envelope, so the draft is refused too
     expect(() => validateDraft({ type: "t", data: wrapped(999) })).toThrow(/deeper/);
-    expect(() => validateEvent(complete({ type: "t", roots: [], data: wrapped(999) }))).toThrow(/deeper/);
+    expect(() => validateEnvelope(complete({ type: "t", roots: [], data: wrapped(999) }))).toThrow(/deeper/);
     for (const draft of [{ type: "t", data: {} }, { type: "a.b", roots: [RAW_HELLO as Cid], data: { n: [1, { s: "😂" }] } }]) {
-      expect(() => validateEvent(complete(validateDraft(draft)))).not.toThrow();
+      const made = complete(validateDraft(draft));
+      expect(() => validateEvent({ ...made, cid: eventCidOf(made) })).not.toThrow();
     }
   });
 });
 
 describe("canonical bytes and order", () => {
-  it("content equality is byte equality of the RFC 8785 form, whatever the member order", () => {
-    const reordered: Event = {
-      data: { name: "Alice", contactId: base.data.contactId as string },
+  it("content equality is byte equality of the RFC 8785 form of the five fields, whatever the member order", () => {
+    const reordered: EventEnvelope = {
+      data: { name: "Alice", contactId: envelope.data.contactId as string },
       roots: [],
-      type: base.type,
-      author: base.author,
-      at: base.at,
-      eventId: base.eventId,
+      type: envelope.type,
+      author: envelope.author,
+      at: envelope.at,
     };
-    expect(text(canonicalEventBytes(base))).toBe(
+    expect(text(canonicalEventBytes(envelope))).toBe(
       '{"at":"2026-09-03T15:04:05.123Z","author":"019b2a43-4a56-7c0f-862f-194c0c4124a0",' +
         '"data":{"contactId":"019b2a45-8381-793f-943c-f5d806fd5ca2","name":"Alice"},' +
-        '"eventId":"019b2a46-8b36-75c6-a74b-81a2aa5fb407","roots":[],"type":"contact.petname"}'
+        '"roots":[],"type":"contact.petname"}'
     );
-    expect(canonicalEventBytes(reordered)).toEqual(canonicalEventBytes(base));
-    const other: Event = { ...base, data: { ...base.data, name: "Alicia" } };
-    expect(canonicalEventBytes(other)).not.toEqual(canonicalEventBytes(base));
-    const laterAt: Event = { ...base, at: "2026-09-03T15:04:05.124Z" };
-    expect(canonicalEventBytes(laterAt)).not.toEqual(canonicalEventBytes(base));
+    expect(canonicalEventBytes(reordered)).toEqual(canonicalEventBytes(envelope));
+    expect(canonicalEventBytes(base)).toEqual(canonicalEventBytes(envelope));
+    expect(eventCidOf(reordered)).toBe(base.cid);
+    const other: EventEnvelope = { ...envelope, data: { ...envelope.data, name: "Alicia" } };
+    expect(canonicalEventBytes(other)).not.toEqual(canonicalEventBytes(envelope));
+    expect(eventCidOf(other)).not.toBe(base.cid);
+    const laterAt: EventEnvelope = { ...envelope, at: "2026-09-03T15:04:05.124Z" };
+    expect(canonicalEventBytes(laterAt)).not.toEqual(canonicalEventBytes(envelope));
   });
 
-  it("orders by at, then eventId, then author", () => {
-    const e = (at: string, eventId: string, author: string): Event => ({
-      ...base,
-      at,
-      eventId: eventId as EventId,
-      author: author as AuthorId,
-    });
-    const a = e("2026-01-01T00:00:00.000Z", "019b2a46-8b36-75c6-a74b-81a2aa5fb407", "019b2a43-4a56-7c0f-862f-194c0c4124a0");
-    const b = e("2026-01-01T00:00:00.001Z", "019b2a46-0000-7000-8000-000000000000", "019b2a43-0000-7000-8000-000000000000");
-    const c = e("2026-01-01T00:00:00.001Z", "019b2a46-0000-7000-8000-000000000001", "019b2a43-0000-7000-8000-000000000000");
-    const d = e("2026-01-01T00:00:00.001Z", "019b2a46-0000-7000-8000-000000000001", "019b2a43-0000-7000-8000-000000000001");
+  it("orders by at, then the CID's text", () => {
+    const e = (at: string, cid: string): Event => ({ ...base, at, cid: cid as EventCid });
+    const a = e("2026-01-01T00:00:00.000Z", "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku");
+    const b = e("2026-01-01T00:00:00.001Z", "bafkreib2jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq");
+    const c = e("2026-01-01T00:00:00.001Z", "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq");
+    const d = e("2026-01-01T00:00:00.001Z", "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku");
     expect([d, c, b, a].sort(compareEvents)).toEqual([a, b, c, d]);
     expect(compareEvents(a, a)).toBe(0);
     expect(compareEvents(a, b)).toBeLessThan(0);
     expect(compareEvents(d, c)).toBeGreaterThan(0);
+    // the text order — "2" before "m", as ASCII has it — is not the decoded bytes' order, where the digit is the larger value
+    expect(compareEvents(b, c)).toBeLessThan(0);
+    expect(b.cid < c.cid).toBe(true);
+    // the author no longer breaks a tie: two events at one instant differ in CID, or are one event
+    expect(compareEvents({ ...a, author: "ffffffff-ffff-7fff-bfff-ffffffffffff" as AuthorId }, a)).toBe(0);
   });
 
-  it("filters by equality on author, type and top-level data fields", () => {
-    const event: Event = { ...base, data: { n: 1, s: "x", z: null, o: { k: 1 }, a: [1], f: false } };
+  it("filters by equality on cid, author, type and top-level data fields", () => {
+    const changed = { ...envelope, data: { n: 1, s: "x", z: null, o: { k: 1 }, a: [1], f: false } };
+    const event: Event = { ...changed, cid: eventCidOf(changed) };
     expect(matches(event)).toBe(true);
     expect(matches(event, {})).toBe(true);
+    expect(matches(event, { cid: event.cid })).toBe(true);
+    expect(matches(event, { cid: base.cid })).toBe(false);
+    expect(matches(event, { cid: event.cid, type: "contact.petname" })).toBe(true);
+    expect(matches(event, { cid: event.cid, type: "contact" })).toBe(false);
     expect(matches(event, { author: base.author })).toBe(true);
     expect(matches(event, { author: "019b2a43-0000-7000-8000-000000000000" as AuthorId })).toBe(false);
     expect(matches(event, { type: "contact.petname" })).toBe(true);

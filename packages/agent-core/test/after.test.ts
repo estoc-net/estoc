@@ -43,7 +43,7 @@ async function receiving(holder: Fresh): Promise<{ receiver: Receiver; seen: Aut
 async function receivedThen(receiver: Receiver, alice: DirectParty, peer: DirectParty, extra: Partial<IMessage>, trace?: AgentTrace) {
   const received = await receiver.receive({ packed: await sealed(await peerSealer(peer), alice.longFormDid, extra), source: DIRECT });
   if (received.outcome !== "received") throw new Error(`not received: ${JSON.stringify(received)}`);
-  return { eventId: received.eventId, after: await afterReceipt(alice.runtime, alice.keys, received.eventId, { trace }) };
+  return { cid: received.cid, after: await afterReceipt(alice.runtime, alice.keys, received.cid, { trace }) };
 }
 
 const foldOf = (holder: Fresh): Promise<VaultFold> => scanVault(holder.runtime.vault, holder.keys);
@@ -89,8 +89,8 @@ describe("after the receipt", () => {
 
     const plain = await receivedThen(receiver, alice, bob, {});
     const first = await receivedThen(receiver, alice, bob, { pthid: invitation!.id });
-    expect([plain.after.consumed, first.after.consumed.map(({ data }) => data)]).toEqual([[], [{ disclosureEventId: disclosed.eventId, sourceEventId: first.eventId }]]);
-    expect((await foldOf(alice)).invitations.invitations.get(disclosed.eventId)!.status).toEqual({ status: "consumed", consumer: bob.did });
+    expect([plain.after.consumed, first.after.consumed.map(({ data }) => data)]).toEqual([[], [{ disclosureEventCid: disclosed.cid, sourceEventCid: first.cid }]]);
+    expect((await foldOf(alice)).invitations.invitations.get(disclosed.cid)!.status).toEqual({ status: "consumed", consumer: bob.did });
 
     const later = await receivedThen(receiver, alice, carol, { pthid: invitation!.id });
     expect([later.after.consumed, (await eventsOf(alice, "invitation.consumed")).length]).toEqual([[], 1]);
@@ -109,10 +109,10 @@ describe("after the receipt", () => {
 
     const last = seen.at(-1) as Authenticated;
     const bogus = await recordReceipt(alice.runtime, alice.keys, { ...last, plaintext: { ...last.plaintext, from_prior: "not-a-jwt" } as IMessage, fromPrior: "not-a-jwt" });
-    const eventId = (bogus as Extract<ReceiptOutcome, { outcome: "received" }>).eventId;
-    const after = await afterReceipt(alice.runtime, alice.keys, eventId, { trace });
+    const cid = (bogus as Extract<ReceiptOutcome, { outcome: "received" }>).cid;
+    const after = await afterReceipt(alice.runtime, alice.keys, cid, { trace });
     expect(after.proof).toMatchObject({ status: "invalid" });
-    expect((await trace.read({ type: "diag.proof" })).map((entry) => entry.data)).toEqual([{ eventId, ...after.proof }]);
+    expect((await trace.read({ type: "diag.proof" })).map((entry) => entry.data)).toEqual([{ cid, ...after.proof }]);
     await closeAll(alice, bob);
   });
 });
