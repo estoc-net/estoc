@@ -18,7 +18,9 @@ and ending, and a `from-prior` module for DIDComm v2 proofs.
   The precheck applies the document-independent rules verification
   applies, and refuses a rotation whose successor is not the
   authenticated sender, before the host has issuer material; its result
-  stays unverified. The signing key comes from the issuer's own long
+  stays unverified. A signature segment that cannot be an Ed25519
+  signature and an authorized key that is not one are refused as `form`
+  and `document` failures. The signing key comes from the issuer's own long
   form. Endings bind only through a signed audience on an anonymous
   receipt; the basic form verifies and stays unbound.
 

@@ -119,6 +119,19 @@ describe("precheck", () => {
     }
   });
 
+  it("refuses a signature segment that cannot be an Ed25519 signature, and leaves a well-formed wrong one to verification", async () => {
+    const [h, p, s] = segments(signed(b0, header, claims));
+    for (const [what, segment] of [["empty", ""], ["not base64url", "!"], ["an odd length", "A"], ["one byte", "AA"], ["63 bytes", base64urlnopad.encode(new Uint8Array(63))], ["65 bytes", base64urlnopad.encode(new Uint8Array(65))], ["padded", `${s}=`]]) {
+      const jwt = `${h}.${p}.${segment}`;
+      expect(refusal(() => precheckFromPrior(jwt)).failure, what).toBe("form");
+      expect(refusal(() => inspectFromPrior(jwt)).failure, what).toBe("form");
+      expect((await failure(verifyFromPrior(jwt, b0.document))).failure, what).toBe("form");
+    }
+    const wrong = `${h}.${p}.${base64urlnopad.encode(new Uint8Array(64))}`;
+    expect(precheckFromPrior(wrong)).toEqual(inspectFromPrior(wrong));
+    expect((await failure(verifyFromPrior(wrong, b0.document))).failure).toBe("signature");
+  });
+
   it("refuses a rotation whose successor is not the authenticated sender, before any material arrives", () => {
     const jwt = signed(b0, header, claims);
     expect(refusal(() => precheckFromPrior(jwt, { authenticatedSender: b0.longForm })).failure).toBe("binding");
@@ -254,6 +267,15 @@ describe("verify", () => {
     expect(unaddressed.change).toEqual({ kind: "end", audience: null });
   });
 
+  it("reports a document failure for an authorized JWK that is not an Ed25519 key", async () => {
+    for (const [what, x] of [["empty", ""], ["not base64url", "!"], ["one byte", "AA"], ["31 bytes", base64urlnopad.encode(new Uint8Array(31))], ["33 bytes", base64urlnopad.encode(new Uint8Array(33))]]) {
+      const jwk = party(`jwk-${what}`, () => ({ verificationMethod: [{ id: "#key-1", type: "JsonWebKey2020", publicKeyJwk: { kty: "OKP", crv: "Ed25519", x } }], authentication: ["#key-1"] }));
+      const jwt = await rotation(jwk, b1);
+      expect(() => precheckFromPrior(jwt), what).not.toThrow();
+      expect((await failure(verifyFromPrior(jwt, jwk.document))).failure, what).toBe("document");
+    }
+  });
+
   it("accepts a JWK method, and an embedded authentication method", async () => {
     const jwk = party("jwk", (key) => ({ verificationMethod: [{ id: "#key-1", type: "JsonWebKey2020", publicKeyJwk: key.jwk }], authentication: ["#key-1"] }));
     await expect(verifyFromPrior(await rotation(jwk, b1), jwk.document)).resolves.toMatchObject({ method: jwk.kid });
@@ -313,6 +335,8 @@ describe("verify", () => {
     await expect(verifyFromPrior(unencoded, b0.document)).rejects.toThrow(InvalidFromPrior);
     const input = `${encode({ alg: "EdDSA", typ: "JWT", kid: b0.kid, crit: ["x-ext"], "x-ext": 1 })}.${p}`;
     const critical = `${input}.${base64urlnopad.encode(new Uint8Array(nodeSign(null, new TextEncoder().encode(input), b0.privateKey)))}`;
+    expect(inspectFromPrior(critical).header.kid).toBe(b0.kid);
+    expect(refusal(() => precheckFromPrior(critical)).failure).toBe("profile");
     expect((await failure(verifyFromPrior(critical, b0.document))).failure).toBe("profile");
   });
 });

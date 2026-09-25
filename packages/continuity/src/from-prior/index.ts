@@ -117,6 +117,7 @@ export type ProofRequest = Readonly<{
 
 const ED25519_MULTICODEC = [0xed, 0x01];
 const ED25519_KEY_BYTES = 32;
+const ED25519_SIGNATURE_BYTES = 64;
 
 function form(message: string): InvalidFromPrior {
   return new InvalidFromPrior(message, "form");
@@ -172,7 +173,19 @@ function decode(jwt: string): Decoded {
   if (typeof header.kid !== "string") throw form("the protected header names a kid");
   if (header.typ !== undefined && typeof header.typ !== "string") throw form("typ is a string");
   checkHeaderExtensions(header);
+  checkSignatureSegment(jwt.slice(jwt.lastIndexOf(".") + 1));
   return { header: { ...header, alg: header.alg, typ: header.typ, kid: header.kid }, claims: claimsOf(payload) };
+}
+
+/** The third segment decodes and has the length of an Ed25519 signature; whether it verifies needs the issuer's key. */
+function checkSignatureSegment(segment: string): void {
+  let bytes: Uint8Array;
+  try {
+    bytes = base64urlnopad.decode(segment);
+  } catch {
+    throw form("the signature is base64url without padding");
+  }
+  if (bytes.length !== ED25519_SIGNATURE_BYTES) throw form(`the signature is ${ED25519_SIGNATURE_BYTES} bytes`);
 }
 
 function unverifiedOf({ header, claims }: Decoded): UnverifiedFromPrior {
@@ -181,8 +194,11 @@ function unverifiedOf({ header, claims }: Decoded): UnverifiedFromPrior {
 
 /**
  * A token's protected header and claims, decoded and checked for shape
- * only. What this returns is what the token says, not a proof; it lets
- * the host find the issuer's material.
+ * only: three segments, the header members and claims this profile
+ * reads, the RFC 7797 pairing of `b64` and `crit`, and a signature
+ * segment of the right length. What this returns is what the token
+ * says, not a proof; it lets the host find the issuer's material, and
+ * `precheckFromPrior` applies the profile to it.
  */
 export function inspectFromPrior(jwt: string): UnverifiedFromPrior {
   return unverifiedOf(decode(jwt));
@@ -217,6 +233,9 @@ export function precheckFromPrior(jwt: string, binding?: PrecheckBinding): Unver
 function checkProfile({ header, claims }: Decoded): { issuer: DidSpelling; change: VerifiedChange } {
   if (header.alg !== FROM_PRIOR_ALG) throw profile(`alg is ${FROM_PRIOR_ALG}`);
   if (!isJwtType(header.typ)) throw profile("typ, when present, is JWT or application/jwt");
+  if (Array.isArray(header["crit"])) {
+    for (const name of header["crit"]) if (name !== "b64") throw profile(`the critical header ${name} is not one this profile understands`);
+  }
   const issuer = canonicalDid(claims.iss, "iss");
   const kid = splitDidUrl(header.kid, "kid");
   if (kid.did.canonical !== issuer.canonical) throw profile("the kid names a key of iss");
@@ -224,21 +243,20 @@ function checkProfile({ header, claims }: Decoded): { issuer: DidSpelling; chang
 }
 
 /**
- * RFC 7515 §4.1.11 makes every listed critical header one the recipient
- * must understand, and this profile understands `b64` alone. RFC 7797
- * lets a JWS declare an unencoded payload with `b64`, requires `crit` to
- * list it, and forbids `false` for a JWT (§6, §7). The library reads
- * `b64` only when `crit` names it, so a token that omits `crit` would
- * otherwise be verified as if its payload were encoded. The shape rules
- * for `crit` are the library's, so that a precheck and a verification
- * refuse the same headers.
+ * RFC 7515 §4.1.11 has `crit` as a non-empty array of header names with
+ * no repetition. RFC 7797 lets a JWS declare an unencoded payload with
+ * `b64`, requires `crit` to list it, and forbids `false` for a JWT
+ * (§6, §7). The library reads `b64` only when `crit` names it, so a
+ * token that omits `crit` would otherwise be verified as if its payload
+ * were encoded; and it tolerates a repeated entry, which is refused
+ * here. Whether each listed header is one this profile understands is
+ * a profile question, checked with the rest of the profile.
  */
 function checkHeaderExtensions(header: Record<string, unknown>): void {
   const crit = header["crit"];
   if (crit !== undefined) {
     if (!Array.isArray(crit) || crit.length === 0 || crit.some((name) => typeof name !== "string" || name.length === 0)) throw form("crit, when present, is an array of non-empty strings");
     if (new Set(crit).size !== crit.length) throw form("crit lists no header twice");
-    for (const name of crit) if (name !== "b64") throw profile(`the critical header ${name} is not one this profile understands`);
   }
   if (Object.hasOwn(header, "b64")) {
     if (header["b64"] !== true) throw form("b64, when present, is true: a JWT's payload is base64url-encoded");
@@ -402,7 +420,12 @@ export async function verifyFromPrior(jwt: string, evidence: IssuerEvidence): Pr
   const { issuer } = checkProfile(decoded);
   const { id: documentId, document } = issuerDocument(evidence, issuer);
   const method = authenticationMethod(documentId, document, decoded.header.kid);
-  const key = await importJWK(method.key, FROM_PRIOR_ALG);
+  let key: Awaited<ReturnType<typeof importJWK>>;
+  try {
+    key = await importJWK(method.key, FROM_PRIOR_ALG);
+  } catch (err) {
+    throw new InvalidFromPrior(`${method.id} is not an Ed25519 key: ${err instanceof Error ? err.message : String(err)}`, "document");
+  }
   let payload: Uint8Array;
   try {
     ({ payload } = await compactVerify(jwt, key, { algorithms: [FROM_PRIOR_ALG] }));
@@ -490,6 +513,7 @@ export async function createFromPrior(request: ProofRequest, signer: Signer): Pr
   const signingInput = `${segment({ alg: FROM_PRIOR_ALG, typ: "JWT", kid: signer.methodId })}.${segment(claims)}`;
   const signature = await signer.sign(encoder.encode(signingInput));
   if (!(signature instanceof Uint8Array)) throw new InvalidFromPrior("the signer returned no bytes", "signature");
+  if (signature.length !== ED25519_SIGNATURE_BYTES) throw new InvalidFromPrior(`the signer returned ${signature.length} bytes, not an Ed25519 signature`, "signature");
   const token = `${signingInput}.${base64urlnopad.encode(signature)}`;
   const proof = await verifyFromPrior(token, request.evidence);
   const matches =

@@ -513,11 +513,14 @@ and establishes facts only when binding succeeds.
 | Input boundary exercised by the tests | Result |
 | --- | --- |
 | Wrong JWT segment count or JSON shape, non-integer `iat`, `sub: null`, or array-valued `aud` | `form` failure. |
+| A signature segment that is not base64url or not 64 bytes long | `form` failure at inspection, precheck and verification; a well-formed wrong signature is left to verification. |
 | `exp` or `nbf` | Rejected: this profile evaluates no validity window, and verification reads no clock. |
 | Unsupported DID method or algorithm, rotation to the issuer itself, or a rotation with an audience | `profile` failure. |
 | Absent `typ`, or case variants of JWT / application/jwt | Accepted; extra whitespace, parameters and other media types are rejected. |
 | Absent `b64`, or `true` with `b64` listed in `crit` | Accepted; `false`, wrong types and missing required critical-header declarations are rejected. |
-| Unknown critical extension, or `crit` naming a `b64` the header lacks | `profile` and `form` failure respectively, at the precheck and at verification alike. |
+| Unknown critical extension | `profile` failure at the precheck and at verification; inspection still reads the token. |
+| `crit` naming a `b64` the header lacks, or listing a header twice | `form` failure at every stage. |
+| An authorized JWK whose `x` is not a 32-byte Ed25519 key | `document` failure, the same as a Multikey of another type. |
 | A rotation whose successor is not the authenticated sender the precheck was given | `binding` failure before any issuer material; an ending is left to `bind`. |
 | A tampered signature | Passes the precheck without a verified type; `signature` failure at verification. |
 | Repeated JSON claim name | The parser's last value is used; inspection and interpretation of the verified payload agree. |
@@ -559,8 +562,8 @@ another key or invalid signature bytes cannot produce a verified proof. The
 signer can hold a non-exportable key. Creating a proof saves no decision and
 sends no message.
 
-**Tests:** [inspect][test-inspect], [verify][test-verify], [bind][test-bind],
-[create][test-create].
+**Tests:** [inspect][test-inspect], [precheck][test-precheck],
+[verify][test-verify], [bind][test-bind], [create][test-create].
 
 <a id="host"></a>
 
@@ -603,7 +606,7 @@ ACK policy. Those decisions remain with the host that uses the results.
 | When is there no longer a unique head? | [Competition](#competition), [colliding IDs](#ambiguity), [onward rotations](#onward) | Competing changes; identity conflicts. |
 | Why does an ending or missing evidence take precedence? | [Endings](#ending), [dependency chains](#dependencies) | Ending; observations; pending-choice diagnostics. |
 | How can replicas converge to a conflict? | [Merge](#merge) | Merge laws; identity and equality; compatibility; convergence and monotonicity. |
-| Which inputs are rejected between a token and a fact? | [Proofs](#proofs) | Inspect; verify; bind; create. |
+| Which inputs are rejected between a token and a fact? | [Proofs](#proofs) | Inspect; precheck; verify; bind; create. |
 
 [test-peer]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/model.test.ts#L30
 [test-local]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/model.test.ts#L74
@@ -621,7 +624,8 @@ ACK policy. Those decisions remain with the host that uses the results.
 [test-merge]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/merge.test.ts#L16
 [test-equality]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/merge.test.ts#L60
 [test-compatibility]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/merge.test.ts#L91
-[test-inspect]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/from-prior.test.ts#L58
-[test-verify]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/from-prior.test.ts#L78
-[test-bind]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/from-prior.test.ts#L227
-[test-create]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/from-prior.test.ts#L279
+[test-inspect]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L74
+[test-precheck]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L94
+[test-verify]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L184
+[test-bind]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L344
+[test-create]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L396
