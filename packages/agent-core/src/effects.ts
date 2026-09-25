@@ -160,8 +160,8 @@ export type Drafted =
  * response that cannot be recorded refuses its own operation alone.
  */
 async function settle(held: Held, fold: VaultFold, execution: Execution, options: EffectOptions, only?: string): Promise<{ because: string | null; drafted: Drafted[] }> {
-  if (execution.status.status !== "complete") return { because: `the input is not established: ${execution.status.because}`, drafted: [] };
-  const source = execution.members.find((member) => member.witness.status === "complete")!.source;
+  if (execution.firstWitness === null) return { because: `the input is not established: ${(execution.status as Exclude<Execution["status"], { status: "complete" }>).because}`, drafted: [] };
+  const { source } = execution.firstWitness;
   const handler = handlerFor(handlersOf(options.handlers), source.event.data.msgType);
   const operations = [...new Set([PURE_ACK_EFFECT, ...(handler?.effectTypes ?? [])])].filter((effectType) => only === undefined || effectType === only);
   const trace = options.trace ?? null;

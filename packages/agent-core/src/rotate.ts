@@ -165,6 +165,7 @@ function assertSelectingSource(fold: VaultFold, channel: Channel, sourceEventCid
   if (source.channel === null || !sameChannel(source.channel, channel)) faults.push(`not in channel ${channelKey(channel)}`);
   const witness = fold.continuity.witness(source.event.cid);
   if (witness.status !== "complete") faults.push(`no complete witness: ${witness.because}`);
+  if (!fold.admissions.admitted(source.event.cid)) faults.push(`not admitted: ${fold.dispositions.disposition(source.event.cid).status}`);
   const execution = fold.inbound.ofSource(source.event.cid);
   if (execution === null) faults.push("in no input here");
   else if (execution.status.status !== "complete") faults.push(`its input is not established: ${execution.status.because}`);

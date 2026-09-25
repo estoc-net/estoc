@@ -188,8 +188,9 @@ export {
   verifyProofs,
 } from "./fold/channels.js";
 export { type Status, type Witness, type ScopedConflict, type Continuity, projectFacts, foldContinuity } from "./fold/continuity.js";
+export { type AdmissionStatus, type Admission, type AdmissionFold, type Eligibility, type AdmissionCandidate, type Disposition, type Dispositions, foldAdmissions, foldDispositions } from "./fold/admission.js";
 export { EMPTY_MESSAGE_TYPE, PING_RESPONSE_TYPE, PROBLEM_REPORT_TYPE, EMPTY_CONTENT_CID, type InboundKind, kindOf, type Member, type ExecutionStatus, type Execution, type InboundFold, foldInbound } from "./fold/inbound.js";
-export { type ConsumptionStatus, type Consumption, type Eligibility, type Candidate, type InvitationStatus, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
+export { type ConsumptionStatus, type Consumption, type Candidate, type InvitationStatus, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type Contact, type ContactFold, foldContacts } from "./fold/contacts.js";
 export {
   PURE_ACK_EFFECT,
@@ -238,6 +239,9 @@ export {
   erasureClosure,
   eraseMessage,
   closeErasures,
+  admissionDrafts,
+  admitReceipts,
+  reconcileAdmissions,
   consumptionDrafts,
   consumeInvitations,
   automaticIntent,

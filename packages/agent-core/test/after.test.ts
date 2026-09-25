@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { didKeyName, inboundMessageId, scanVault, signFromPrior, type DidId, type MessageId, type VaultEvent, type VaultEventType, type VaultFold, type WireMessageId } from "@estoc/vault";
+import { SignJWT, importJWK } from "jose";
+
+import { AUTHENTICATION_METHOD, didKeyName, inboundMessageId, scanVault, signFromPrior, type DidId, type MessageId, type VaultEvent, type VaultEventType, type VaultFold, type WireMessageId } from "@estoc/vault";
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import type { IMessage } from "../src/protocol/didcomm.js";
-import { AgentTrace, Keyring, Receiver, acknowledgementDrafts, afterReceipt, createDid, disclose, prepare, receiptOf, recordAcks, recordReceipt, send, type Authenticated, type Content, type ReceiptOutcome, type Source } from "../src/index.js";
-import { didcomm, directParty, peerSealer, sealed, type DirectParty, type Fresh } from "./helpers.js";
+import { AgentTrace, Keyring, Receiver, acknowledgementDrafts, afterReceipt, createDid, disclose, prepare, receiptOf, recordAcks, recordOwed, recordReceipt, send, type Authenticated, type Content, type ReceiptOutcome, type Source } from "../src/index.js";
+import { didcomm, directParty, peerSealer, refuseCommits, sealed, type DirectParty, type Fresh } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
@@ -61,7 +63,7 @@ describe("after the receipt", () => {
     const wire = crypto.randomUUID() as WireMessageId;
 
     const early = await receivedThen(receiver, alice, bob, { id: wire, ack: [MESSAGE] });
-    expect(early.after).toEqual({ proof: { status: "not-present" }, consumed: [], acknowledged: [] });
+    expect(early.after).toMatchObject({ proof: { status: "not-present" }, disposition: { status: "admitted", admissions: [{ event: { data: { sourceEventCid: early.cid } }, status: { status: "effective" } }] }, admitted: [], consumed: [], acknowledged: [] });
     expect((await prepare(alice.runtime, alice.keys, MESSAGE, { didcomm })).outcome).toBe("prepared");
     expect(acknowledgementDrafts(await foldOf(alice)).map(({ data }) => data)).toEqual([
       { messageId: MESSAGE, localKeyName: didKeyName(DID, "key-agreement"), peerPublicKey: seen[0]!.sender!.peerPublicKey, ackMessageId: inboundMessageId(bob.did, alice.did, wire), ackWireMessageId: wire },
@@ -95,6 +97,45 @@ describe("after the receipt", () => {
     const later = await receivedThen(receiver, alice, carol, { pthid: invitation!.id });
     expect([later.after.consumed, (await eventsOf(alice, "invitation.consumed")).length]).toEqual([[], 1]);
     await closeAll(alice, bob, carol);
+  });
+
+  it("an observation left unadmitted by a crash is admitted by the next pass, an open's included, and one whose proof waited for the issuer's document is admitted once a later receipt brings it, while the receipt that brought it, from the address the proof leaves, is ignored", async () => {
+    const { alice, bob } = await parties();
+    const trace = await AgentTrace.open(alice.runtime.local);
+    const { receiver } = await receiving(alice);
+    refuseCommits(alice.runtime, "message.admitted", 1);
+    const crashed = await receiver.receive({ packed: await sealed(await peerSealer(bob), alice.longFormDid), source: DIRECT });
+    expect(crashed).toMatchObject({ outcome: "deferred", reason: expect.stringMatching(/^the receipt failed: the disk is full for now/) });
+    const [orphan] = await eventsOf(alice, "message.in");
+    expect([orphan!.type, await eventsOf(alice, "message.admitted")]).toEqual(["message.in", []]);
+    const recovered = await recordOwed(alice.runtime, alice.keys);
+    expect([recovered.admitted.map(({ data }) => data.sourceEventCid), recovered.consumed, recovered.acknowledged]).toEqual([[orphan!.cid], [], []]);
+    expect(await recordOwed(alice.runtime, alice.keys)).toEqual({ admitted: [], consumed: [], acknowledged: [] });
+
+    const routeId = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
+    const { minted: prior } = await createDid(bob.runtime, bob.keys, routeId, BOB_PRIOR);
+    const signing = await bob.keys.signing(didKeyName(BOB_PRIOR, "authentication"));
+    const shortIssuer = await new SignJWT({ iss: prior.did, sub: bob.longFormDid, iat: IAT }).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: `${prior.did}${AUTHENTICATION_METHOD}` }).sign(await importJWK(signing.privateJwk(), "EdDSA"));
+    receiver.close();
+    const seen: Authenticated[] = [];
+    const observer = new Receiver(alice.runtime, alice.keys, await Keyring.load(alice.keys, await foldOf(alice)), { didcomm, receipt: async (a) => (seen.push(a), { outcome: "terminal", reason: "kept for the test" }) });
+    await observer.receive({ packed: await sealed(await peerSealer(bob), alice.longFormDid), source: DIRECT });
+    observer.close();
+    const [plain] = seen;
+    const carried = await recordReceipt(alice.runtime, alice.keys, { ...plain!, plaintext: { ...plain!.plaintext, from_prior: shortIssuer } as IMessage, fromPrior: shortIssuer });
+    const cid = (carried as Extract<ReceiptOutcome, { outcome: "received" }>).cid;
+    const waiting = await afterReceipt(alice.runtime, alice.keys, cid, { trace });
+    expect([waiting.proof, waiting.disposition, waiting.admitted]).toEqual([{ status: "pending-proof" }, { status: "pending-admission", because: "the source's proof is not yet verified" }, []]);
+    expect((await trace.read({ type: "diag.admission" })).map((entry) => entry.data)).toEqual([{ cid, status: "pending-admission", because: "the source's proof is not yet verified" }]);
+
+    const { receiver: again } = await receiving(alice);
+    const fromOld = await again.receive({ packed: await sealed(await peerSealer(bob, prior.longFormDid), alice.longFormDid), source: DIRECT });
+    if (fromOld.outcome !== "received") throw new Error("not received");
+    const after = await afterReceipt(alice.runtime, alice.keys, fromOld.cid);
+    expect([after.disposition, after.admitted]).toEqual([{ status: "ignored-superseded" }, []]);
+    const fold = await foldOf(alice);
+    expect([fold.continuity.status(cid), fold.dispositions.disposition(cid).status]).toEqual([{ status: "verified" }, "admitted"]);
+    await closeAll(alice, bob);
   });
 
   it("the proof the observation carried is judged by the fold: one that verifies is reported as such and traced nowhere, one that does not is reported and left as a diagnostic", async () => {

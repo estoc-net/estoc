@@ -133,10 +133,19 @@ export type Receipt = {
   wire?: string;
   presentedDid?: Did;
   overrides?: Partial<VaultData["message.in"]>;
+  /** whether the runtime's admission of the receipt is recorded right after it, as the runtime records one for every receipt it may; true unless said otherwise */
+  admitted?: boolean;
 };
 
-/** An authenticated receipt from the peer at one of our DIDs, with or without a proof. */
+/** An authenticated receipt from the peer at one of our DIDs, with or without a proof, and the admission the runtime would record for it. */
 export function receipt(scene: Scene, r: Receipt, options: EventOptions = {}): VaultEvent<"message.in"> {
+  const event = observation(scene, r, options);
+  if (r.admitted !== false) admitted(scene, event, options);
+  return event;
+}
+
+/** The receipt alone, admitted by nothing. */
+export function observation(scene: Scene, r: Receipt, options: EventOptions = {}): VaultEvent<"message.in"> {
   const wire = (r.wire ?? uuidv7()) as WireMessageId;
   return scene.add(
     "message.in",
@@ -167,6 +176,11 @@ export function receipt(scene: Scene, r: Receipt, options: EventOptions = {}): V
     },
     options
   );
+}
+
+/** The runtime's admission of a receipt. */
+export function admitted(scene: Scene, source: VaultEvent<"message.in">, options: EventOptions = {}): VaultEvent<"message.admitted"> {
+  return scene.add("message.admitted", { sourceEventCid: ref(source) }, options);
 }
 
 export const noObjects = async () => null;

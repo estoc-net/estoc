@@ -338,7 +338,7 @@ describe("records", () => {
     expect(reportedProblem({ comment: 7 })).toBe("unknown");
   });
 
-  it("a receipt-integrity conflict is a diagnostic of the inputs it touches and leaves them no manual action, though a reply is still owed by the fold", async () => {
+  it("a receipt-integrity conflict is a diagnostic of the inputs it touches and admits neither: no manual action, no reply owed", async () => {
     const { alice, bob } = await parties();
     const pair = { localDid: alice.did, peerDid: bob.did };
     await received(alice, bob, crypto.randomUUID(), { type: PING_TYPE, body: { response_requested: true }, created_time: CREATED });
@@ -347,8 +347,8 @@ describe("records", () => {
     const records = await readRecords(alice.runtime, alice.keys);
     const record = await records.channel(pair);
     expect(record.messages).toHaveLength(2);
-    for (const message of record.messages) expect(message).toMatchObject({ input: { status: "complete" }, manualAction: "none", completes: [], diagnostics: [{ kind: "receipt-integrity" }] });
-    expect(records.pending().missingResponses).toMatchObject([{ effectType: PING_RESPONSE_EFFECT, entries: [] }]);
+    for (const message of record.messages) expect(message).toMatchObject({ input: { status: "pending", because: "no observation of the input is admitted" }, manualAction: "none", completes: [], diagnostics: [{ kind: "input" }, { kind: "receipt-integrity" }] });
+    expect(records.pending().missingResponses).toEqual([]);
     await closeAll(alice, bob);
   });
 

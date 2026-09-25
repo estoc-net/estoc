@@ -28,6 +28,7 @@ export function privacyPolicy(fold: VaultFold, cid: EventReference<"message.in">
   if (source.channel === null || source.localDidId === null) return none("the observation is anonymous or in no channel");
   const witness = fold.continuity.witness(cid);
   if (witness.status !== "complete") return none(`the observation is no complete witness: ${witness.because}`);
+  if (!fold.admissions.admitted(cid)) return none(`the observation is not admitted: ${fold.dispositions.disposition(cid).status}`);
   const execution = fold.inbound.ofSource(cid);
   if (execution === null) return none("the observation is in no input here");
   if (execution.status.status !== "complete") return none(`the input is not established: ${execution.status.because}`);

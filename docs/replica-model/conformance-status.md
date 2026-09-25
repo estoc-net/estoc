@@ -26,7 +26,9 @@ specification-only revision.
 
 | Cases | Status after this revision | Remaining work |
 | --- | --- | --- |
-| CH-57–CH-66 | `missing` | Durable admission schema, producer/recovery, projections, import-order/crash/duplicate checks, saved-record validity, disposition precedence, pickup ordering and endpoint dispatch checks |
+| CH-58, CH-59, CH-61, CH-65 | `verified` | Stage 3: `vault/test/fold/admission.test.ts` (effective, pending and invalid admissions; disposition precedence: source invalidity and receipt-integrity faults over a saved admission, admitted after denial or supersession, supersession before pending, denial pending; a proof-free receipt eligible in a conflicted context), `vault/test/procedures.test.ts` › "admitting receipts" (ordered rounds, a contradicting candidate refused against the admitted intent, a failed commit leaving the earlier rounds durable), `agent-core/test/after.test.ts` (an observation left unadmitted by a crash admitted by the next pass; a carrier pending issuer material admitted once a later receipt brings it, that receipt from the left address ignored), `vault/test/schema.test.ts` |
+| CH-57, CH-60, CH-62, CH-64, CH-66 | `partial` | Stage 3 covers: old-peer receipts stay `ignored-superseded` with prior admitted history intact (`agent-core/test/receipt.test.ts`, `test/e2e/hostile.test.ts`), the fold order-free over every permutation (`expectOrderFree` in the admission and procedure tests), reconciliation admitting only now-eligible sources (`after.test.ts` › `recordOwed`), committed consumptions validated without admission (`vault/test/fold/invitations.test.ts`), concurrent direct receipts sharing the lock sequence (`receipt.test.ts`). Left: admissions imported from independent histories, manual old-address sends, saved automatic records after supersession, and a pickup batch exercised in both orders |
+| CH-63 | `missing` | Stage 4: endpoint replacement gates on dispatch and retry |
 | CH-7, CH-13, CH-19, CH-49, CH-51, CH-52, CH-54–CH-56 | `partial` | Preserve existing evidence checks; add admission and invitation skip/defer checks, and remove pre-rotation send/retry exceptions |
 | VE-32, VE-60, VE-61, VE-78, VE-97, VE-109, VE-115, VE-126, VE-133, VE-139, VE-141, VE-142, VE-144, VE-151 | `partial` | Admission-aware application witnesses, ACK/profile/confirmation views and current endpoint restrictions |
 | DD-12, DD-23, DD-26, DD-27, DD-44, DD-65, DD-70, DD-71, DD-74, DD-76, DD-77; RZ-33 | `partial` | Admission-aware intent conflicts and ACK witnesses/order, and strict dispatch eligibility |
@@ -36,7 +38,7 @@ specification-only revision.
 ## Pending content-addressed events and continuity integration — 2026-09-25
 
 The target now uses vault version 4 / SQLite schema 2 and consumes
-`@estoc/continuity` through the vault. Stages 1 and 2 below are implemented.
+`@estoc/continuity` through the vault. Stages 1, 2 and 3 below are implemented.
 Stage 1: the event store, the SQLite schema and every consumer of event
 identity in the vault, agent-core, daemon, CLI and app use five-field
 canonical envelopes, raw CIDs and `*EventCid` references, and equal envelopes
@@ -45,8 +47,18 @@ retained receipts and saved decisions into the package's facts under IDs
 derived from the event CIDs, derives the one model with `deriveContinuity`,
 and parses, prechecks, verifies, binds and creates `from_prior` through
 `@estoc/continuity/from-prior`; its own parser and continuity graph are
-removed, and an ending token is retained as an unsupported proof. The
-application changes of stages 3–5 are **not implemented**. The version-3 seed wrapper, DID/key derivation and
+removed, and an ending token is retained as an unsupported proof. Stage 3:
+`message.admitted` is a vault event; the vault folds each admission against
+its source into effective, pending or invalid, gives every observation a
+disposition and lists the candidates for admission in first-receipt order
+with what holds against each; an input's intent and establishment are read
+from its admitted observations alone, a contradicting unadmitted
+observation being a listed discrepancy; the ordered pass (`admitReceipts`)
+commits admissions round by round under the lock, refolding between
+rounds, and runs inside the receipt's own lock, in the after-receipt pass
+and on open, before invitation consumption; a candidate that is not
+admitted defers the invitation it could consume. The application changes
+of stages 4–5 are **not implemented**. The version-3 seed wrapper, DID/key derivation and
 deterministic domain-ID transcripts stay unchanged. Earlier vaults need no
 migration and are refused. Documentation checks do not verify runtime
 behavior, and the package's own tests do not establish host conformance.
@@ -60,9 +72,12 @@ behavior, and the package's own tests do not establish host conformance.
 | VE-37, VE-90, VE-95, VE-111, VE-152; CH-41 | `verified` | `vault/test/schema.test.ts` (`*EventCid` fields validated as raw CIDs), `vault/test/fold/*.test.ts` (scenes under real envelope CIDs, missing references as unheld CIDs), `agent-core/test/*.test.ts` |
 | VE-52 | `partial` | Verify permanent erase coverage across distinct imported event CIDs without reviving the erased relation |
 | CH-67, CH-72, CH-73, CH-78; VE-38–VE-40; DD-34 | `verified` | `vault/test/fold/continuity.test.ts` (fact IDs and evidence references derived from event CIDs over every event order, one proof bound to its own receipt alone, the profile's document-independent refusals — `alg`, `typ`, a `kid` of another DID, a `sub` equal to `iss` or unequal to the sender, `exp` — and its accepted spellings, an ending retained as `unsupported` with no fact and no confirmation), `vault/test/fold/channels.test.ts` (bound transition and observation facts, local-decision facts with the source's observation ID), `vault/test/from-prior.test.ts` (creation through the package under the entity's key, issuer long form from the spelling or a verified retained resolution) |
-| CH-69, CH-70 | `partial` | Saved decisions and joins rebuild without admission and heads answer `head`/`no-evidence`/`unresolved`/`conflict` as the package does, with no predecessor fallback (`continuity.test.ts` › "no fact mentions is its own head…", "reuses the decision throughout its peer-only context…"); unprojected saved decisions are listed by `decisionsIn` (`continuity.test.ts` › "passes through what the evidence already refused…"). The admitted-observation requirement for new confirmation and the allocation check are stages 3–4 |
-| CH-71 | `partial` | A proof-free receipt in a conflicted context stays a complete witness (`continuity.test.ts` › "reuses the decision throughout its peer-only context…"); admission and ACK attribution over it are stages 3–4 |
-| CH-74–CH-77, CH-79 | `missing` | Ordered admission, revision checks, strict dispatch and app views |
+| CH-69, CH-70 | `partial` | Saved decisions and joins rebuild without admission and heads answer `head`/`no-evidence`/`unresolved`/`conflict` as the package does, with no predecessor fallback (`continuity.test.ts` › "no fact mentions is its own head…", "reuses the decision throughout its peer-only context…"); unprojected saved decisions are listed by `decisionsIn` (`continuity.test.ts` › "passes through what the evidence already refused…"). The admitted-observation requirement for new confirmation and the allocation check are stage 4 |
+| CH-71 | `partial` | A proof-free receipt in a conflicted context stays a complete witness and is eligible for admission while the carrier whose proof the conflict is about is refused (`continuity.test.ts` › "reuses the decision throughout its peer-only context…", `admission.test.ts` › "hold a proof-free receipt eligible in a conflicted context…"); ACK attribution over it is stage 4 |
+| CH-74 | `verified` | `vault/test/procedures.test.ts` › "admitting receipts" (two observations of one input with contradictory intent reconciled in receipt order, the second refused against the first's admission; a commit that fails ends the pass with the earlier rounds durable and the next pass finishing it), `agent-core/test/after.test.ts` › "an observation left unadmitted by a crash…" (recovery reads committed admissions and admits now) |
+| CH-75 | `partial` | Concurrent direct receipts share the receipt/admission sequence, each admission decided under the receipt's lock before the next observation commits (`agent-core/test/receipt.test.ts` › "the receipt admits the observation before the lock is released…"); a rotation receipt arriving after a pending old-peer receipt leaves it ignored (`after.test.ts`). Left: a pickup batch exercised with different transport keys, and pickup ACK completion shown not to hold the sequence |
+| CH-76 | `partial` | Verification, projection, admission and commit read one fold under the writer lock (`scanVault` inside `runtime.locked` in `receipt.ts`, `after.ts`, `effects.ts`, `rotate.ts`); a fresh projection is folded from the set alone, never unioned with a cache. Left: no test imports a replacement between a verification and a commit |
+| CH-77, CH-79 | `missing` | Stages 4–5: shared endpoint gates on every dispatch path, daemon records and app views |
 
 ES-33, SQ-41, SQ-42 and CH-68 are withdrawn: they required multiple canonical
 values under one event UUID. Their IDs are not reused. Distinct events with
@@ -72,7 +87,7 @@ relationship-ended state. Adopting endings needs a separate application-policy,
 event and UI revision; none of the stages below enables them implicitly.
 
 Implement in this order; each stage needs its own integration evidence before
-its status is promoted. Stages 1 and 2 are complete; their evidence is the
+its status is promoted. Stages 1, 2 and 3 are complete; their evidence is the
 rows above.
 
 | Stage | Deliverable | Completion evidence |

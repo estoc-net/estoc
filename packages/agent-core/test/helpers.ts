@@ -211,7 +211,7 @@ export async function sealed(from: Sealer | null, to: string, extra: Partial<IMe
 
 export const kidOf = (packed: string): string => (JSON.parse(packed) as { recipients: { header: { kid: string } }[] }).recipients[0]!.header.kid;
 
-/** The peer's message received at one of `party`'s DIDs: the peer's document pinned, the body stored, the observation committed — a complete witness of the peer writing to exactly that address. */
+/** The peer's message received at one of `party`'s DIDs: the peer's document pinned, the body stored, the observation committed and admitted — an admitted complete witness of the peer writing to exactly that address. */
 export async function received(party: DirectParty, peer: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = party): Promise<EventReference<"message.in">> {
   const outcome = await resolve(peer.longFormDid, () => null);
   if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
@@ -247,7 +247,9 @@ export async function received(party: DirectParty, peer: DirectParty, wire: stri
       }),
     ]
   );
-  return event!.cid as EventReference<"message.in">;
+  const cid = event!.cid as EventReference<"message.in">;
+  await party.runtime.vault.commit([], [vaultDraft("message.admitted", { sourceEventCid: cid })]);
+  return cid;
 }
 
 export interface MediatedParty extends Party {

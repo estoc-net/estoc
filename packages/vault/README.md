@@ -138,6 +138,22 @@ role-preserving `ackPath` from an outbound to a carrier, the denials
 that cover a channel through the history and the decisions of a
 peer-only context whether or not they are projected; the package's
 `model` is exposed for what those do not summarize), the
+admissions (`fold/admission.ts`: `foldAdmissions` reads each
+`message.admitted`, the runtime's acceptance of one exact observation
+for application use, against its source — `effective` when the source
+is positive evidence on its own and no author gave its ordinal to
+another observation, `pending` while the source or its evidence is
+still to arrive, `invalid` for good — and says which observations are
+`admitted`; `foldDispositions` gives every observation its
+disposition, `refused` for good, `admitted`, `ignored-superseded` once
+the peer moved on without one, or `pending-admission` with what stands
+in the way, and lists the `candidates` no effective or pending
+admission names, in first-receipt order, each `eligible`, `deferred`
+for evidence, `refused` by current policy — the peer's replacement, the
+channel's denial, a conflict in the continuity its proof needs, a
+contradiction of the intent its input admitted — `invalid` or in an
+`integrity-conflict`, for the runtime to walk when it records
+admissions, the fold recording none), the
 invitations (`fold/invitations.ts`: `foldInvitations` reads each
 one-use OOB disclosure with the consumption records that name it and
 the receipts that could consume it; a record is read on its own —
@@ -152,11 +168,12 @@ its route is retired, misconfigured or on a terminal mediation, or in
 the ID, or the walk reaches a candidate caught in a receipt-integrity
 conflict before an eligible one; the `candidates` are the unerased
 proof-free followers in first-receipt order, each `eligible`,
-`deferred`, `refused` by the DID's lifecycle or by the channel's
-current denial, continuity conflict or supersession, `invalid` by its
-own witness or by the intent conflict of the input it observes, or in
-`integrity-conflict`, for the runtime to walk when it records a
-consumption, the fold recording none), the
+`deferred` for evidence or for the admission it is still owed,
+`refused` by the DID's lifecycle, by the channel's current denial,
+continuity conflict or supersession or by whatever refuses its
+admission, `invalid` by its own witness or by the intent conflict of
+the input it observes, or in `integrity-conflict`, for the runtime to
+walk when it records a consumption, the fold recording none), the
 contacts (`fold/contacts.ts`: `foldContacts` is a table of latest-wins
 decisions under each contact ID — tombstone, petname, flags, local-DID
 preference, the whole channel selection replaced or cleared, merge
@@ -165,13 +182,14 @@ whose selection holds a channel), the inbound
 inputs (`fold/inbound.ts`: `foldInbound` groups every authenticated
 observation whose own authentication is complete into the input its
 canonical sender, recipient and wire ID name, one execution per input
-in its channel, its members in first-receipt order; the members whose
-proof, if any, supports a link must agree on the intent, and a
+in its channel, its members in first-receipt order; the members an
+effective admission names must agree on the intent, and a
 disagreement is a `conflict` for good, whatever later becomes of
-those members' witnesses; the input is `complete` once one member is
-a complete witness under the continuity, `pending` otherwise, and a
-member whose proof is refused or not yet verified neither makes a
-conflict nor clears one; the observations of the input whose own
+those members' witnesses; the input is `complete` once one admitted
+member is a complete witness under the continuity, its
+`firstWitness`, `pending` otherwise, and a member no admission names
+neither makes a conflict nor clears one, one whose intent differs
+from the admitted one being listed as `contradicting`; the observations of the input whose own
 authentication is incomplete or contradicted are its `siblings`,
 listed and counted for nothing, those with no input to join are
 `unplaced`, and the `anonymous` ones are apart; each complete input
@@ -240,6 +258,13 @@ validation and import, and `collectGarbage` is one pass;
 packages still name, in one commit, and `closeErasures` appends the
 equivalent erases a later observation or package made an erased
 message owed, `eraseDrafts` / `erasureClosure` being the decisions;
+`reconcileAdmissions` records the admissions the observations are
+owed, in first-receipt order and round by round under the lock, each
+round the first eligible candidate of each input and the fold read
+again over the extended set before the next, so that a consistent
+duplicate is admitted after the first and a contradicting one refused
+against it, `admissionDrafts` being one round's decision and
+`admitReceipts` the pass under a lock already held;
 `consumeInvitations` records the consumption each available one-use
 invitation is owed, the first candidate receipt that may be recorded
 now, refused and invalid ones passed over and a waiting one stopping

@@ -23,7 +23,7 @@ Agent            a vault running: one receiver, one dispatcher, a line to each m
   ├─ send        what a message is, committed as an intent in its channel before any network work
   ├─ prepare     an intent → the one exact envelope every transport call of it carries
   ├─ dispatch    the one transport call of a prepared package, under a live action; dispatcher waits for prerequisites
-  ├─ receive/    the gate before the vault, the receipt as one observation, and what a receipt owes afterwards
+  ├─ receive/    the gate before the vault, the receipt as one observation admitted or not before its lock is released, and what a receipt owes afterwards
   ├─ effects     what an established input earns on its own: the receipt it asks for, a handler's reply
   ├─ handlers/   trust-ping 2.0 · basicmessage 2.0 · user-profile 1.0 · report-problem 2.0 · empty 1.0, through the handler seam
   ├─ rotate      a local rotation frozen with its proof; privacy: a disclosed address gives way to a private successor
@@ -45,8 +45,13 @@ waiting is shown as pending work, each item naming the manual procedure
 An inbound envelope is opened with the one key of this vault it names,
 its sender read from what the vault already holds and never from the
 network, and recorded as an observation with its rotation proof as it
-came. Whether the proof verifies, which channel the input is
-established in and what it earns are the fold's to say.
+came. Before the receipt's lock is released, the vault's ordered
+admission pass decides, among every observation still owed one in
+first-receipt order, whether this one is admitted for application use,
+so that the writer lock is the one sequence every receipt and
+admission goes through whichever way the delivery came. Whether the
+proof verifies, which channel the input is established in and what it
+earns are the fold's to say, over the admitted observations alone.
 
 ## Usage
 

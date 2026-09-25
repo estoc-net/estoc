@@ -132,13 +132,13 @@ describe("an inbound input", () => {
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
-  it("is in conflict for good when positive observations carry different intents, whatever later becomes of their witnesses", async () => {
+  it("is in conflict for good when admitted observations carry different intents, whatever later becomes of their witnesses", async () => {
     const { scene, keys, peerKeys, a0, b0, b1, b2 } = await vaults();
     const wire = uuidv7();
     const plain = observe(scene, { local: a0, peer: b1, ordinal: 1, wire });
     const carried = observe(scene, { local: a0, peer: b1, ordinal: 2, wire, hash: OTHER_HASH, fromPrior: await proof(peerKeys, b0, b1) });
     let vault = await fold(scene, keys);
-    const conflict = { status: "conflict", because: "2 intents are authenticated for one input" };
+    const conflict = { status: "conflict", because: "2 intents are admitted for one input" };
     let execution = vault.inbound.ofMessage(plain.data.messageId)!;
     expect(execution).toMatchObject({ status: conflict, intentHash: null, kind: null, firstReceiptKey: null });
     expect(execution.members.map(({ source, positive, witness }) => [source.event.cid, positive, witness])).toEqual([
@@ -160,7 +160,7 @@ describe("an inbound input", () => {
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
-  it("takes no contradiction from, and lends no completion to, an observation whose proof is refused or not yet verified", async () => {
+  it("takes no contradiction from, and lends no completion to, an observation whose proof is refused or not yet verified, since no admission of it is effective", async () => {
     const { scene, keys, peerKeys, a0, a1, b0, b1 } = await vaults();
     const wire = uuidv7();
     const shortIssuer = await resign(peerKeys, b0.didId, { alg: "EdDSA", typ: "JWT", kid: `${b0.did}${AUTHENTICATION_METHOD}` }, { iss: b0.did, sub: b1.longFormDid, iat: IAT });
@@ -168,7 +168,7 @@ describe("an inbound input", () => {
     const waiting = observe(scene, { local: a0, peer: b1, ordinal: 2, wire, hash: OTHER_HASH, fromPrior: shortIssuer });
     let vault = await fold(scene, keys);
     let execution = vault.inbound.ofMessage(refused.data.messageId)!;
-    expect(execution).toMatchObject({ status: { status: "pending", because: "no observation is a complete witness: the proof is not yet verified" }, intentHash: null, kind: null, firstReceiptKey: null });
+    expect(execution).toMatchObject({ status: { status: "pending", because: "no observation of the input is admitted" }, intentHash: null, kind: null, firstReceiptKey: null });
     expect(execution.members.map(({ source, positive, witness }) => [source.event.cid, positive, witness])).toEqual([
       [refused.cid, false, { status: "invalid", because: expect.stringMatching(/^not a compact JWT/) }],
       [waiting.cid, false, { status: "pending", because: "the proof is not yet verified" }],
@@ -194,7 +194,7 @@ describe("an inbound input", () => {
       [waiting.cid, true, "complete"],
       [plain.cid, true, "complete"],
     ]);
-    expect(execution).toMatchObject({ status: { status: "conflict", because: "2 intents are authenticated for one input" }, intentHash: null, firstReceiptKey: null });
+    expect(execution).toMatchObject({ status: { status: "conflict", because: "2 intents are admitted for one input" }, intentHash: null, firstReceiptKey: null });
     expectSameOverEveryOrder(scene, vault.checks);
   });
 

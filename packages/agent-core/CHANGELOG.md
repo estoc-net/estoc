@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Every receipt is admitted, or told why not, before its lock is
+  released** (behaviour change): the receipt commits the observation,
+  reads the fold again and runs the vault's ordered admission pass, so
+  the writer lock is the one receipt/admission sequence whichever way a
+  delivery came, and a replacement known by then is known to the
+  decision. The after-receipt pass (`afterReceipt`, `recordOwed`) runs
+  the same pass first, under one lock with the consumptions and
+  acknowledgements it then records over the fold the admissions left;
+  `Owed.admitted` holds what it recorded, `AfterReceipt.disposition`
+  what the observation in hand is to the application, and an
+  observation not admitted goes to the `diag` stream as `admission`. An
+  input a denied channel, a replaced peer or a contradiction keeps from
+  admission is not established: its automatic effects are not asked,
+  and `Reacted.because` says so. The exact source of a rotation and of
+  the private-address policy must itself be admitted.
+- A contradicting duplicate of an admitted input is refused admission
+  and listed as the discrepancy it is; the input stays established by
+  what it admitted first and keeps the outputs it earned.
+
 - **Continuity comes from `@estoc/continuity` through the vault**
   (behaviour change): a send, a reply or a rotation from a channel a
   conflict lies ahead of, or whose own saved rotation the peer has not

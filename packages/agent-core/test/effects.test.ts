@@ -187,7 +187,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("an input contradicted by another observation of it earns nothing more, live or by hand, and is no listed work; the receipt already handed over stays the message it was, handed over", async () => {
+  it("an observation contradicting the intent its input has admitted is refused admission and listed as the discrepancy it is: the input stays established by the first, earns what the first earned and no more, and the receipt already handed over stays the message it was, handed over", async () => {
     const { alice, bob } = await parties();
     const { wire, options, receive, live, executionOf } = await reacting(alice);
     const answered = crypto.randomUUID() as WireMessageId;
@@ -195,19 +195,24 @@ describe("the automatic effects of a live input", () => {
     expect(wire.posts).toHaveLength(1);
 
     const contradicting = await live(bob, ping(answered));
-    expect(contradicting.effects.map((effect) => effect.outcome)).toEqual(contradicting.effects.map(() => "none"));
+    expect(outcomes(contradicting.effects)).toEqual([
+      [PURE_ACK_EFFECT, "existing", null],
+      [PING_RESPONSE_EFFECT, "none", "the Ping asked for no reply"],
+    ]);
     const unanswered = crypto.randomUUID() as WireMessageId;
     const executionId = await executionOf(await receive(bob, ping(unanswered)));
-    await receive(bob, ping(unanswered, { body: { response_requested: false } }));
-    for (const [id, effectType] of [[contradicting.executionId!, PING_RESPONSE_EFFECT], [contradicting.executionId!, PURE_ACK_EFFECT], [executionId, PING_RESPONSE_EFFECT], [executionId, PURE_ACK_EFFECT]] as const) {
-      const completed = await completeResponse(alice.runtime, alice.keys, id, effectType, options);
-      expect([completed.outcome, "because" in completed && completed.because.startsWith("the input is not established")]).toEqual(["none", true]);
-    }
+    const later = await receive(bob, ping(unanswered, { body: { response_requested: false } }));
+    expect(outcomes([await completeResponse(alice.runtime, alice.keys, contradicting.executionId!, PING_RESPONSE_EFFECT, options)])).toEqual([[PING_RESPONSE_EFFECT, "none", "the Ping asked for no reply"]]);
+    expect(outcomes([await completeResponse(alice.runtime, alice.keys, executionId, PING_RESPONSE_EFFECT, options)])).toEqual([[PING_RESPONSE_EFFECT, "created", "submitted"]]);
 
     const fold = await foldOf(alice);
-    expect([fold.inbound.executions.get(contradicting.executionId!)!.status.status, fold.inbound.executions.get(executionId)!.status.status]).toEqual(["conflict", "conflict"]);
-    expect([wire.posts.length, fold.set.of("message.out").length, unfinishedWork(fold).responses]).toEqual([1, 1, []]);
-    expect(fold.outbound.outbounds.get(ack.messageId)).toMatchObject({ messageId: ack.messageId, submitted: true, released: true, effect: { status: "conflict" }, work: { kind: "none" } });
+    for (const [id, refused] of [[contradicting.executionId!, contradicting.cid], [executionId, later]] as const) {
+      const execution = fold.inbound.executions.get(id)!;
+      expect([execution.status, execution.members.map(({ admitted }) => admitted), execution.contradicting.map(({ source }) => source.event.cid)]).toEqual([{ status: "complete" }, [true, false], [refused]]);
+      expect(fold.dispositions.disposition(refused)).toEqual({ status: "pending-admission", because: "the observation contradicts the intent its input has admitted" });
+    }
+    expect([wire.posts.length, fold.set.of("message.out").length, unfinishedWork(fold).responses.map(({ execution, effectType }) => [execution.id, effectType]).sort()]).toEqual([2, 2, [[contradicting.executionId, PING_RESPONSE_EFFECT], [executionId, PURE_ACK_EFFECT]].sort()]);
+    expect(fold.outbound.outbounds.get(ack.messageId)).toMatchObject({ messageId: ack.messageId, submitted: true, released: true, effect: { status: "complete" }, work: { kind: "none" } });
     await closeAll(alice, bob);
   });
 
@@ -457,10 +462,8 @@ describe("the automatic effects of a live input", () => {
 
     await blockChannels(alice.runtime, alice.keys, [{ localDid: alice.did, peerDid: bob.did }], false);
     const denied = await live(bob, ping(crypto.randomUUID()));
-    expect(outcomes(denied.effects)).toEqual([
-      [PURE_ACK_EFFECT, "none", "the channel is denied"],
-      [PING_RESPONSE_EFFECT, "none", "the channel is denied"],
-    ]);
+    expect(denied).toMatchObject({ because: "the input is not established: no observation of the input is admitted", effects: [] });
+    expect((await foldOf(alice)).dispositions.disposition(denied.cid)).toEqual({ status: "pending-admission", because: "the channel is denied" });
 
     const anonymous = await receiver.receive({ packed: await sealed(null, alice.longFormDid, { type: BASIC_MESSAGE, please_ack: [""] }), source: DIRECT });
     if (anonymous.outcome !== "received") throw new Error(`not received: ${JSON.stringify(anonymous)}`);

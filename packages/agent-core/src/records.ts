@@ -312,8 +312,8 @@ export function recorder(fold: VaultFold, readObject: ReadObject, options: ViewO
 function owedResponses(fold: VaultFold, own: readonly MissingResponse[], handlers: readonly Handler[]): MissingResponse[] {
   const owed = own.filter((response) => response.effectType === PURE_ACK_EFFECT);
   for (const execution of fold.inbound.executions.values()) {
-    if (execution.status.status !== "complete") continue;
-    const source = execution.members.find((member) => member.witness.status === "complete")!.source;
+    if (execution.firstWitness === null) continue;
+    const { source } = execution.firstWitness;
     const handler = handlerFor(handlers, source.event.data.msgType);
     if (handler === null || (handler === trustPing && execution.erased)) continue;
     const operations = handler.effectTypes.filter((effectType) => effectType !== PURE_ACK_EFFECT && automaticIntent(fold, execution, effectType).existing === null);
@@ -391,14 +391,15 @@ function document(context: Context, erased: boolean, bodyCid: Cid): Promise<Body
 const headersOf = (data: MessageIn | MessageOut): MessageHeaders => ({ type: data.msgType, thid: data.thid, pthid: data.pthid, createdTime: data.createdTime, expiresTime: data.expiresTime });
 
 /**
- * The observation an input is shown by: its complete witness, else
- * the first whose proof counts, else the first. Its content is shown
- * when the observations whose proofs count agree on it, as the fold
- * reads the input's intent; while none counts yet, only when every
- * authenticated observation carries the same content.
+ * The observation an input is shown by: its admitted complete witness,
+ * else the first admitted, else the first whose proof counts, else the
+ * first. Its content is shown when the admitted observations agree on
+ * it, as the fold reads the input's intent; while none is admitted
+ * yet, only when every authenticated observation carries the same
+ * content.
  */
 function shown(execution: Execution): { member: Member; agreed: boolean } {
-  const member = execution.members.find((m) => m.witness.status === "complete") ?? execution.members.find((m) => m.positive) ?? execution.members[0]!;
+  const member = execution.firstWitness ?? execution.members.find((m) => m.admitted) ?? execution.members.find((m) => m.positive) ?? execution.members[0]!;
   const intentHash = execution.intentHash ?? member.source.event.data.intentHash;
   const agreed = execution.status.status !== "conflict" && (execution.intentHash !== null || execution.members.every((m) => m.source.event.data.intentHash === intentHash));
   return { member, agreed };

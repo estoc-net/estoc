@@ -16,13 +16,22 @@
  * that lock too, and told with the record: only the first observation
  * of an input may earn automatic work, whichever runtime recorded the
  * others and whatever became of it.
+ *
+ * Before the lock is released, the admissions the vault owes are
+ * reconciled over a fold read again, the new observation's proof
+ * judged in it and its admission decided among the rest in
+ * first-receipt order. The writer lock is thus the one sequence every
+ * receipt and admission goes through, whichever way the delivery
+ * came: no observation is committed while an earlier one's admission
+ * is undecided, and a replacement known by then is known to the
+ * decision.
  */
-
 
 import type { Held, VaultRuntime } from "@estoc/event-store";
 import {
   InvalidPayload,
   InvalidPlaintext,
+  admitReceipts,
   anonymousMessageId,
   inboundMessageId,
   rawCidOfBytes,
@@ -153,5 +162,6 @@ async function settle(held: Held, keys: Keys, { recipient, sender }: Authenticat
   const receiptOrdinal = String(fold.channels.receipts.nextReceiptOrdinal) as ReceiptOrdinal;
   const resolved = sender === null ? null : await commitResolution(held, { resolution: sender.resolution, localKeyName: recipient.localKeyName, peerPublicKey: sender.peerPublicKey });
   const [event] = (await held.commit(objects, [vaultDraft("message.in", { ...observed, receiptOrdinal, peerResolutionEventCid: (resolved?.cid ?? null) as EventReference<"peer.resolved"> | null })])).map(readVaultEvent);
+  await admitReceipts(held, await scanVault(held, keys));
   return { outcome: "received", cid: (event as VaultEvent<"message.in">).cid as EventReference<"message.in">, first };
 }

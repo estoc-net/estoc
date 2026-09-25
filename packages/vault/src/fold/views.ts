@@ -135,9 +135,8 @@ function channelView(fold: ViewInputs, channel: Channel, executions: readonly Ex
   const inbound = [...executions].sort(byFirstReceipt);
   const errors: RemoteError[] = [];
   for (const execution of inbound) {
-    if (execution.kind !== "error" || execution.status.status !== "complete") continue;
-    const source = execution.members.find((member) => member.witness.status === "complete")!.source;
-    errors.push({ execution, outbound: fold.outbound.inReplyTo(source.event.cid) });
+    if (execution.kind !== "error" || execution.firstWitness === null) continue;
+    errors.push({ execution, outbound: fold.outbound.inReplyTo(execution.firstWitness.source.event.cid) });
   }
   return {
     channel,

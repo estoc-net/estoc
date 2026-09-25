@@ -14,6 +14,7 @@ import { DamagedObject, ObjectTooLarge, type Retained, type Vault, type VaultObj
 
 import type { Keys } from "../identity.js";
 import type { Cid, DidId, EventCid, MediationId } from "../types.js";
+import { foldAdmissions, foldDispositions, type AdmissionFold, type Dispositions } from "./admission.js";
 import { foldAuthors, foldLabel, type AuthorActivity } from "./author.js";
 import { foldChannelEvidence, verifyProofs, type ChannelEvidence, type ProofCheck } from "./channels.js";
 import { foldContacts, type ContactFold } from "./contacts.js";
@@ -45,7 +46,10 @@ export interface VaultFold {
   readonly routes: RouteFold;
   readonly channels: ChannelEvidence;
   readonly continuity: Continuity;
+  readonly admissions: AdmissionFold;
   readonly inbound: InboundFold;
+  /** what each observation is to the application, and which may be admitted now */
+  readonly dispositions: Dispositions;
   readonly invitations: InvitationFold;
   readonly contacts: ContactFold;
   readonly outbound: OutboundFold;
@@ -72,7 +76,9 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}, options:
   const channels = foldChannelEvidence(set, routes, all);
   const continuity = foldContinuity(set, channels);
   const erasures = foldErasures(set);
-  const inbound = foldInbound(channels, continuity, erasures);
+  const admissions = foldAdmissions(set, channels);
+  const inbound = foldInbound(channels, continuity, admissions, erasures);
+  const dispositions = foldDispositions(channels, continuity, admissions, inbound);
   const outbound = foldOutbound(set, routes, channels, continuity, inbound, erasures, all.resolutionChecks, options);
   const contacts = foldContacts(set);
   return {
@@ -84,8 +90,10 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}, options:
     routes,
     channels,
     continuity,
+    admissions,
     inbound,
-    invitations: foldInvitations(set, routes, channels, continuity, inbound, erasures),
+    dispositions,
+    invitations: foldInvitations(set, routes, channels, continuity, inbound, dispositions, erasures),
     contacts,
     outbound,
     erasures,
