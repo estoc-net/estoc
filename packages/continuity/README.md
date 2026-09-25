@@ -11,7 +11,7 @@ Two entry points keep proof processing apart from the pure model:
 | Entry point | What it does | What it imports |
 | --- | --- | --- |
 | `@estoc/continuity` | Validates facts, merges snapshots by union, derives continuity queries | `canonicalize` only |
-| `@estoc/continuity/from-prior` | Inspects, verifies, binds and creates DIDComm v2 `from_prior` proofs | `jose`, `@estoc/did-peer`, `@scure/base` |
+| `@estoc/continuity/from-prior` | Inspects, prechecks, verifies, binds and creates DIDComm v2 `from_prior` proofs | `jose`, `@estoc/did-peer`, `@scure/base` |
 
 The types and JSDoc of the two entry points define the API. This file
 adds what the API cannot express: the evidence each fact must rest on,
@@ -221,11 +221,17 @@ the issuer's long-form DID as the host retained it: a did:peer:4 is its
 own document, so the signing key is taken from the content the DID's
 hash covers and a document assembled by a caller cannot substitute one.
 The module resolves nothing over the network. `InvalidFromPrior.failure`
-tells form, profile, document and signature failures apart.
+tells form, profile, binding, document and signature failures apart.
 
 `inspectFromPrior` decodes a token without verifying it, so the host can
-find the issuer's material. `verifyFromPrior` establishes the issuer's
-declaration. `bindFromPrior` turns it into facts at the pair the
+find the issuer's material. `precheckFromPrior` applies every rule of
+the profile that needs no issuer document, and, given the receipt's
+authenticated sender, refuses a rotation whose successor is not that
+sender: a token it refuses can never verify or bind, so the host records
+the refusal instead of waiting for material, while a token it passes is
+still unverified. Decoding success is not profile validation, and the
+precheck grants no verified type. `verifyFromPrior` applies the same
+document-independent rules and establishes the issuer's declaration. `bindFromPrior` turns it into facts at the pair the
 receipt established: a rotation requires the receipt's own token and an
 authenticated sender equal to `sub`, and yields the peer transition at
 `C(recipient, iss)` and, when an observation ID is given, the address
@@ -255,11 +261,15 @@ The model checks structure, references and graph semantics. Everything
 below is the host's, and the model cannot check it.
 
 - **Evidence.** The host verifies source acceptance, endpoint ownership
-  and envelope authentication, and retains stable fact IDs, evidence
-  references, the original tokens and documents, and every conflicting
-  source variant. The model cannot reconstruct evidence an untrusted
-  caller omitted, and a branded verified type is a guard against
-  accidental misuse, not a security boundary for imported data.
+  and envelope authentication, and retains stable fact IDs, exact
+  evidence references, original tokens and documents. A host whose
+  source identifiers can name multiple canonical values must preserve
+  every variant. The Estoc version-4 target instead addresses event
+  envelopes by verified content CID: different envelopes have different
+  source identities, and all distinct source events remain available.
+  Content addressing does not authenticate a source. The model cannot
+  reconstruct evidence a caller omitted, and a branded verified type is
+  not a security boundary for imported data.
 - **Completeness.** Every answer is relative to the snapshot supplied.
   The model cannot say that unknown history does not exist, and it does
   not see sources awaiting material, verification or binding; the host
@@ -271,10 +281,13 @@ below is the host's, and the model cannot check it.
   newly learned source contradiction may require re-verifying and
   rebuilding the projection, and a verification cache is reused only
   while its exact token, document, bindings and profile still hold in
-  the combined evidence. A colliding evidence reference keeps every
-  value and blocks the operations that depend on it; when the collision
-  projects to fact variants, pass them all so the model reports the
-  identity conflict.
+  the combined evidence. For a host that permits colliding evidence
+  references, retain every value and block dependent operations; pass
+  all projected fact variants to the model. For the Estoc version-4
+  target, evidence references use exact event CIDs and fact IDs derive
+  from those CIDs. Reject a source CID/bytes mismatch before projection;
+  preserve competing facts from distinct events. Neither host may
+  replace a missing exact source with another equivalent observation.
 - **One complete snapshot.** Publish a model view from one complete
   projection of the selected snapshot; a prefix cannot authorize an
   operation because the conflicting branch is not projected yet. Two
@@ -324,10 +337,14 @@ below is the host's, and the model cannot check it.
 - Usable heads and paths are not monotonic: more evidence can expose a
   conflict and withdraw an answer. A converged conflict is a converged
   state.
-- The vault does not consume this package yet, and its import keeps one
-  row per event ID on a content collision, which cannot carry every
-  variant this merge contract retains. A conforming adapter must retain
-  and exchange the colliding variants first.
+- The vault implementation does not consume this package yet. Its
+  version-4 target addresses five-field event envelopes and all event
+  references by content CID, without an event UUID or nonce. Identical
+  envelopes are one event; distinct envelopes have distinct evidence
+  identities. This satisfies exact source identity without a
+  same-event-ID variant inventory. The CID event store and vault adapter
+  still need implementation; the existing UUID store and these package
+  tests do not establish host conformance.
 
 ## References
 

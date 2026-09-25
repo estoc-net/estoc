@@ -487,12 +487,13 @@ is in the [README's query explanation](../README.md#what-the-answers-mean).
 
 <a id="proofs"></a>
 
-## Inspect, verify and bind are separate proof-processing stages
+## Inspect, precheck, verify and bind are separate proof-processing stages
 
 ```mermaid
 flowchart TB
     JWT["Received JWT"] --> I["inspect<br/>Read header / claims"]
-    I --> D["Host retrieves issuer long form"]
+    I --> P["precheck<br/>document-independent profile rules<br/>+ successor is the authenticated sender"]
+    P --> D["Host retrieves issuer long form"]
     D --> V["verify<br/>profile + issuer key + signature"]
     R["Host-established receipt<br/>token / recipient / sender"] --> B["bind<br/>Check this receipt"]
     V --> B
@@ -500,9 +501,14 @@ flowchart TB
 ```
 
 `inspect` can successfully read a token whose signature has been tampered with.
-`verify` takes the authorized key from the issuer's own long-form DID and
-verifies the signature. `bind` checks the exact token against the receipt and
-establishes facts only when binding succeeds.
+`precheck` refuses, before the host has any issuer material, what the profile
+can already decide: the algorithm, media type and critical headers, the DIDs,
+the shape of the change and, given the authenticated sender, a rotation whose
+successor is someone else; what it passes is still unverified, and a host that
+lacks the issuer's material waits rather than rejects. `verify` applies the
+same rules again, takes the authorized key from the issuer's own long-form DID
+and verifies the signature. `bind` checks the exact token against the receipt
+and establishes facts only when binding succeeds.
 
 | Input boundary exercised by the tests | Result |
 | --- | --- |
@@ -511,7 +517,9 @@ establishes facts only when binding succeeds.
 | Unsupported DID method or algorithm, rotation to the issuer itself, or a rotation with an audience | `profile` failure. |
 | Absent `typ`, or case variants of JWT / application/jwt | Accepted; extra whitespace, parameters and other media types are rejected. |
 | Absent `b64`, or `true` with `b64` listed in `crit` | Accepted; `false`, wrong types and missing required critical-header declarations are rejected. |
-| Unknown critical extension | Rejected; the current library verification path reports a `signature` failure. |
+| Unknown critical extension, or `crit` naming a `b64` the header lacks | `profile` and `form` failure respectively, at the precheck and at verification alike. |
+| A rotation whose successor is not the authenticated sender the precheck was given | `binding` failure before any issuer material; an ending is left to `bind`. |
+| A tampered signature | Passes the precheck without a verified type; `signature` failure at verification. |
 | Repeated JSON claim name | The parser's last value is used; inspection and interpretation of the verified payload agree. |
 | Short-form `iss` and `kid` with the matching retained long form | Accepted; presented spellings and canonical short forms are both retained. |
 | Wrong, malformed or hash-mismatched issuer document, or a key not authorized for authentication | `document` failure; a caller-assembled document cannot substitute another key. |

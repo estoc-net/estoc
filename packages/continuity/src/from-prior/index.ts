@@ -6,7 +6,10 @@
  * verifying it, verifies one against the issuer's document the host
  * supplies, binds a verified proof to the receipt it arrived on to
  * produce continuity facts, and creates one with a signing capability
- * the host supplies. The supported profile is did:peer:4 issuers and
+ * the host supplies. Between inspecting and verifying, a precheck
+ * applies every rule of the profile that needs no issuer document, so
+ * a token that can never verify or bind is refused before the host
+ * waits for material. The supported profile is did:peer:4 issuers and
  * subjects and Ed25519 keys; DID equivalence is the did:peer:4 short
  * form, and nothing rewrites a signed byte.
  *
@@ -25,8 +28,12 @@ import type { ContinuityFact, Did, EvidenceRef, FactId } from "../types.js";
 export const FROM_PRIOR_PROFILE = "estoc-from-prior/1";
 export const FROM_PRIOR_ALG = "EdDSA";
 
-/** Why a token is not a proof: its form, the profile it does not meet, the document that is not its issuer's, or its signature. */
-export type FromPriorFailure = "form" | "profile" | "document" | "signature";
+/**
+ * Why a token is not a proof: its form, the profile it does not meet,
+ * the receipt it cannot bind to, the document that is not its issuer's,
+ * or its signature.
+ */
+export type FromPriorFailure = "form" | "profile" | "binding" | "document" | "signature";
 
 export class InvalidFromPrior extends Error {
   override readonly name = "InvalidFromPrior";
@@ -47,6 +54,9 @@ export type UnverifiedFromPrior = Readonly<{
   header: Readonly<{ alg: string; typ: string | undefined; kid: string }>;
   claims: Readonly<{ iss: string; sub: string | undefined; aud: string | undefined; iat: number }>;
 }>;
+
+/** What the host authenticated about the receipt before it has the issuer's material. */
+export type PrecheckBinding = Readonly<{ authenticatedSender: Did }>;
 
 /** The issuer's long-form did:peer:4 as the host retained it, and its reference. */
 export type IssuerEvidence = Readonly<{ ref: EvidenceRef; longForm: Did }>;
@@ -116,6 +126,10 @@ function profile(message: string): InvalidFromPrior {
   return new InvalidFromPrior(message, "profile");
 }
 
+function unbindable(message: string): InvalidFromPrior {
+  return new InvalidFromPrior(message, "binding");
+}
+
 /** The identity a did:peer:4 spelling names, its long form checked against its hash. */
 function canonicalDid(spelling: unknown, what: string): DidSpelling {
   if (typeof spelling !== "string") throw profile(`${what} is a string`);
@@ -140,12 +154,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * A token's protected header and claims, decoded and checked for shape
- * only. What this returns is what the token says, not a proof; it lets
- * the host find the issuer's material.
- */
-export function inspectFromPrior(jwt: string): UnverifiedFromPrior {
+type ProtectedHeader = Readonly<Record<string, unknown>> & Readonly<{ alg: string; typ: string | undefined; kid: string }>;
+
+type Decoded = Readonly<{ header: ProtectedHeader; claims: UnverifiedFromPrior["claims"] }>;
+
+/** The token's segments decoded and checked for shape: what it says, not what it proves. */
+function decode(jwt: string): Decoded {
   let header: ReturnType<typeof decodeProtectedHeader>;
   let payload: JWTPayload;
   try {
@@ -157,20 +171,81 @@ export function inspectFromPrior(jwt: string): UnverifiedFromPrior {
   if (typeof header.alg !== "string") throw form("the protected header names an alg");
   if (typeof header.kid !== "string") throw form("the protected header names a kid");
   if (header.typ !== undefined && typeof header.typ !== "string") throw form("typ is a string");
-  checkPayloadEncoding(header);
-  return { header: { alg: header.alg, typ: header.typ, kid: header.kid }, claims: claimsOf(payload) };
+  checkHeaderExtensions(header);
+  return { header: { ...header, alg: header.alg, typ: header.typ, kid: header.kid }, claims: claimsOf(payload) };
+}
+
+function unverifiedOf({ header, claims }: Decoded): UnverifiedFromPrior {
+  return { header: { alg: header.alg, typ: header.typ, kid: header.kid }, claims };
 }
 
 /**
- * RFC 7797 lets a JWS declare an unencoded payload with `b64`, requires
- * `crit` to list it, and forbids `false` for a JWT (§6, §7). The library
- * reads `b64` only when `crit` names it, so a token that omits `crit`
- * would otherwise be verified as if its payload were encoded.
+ * A token's protected header and claims, decoded and checked for shape
+ * only. What this returns is what the token says, not a proof; it lets
+ * the host find the issuer's material.
  */
-function checkPayloadEncoding(header: Record<string, unknown>): void {
-  if (!Object.hasOwn(header, "b64")) return;
-  if (header["b64"] !== true) throw form("b64, when present, is true: a JWT's payload is base64url-encoded");
-  if (!Array.isArray(header["crit"]) || !header["crit"].includes("b64")) throw form("crit lists b64 when the header has it");
+export function inspectFromPrior(jwt: string): UnverifiedFromPrior {
+  return unverifiedOf(decode(jwt));
+}
+
+/**
+ * Every rule of the profile that needs no issuer document, applied
+ * before the host has one: the algorithm, the optional media type, the
+ * critical headers, the DIDs and the shape of the change; and, when the
+ * host gives the authenticated sender of the receipt, that a rotation's
+ * successor is that sender. A token this refuses can never verify or
+ * bind, so the host need not wait for material. What it returns is still
+ * unverified: nothing here checks a key or a signature, and an ending's
+ * binding is decided by `bindFromPrior` alone.
+ */
+export function precheckFromPrior(jwt: string, binding?: PrecheckBinding): UnverifiedFromPrior {
+  const decoded = decode(jwt);
+  const { change } = checkProfile(decoded);
+  if (binding !== undefined && change.kind === "rotate") {
+    let sender: DidSpelling;
+    try {
+      sender = canonicalDid(binding.authenticatedSender, "the sender");
+    } catch (err) {
+      throw unbindable(err instanceof Error ? err.message : String(err));
+    }
+    if (sender.canonical !== change.successor.canonical) throw unbindable(`sub is ${change.successor.presented} but the sender is ${sender.presented}`);
+  }
+  return unverifiedOf(decoded);
+}
+
+/** The profile rules a decoded token meets or fails without its issuer's document. */
+function checkProfile({ header, claims }: Decoded): { issuer: DidSpelling; change: VerifiedChange } {
+  if (header.alg !== FROM_PRIOR_ALG) throw profile(`alg is ${FROM_PRIOR_ALG}`);
+  if (!isJwtType(header.typ)) throw profile("typ, when present, is JWT or application/jwt");
+  const issuer = canonicalDid(claims.iss, "iss");
+  const kid = splitDidUrl(header.kid, "kid");
+  if (kid.did.canonical !== issuer.canonical) throw profile("the kid names a key of iss");
+  return { issuer, change: profileChange(claims, issuer) };
+}
+
+/**
+ * RFC 7515 §4.1.11 makes every listed critical header one the recipient
+ * must understand, and this profile understands `b64` alone. RFC 7797
+ * lets a JWS declare an unencoded payload with `b64`, requires `crit` to
+ * list it, and forbids `false` for a JWT (§6, §7). The library reads
+ * `b64` only when `crit` names it, so a token that omits `crit` would
+ * otherwise be verified as if its payload were encoded. The shape rules
+ * for `crit` are the library's, so that a precheck and a verification
+ * refuse the same headers.
+ */
+function checkHeaderExtensions(header: Record<string, unknown>): void {
+  const crit = header["crit"];
+  if (crit !== undefined) {
+    if (!Array.isArray(crit) || crit.length === 0 || crit.some((name) => typeof name !== "string" || name.length === 0)) throw form("crit, when present, is an array of non-empty strings");
+    if (new Set(crit).size !== crit.length) throw form("crit lists no header twice");
+    for (const name of crit) if (name !== "b64") throw profile(`the critical header ${name} is not one this profile understands`);
+  }
+  if (Object.hasOwn(header, "b64")) {
+    if (header["b64"] !== true) throw form("b64, when present, is true: a JWT's payload is base64url-encoded");
+    if (!Array.isArray(crit) || !crit.includes("b64")) throw form("crit lists b64 when the header has it");
+  } else if (Array.isArray(crit) && crit.includes("b64")) {
+    throw form("crit names b64 only when the header has it");
+  }
 }
 
 function claimsOf(payload: JWTPayload): UnverifiedFromPrior["claims"] {
@@ -315,20 +390,18 @@ function profileChange(claims: UnverifiedFromPrior["claims"], issuer: DidSpellin
  * Verify a token against the issuer's retained long form: the protected
  * `kid` names an authentication method of the document that long form
  * encodes, that method's Ed25519 key verifies the JWS, and the claims
- * the signature covers meet the profile. The library verifies the
- * signature only; the profile has no time-bound claim and consults no
- * clock. The token and long form are retained as given; a failure
- * says whether form, profile, document or signature failed.
+ * the signature covers meet the profile. The document-independent rules
+ * are the ones `precheckFromPrior` applies, so the two never diverge.
+ * The library verifies the signature only; the profile has no
+ * time-bound claim and consults no clock. The token and long form are
+ * retained as given; a failure says whether form, profile, document or
+ * signature failed.
  */
 export async function verifyFromPrior(jwt: string, evidence: IssuerEvidence): Promise<VerifiedFromPrior> {
-  const unverified = inspectFromPrior(jwt);
-  if (unverified.header.alg !== FROM_PRIOR_ALG) throw profile(`alg is ${FROM_PRIOR_ALG}`);
-  if (!isJwtType(unverified.header.typ)) throw profile("typ, when present, is JWT or application/jwt");
-  const issuer = canonicalDid(unverified.claims.iss, "iss");
-  const kid = splitDidUrl(unverified.header.kid, "kid");
-  if (kid.did.canonical !== issuer.canonical) throw profile("the kid names a key of iss");
+  const decoded = decode(jwt);
+  const { issuer } = checkProfile(decoded);
   const { id: documentId, document } = issuerDocument(evidence, issuer);
-  const method = authenticationMethod(documentId, document, unverified.header.kid);
+  const method = authenticationMethod(documentId, document, decoded.header.kid);
   const key = await importJWK(method.key, FROM_PRIOR_ALG);
   let payload: Uint8Array;
   try {

@@ -6,7 +6,7 @@ import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 
 import { deriveContinuity } from "../src/index.js";
-import { bindFromPrior, createFromPrior, FROM_PRIOR_PROFILE, inspectFromPrior, InvalidFromPrior, verifyFromPrior, type IssuerEvidence, type Signer, type VerifiedFromPrior } from "../src/from-prior/index.js";
+import { bindFromPrior, createFromPrior, FROM_PRIOR_PROFILE, inspectFromPrior, InvalidFromPrior, precheckFromPrior, verifyFromPrior, type FromPriorFailure, type IssuerEvidence, type Signer, type VerifiedFromPrior } from "../src/from-prior/index.js";
 
 type Party = { longForm: string; shortForm: string; document: IssuerEvidence; kid: string; privateKey: KeyObject; publicKeyBytes: Uint8Array };
 
@@ -55,6 +55,22 @@ async function failure(promise: Promise<unknown>): Promise<InvalidFromPrior> {
   throw new Error("verified");
 }
 
+function refusal(run: () => unknown): InvalidFromPrior {
+  try {
+    run();
+  } catch (err) {
+    if (err instanceof InvalidFromPrior) return err;
+    throw err;
+  }
+  throw new Error("accepted");
+}
+
+/** A token signed by `issuer` over the exact header and claims given, so a test can shape both. */
+function signed(issuer: Party, header: Record<string, unknown>, claims: Record<string, unknown>): string {
+  const input = `${encode(header)}.${encode(claims)}`;
+  return `${input}.${base64urlnopad.encode(new Uint8Array(nodeSign(null, new TextEncoder().encode(input), issuer.privateKey)))}`;
+}
+
 describe("inspect", () => {
   it("reads the header and claims of a token without verifying anything", async () => {
     const jwt = await rotation(b0, b1);
@@ -72,6 +88,83 @@ describe("inspect", () => {
   it("refuses a validity window, which this profile does not evaluate", async () => {
     expect(() => inspectFromPrior(`${encode({ alg: "EdDSA", kid: b0.kid })}.${encode({ iss: b0.longForm, sub: b1.longForm, iat: IAT, exp: IAT + 10 })}.AA`)).toThrow(InvalidFromPrior);
     expect((await failure(verifyFromPrior(await rotation(b0, b1, {}, { nbf: IAT }), b0.document))).failure).toBe("form");
+  });
+});
+
+describe("precheck", () => {
+  const header = { alg: "EdDSA", typ: "JWT", kid: b0.kid };
+  const claims = { iss: b0.longForm, sub: b1.longForm, iat: IAT };
+
+  it("refuses, without any issuer document, what the profile can already decide, and verification refuses the same way", async () => {
+    const cases: [string, Record<string, unknown>, Record<string, unknown>, FromPriorFailure][] = [
+      ["another algorithm", { ...header, alg: "ES256" }, claims, "profile"],
+      ["alg none", { ...header, alg: "none" }, claims, "profile"],
+      ["another media type", { ...header, typ: "JWS" }, claims, "profile"],
+      ["a kid of another DID", { ...header, kid: `${b1.longForm}#key-1` }, claims, "profile"],
+      ["a kid without a fragment", { ...header, kid: b0.longForm }, claims, "profile"],
+      ["a rotation to the issuer itself", header, { ...claims, sub: b0.shortForm }, "profile"],
+      ["a rotation with an audience", header, { ...claims, aud: a0.longForm }, "profile"],
+      ["an ending addressed to the issuer", header, { iss: b0.longForm, aud: b0.shortForm, iat: IAT }, "profile"],
+      ["an issuer of another method", header, { ...claims, iss: "did:web:b0.example" }, "profile"],
+      ["a successor of another method", header, { ...claims, sub: "did:key:z6Mk" }, "profile"],
+      ["a critical header this profile does not understand", { ...header, crit: ["x-ext"], "x-ext": 1 }, claims, "profile"],
+      ["crit naming b64 the header lacks", { ...header, crit: ["b64"] }, claims, "form"],
+      ["an empty crit", { ...header, crit: [] }, claims, "form"],
+      ["a repeated crit entry", { ...header, b64: true, crit: ["b64", "b64"] }, claims, "form"],
+    ];
+    for (const [what, hdr, cl, expected] of cases) {
+      const jwt = signed(b0, hdr, cl);
+      expect(refusal(() => precheckFromPrior(jwt)).failure, what).toBe(expected);
+      expect((await failure(verifyFromPrior(jwt, b0.document))).failure, what).toBe(expected);
+    }
+  });
+
+  it("refuses a rotation whose successor is not the authenticated sender, before any material arrives", () => {
+    const jwt = signed(b0, header, claims);
+    expect(refusal(() => precheckFromPrior(jwt, { authenticatedSender: b0.longForm })).failure).toBe("binding");
+    expect(refusal(() => precheckFromPrior(jwt, { authenticatedSender: a0.shortForm })).failure).toBe("binding");
+    expect(refusal(() => precheckFromPrior(jwt, { authenticatedSender: "did:web:b1.example" })).failure).toBe("binding");
+    expect(precheckFromPrior(jwt, { authenticatedSender: b1.longForm })).toEqual(inspectFromPrior(jwt));
+    expect(precheckFromPrior(jwt, { authenticatedSender: b1.shortForm })).toEqual(inspectFromPrior(jwt));
+  });
+
+  it("accepts equivalent spellings: short and long forms of one DID are one identity", () => {
+    expect(precheckFromPrior(signed(b0, { ...header, kid: `${b0.shortForm}#key-1` }, claims))).toMatchObject({ header: { kid: `${b0.shortForm}#key-1` } });
+    expect(precheckFromPrior(signed(b0, header, { ...claims, iss: b0.shortForm }))).toMatchObject({ claims: { iss: b0.shortForm } });
+    expect(refusal(() => precheckFromPrior(signed(b0, header, { ...claims, sub: b0.longForm }))).failure).toBe("profile");
+    for (const typ of [undefined, "jwt", "application/jwt", "Application/JWT"]) {
+      expect(() => precheckFromPrior(signed(b0, { alg: "EdDSA", kid: b0.kid, ...(typ === undefined ? {} : { typ }) }, claims)), typ ?? "omitted").not.toThrow();
+    }
+  });
+
+  it("passes a token whose issuer material is still unknown: the host waits, it does not reject", async () => {
+    const unknown = party("unknown");
+    const jwt = signed(unknown, { alg: "EdDSA", kid: `${unknown.shortForm}#key-1` }, { iss: unknown.shortForm, sub: b1.longForm, iat: IAT });
+    expect(precheckFromPrior(jwt, { authenticatedSender: b1.shortForm })).toEqual({ header: { alg: "EdDSA", typ: undefined, kid: `${unknown.shortForm}#key-1` }, claims: { iss: unknown.shortForm, sub: b1.longForm, aud: undefined, iat: IAT } });
+    expect((await failure(verifyFromPrior(jwt, b0.document))).failure).toBe("document");
+    await expect(verifyFromPrior(jwt, unknown.document)).resolves.toMatchObject({ issuer: { canonical: unknown.shortForm } });
+  });
+
+  it("grants nothing: a tampered token passes the precheck and still fails verification, and the result carries no verified brand", async () => {
+    const jwt = await rotation(b0, b1);
+    const [h, p] = segments(jwt);
+    const tampered = `${h}.${p}.${base64urlnopad.encode(new Uint8Array(64))}`;
+    const result = precheckFromPrior(tampered, { authenticatedSender: b1.longForm });
+    expect(result).toEqual(inspectFromPrior(jwt));
+    expect(Object.getOwnPropertySymbols(result)).toEqual([]);
+    expect(Object.keys(result)).toEqual(["header", "claims"]);
+    expect((await failure(verifyFromPrior(tampered, b0.document))).failure).toBe("signature");
+  });
+
+  it("leaves an ending to verification and binding: a sender given to the precheck does not reject it", async () => {
+    const addressed = await ending(b0, a0);
+    expect(precheckFromPrior(addressed, { authenticatedSender: b0.longForm })).toEqual(inspectFromPrior(addressed));
+    const bare = await ending(b0, null);
+    expect(precheckFromPrior(bare, { authenticatedSender: b0.longForm })).toEqual(inspectFromPrior(bare));
+    const proof = await verifyFromPrior(addressed, b0.document);
+    expect(bindFromPrior(proof, { ref: "receipt-e", token: addressed, recipient: a0.longForm, sender: b0.longForm }, { transitionId: "e1" })).toMatchObject({ status: "mismatch", because: expect.stringContaining("sender") });
+    expect(bindFromPrior(proof, { ref: "receipt-e", token: addressed, recipient: a0.longForm, sender: null }, { transitionId: "e1" })).toMatchObject({ status: "bound" });
+    expect(bindFromPrior(await verifyFromPrior(bare, b0.document), { ref: "receipt-e", token: bare, recipient: a0.longForm, sender: null }, { transitionId: "e1" })).toMatchObject({ status: "unbound" });
   });
 });
 
@@ -220,7 +313,7 @@ describe("verify", () => {
     await expect(verifyFromPrior(unencoded, b0.document)).rejects.toThrow(InvalidFromPrior);
     const input = `${encode({ alg: "EdDSA", typ: "JWT", kid: b0.kid, crit: ["x-ext"], "x-ext": 1 })}.${p}`;
     const critical = `${input}.${base64urlnopad.encode(new Uint8Array(nodeSign(null, new TextEncoder().encode(input), b0.privateKey)))}`;
-    expect((await failure(verifyFromPrior(critical, b0.document))).failure).toBe("signature");
+    expect((await failure(verifyFromPrior(critical, b0.document))).failure).toBe("profile");
   });
 });
 
