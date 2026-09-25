@@ -1,5 +1,5 @@
 /**
- * The identifier vocabulary of the version-3 vault and the payload of
+ * The identifier vocabulary of the version-4 vault and the payload of
  * each event type. Every kind of value a payload or a runtime interface
  * names is a distinct nominal type over the validated string it
  * serializes as, with no wrapper and no prefix. Nothing here checks a
@@ -134,7 +134,7 @@ export type MessageIn = {
   receivedVia: ReceivedVia;
 };
 
-/** The payload of each version-3 event type, by type name. */
+/** The payload of each version-4 event type, by type name. */
 export type VaultData = {
   "identity.label": { name: string };
   "peer.resolved": {

@@ -42,10 +42,11 @@ const PACKAGE = "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c";
 const OUT = "019b2a70-e2c8-7fb4-b63f-1aca32152062";
 const IN = "d2192dcf-cc5c-5f7d-b4f1-46972b7b04de";
 const WIRE = "019b2a70-f225-721c-835f-67175be0667e";
-const RESOLVED = rawCidOfBytes(new TextEncoder().encode("resolved")) as string; // an event CID: some event's, as far as the schema can tell
-const DISCLOSED = rawCidOfBytes(new TextEncoder().encode("disclosed")) as string; // an event CID: some event's, as far as the schema can tell
-const SOURCE_IN = rawCidOfBytes(new TextEncoder().encode("source_in")) as string; // an event CID: some event's, as far as the schema can tell
-const ROTATION = rawCidOfBytes(new TextEncoder().encode("rotation")) as string; // an event CID: some event's, as far as the schema can tell
+// event CIDs as the schema tells them: raw CIDs, of nothing in particular
+const RESOLVED = cidOf("resolved") as string;
+const DISCLOSED = cidOf("disclosed") as string;
+const SOURCE_IN = cidOf("source_in") as string;
+const ROTATION = cidOf("rotation") as string;
 const OOB = "019b2a57-a947-7502-8fee-4d80d949dbcb";
 const KEY = `did/${DID_ID}/key-agreement`;
 const PEER_KEY = "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis";
@@ -204,12 +205,12 @@ const OUT_DATA = ALL["message.out"][0] as MessageOut;
 const IN_DATA = ALL["message.in"][0] as MessageIn;
 
 describe("readVaultEvent", () => {
-  it("knows exactly the version-3 types", () => {
+  it("knows exactly the version-4 types", () => {
     expect([...VAULT_EVENT_TYPES].sort()).toEqual(Object.keys(ALL).sort());
     expect(VAULT_EVENT_TYPES).toHaveLength(28);
     expect(isVaultEventType("message.out")).toBe(true);
     expect(isVaultEventType("relationship.bound")).toBe(false);
-    expect(() => readVaultEvent(event("relationship.bound", {}))).toThrow(/^relationship\.bound: not a version-3 event type/);
+    expect(() => readVaultEvent(event("relationship.bound", {}))).toThrow(/^relationship\.bound: not a version-4 event type/);
     expect(() => readVaultEvent(event("toString", {}))).toThrow(InvalidPayload);
   });
 

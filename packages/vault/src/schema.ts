@@ -1,5 +1,5 @@
 /**
- * The schema of each version-3 event type: the closed member set of its
+ * The schema of each version-4 event type: the closed member set of its
  * payload, each member's type and nullability, the rules that hold
  * between members, and what its `roots` must be. `readVaultEvent`
  * accepts an event of a known type or throws `InvalidPayload`; what it
@@ -417,14 +417,14 @@ function read<T extends VaultEventType>(type: T, data: unknown, roots: readonly 
  * `isVaultEventType` first and keeps those as they are.
  */
 export function readVaultEvent(event: Event): VaultEvent {
-  if (!isVaultEventType(event.type)) throw new InvalidPayload(event.type, "not a version-3 event type");
+  if (!isVaultEventType(event.type)) throw new InvalidPayload(event.type, "not a version-4 event type");
   read(event.type, event.data, event.roots);
   return event as VaultEvent;
 }
 
 /** A draft as a draft of its type, `roots` filled in, or `InvalidPayload`. */
 export function readVaultDraft(draft: Draft): VaultDraft {
-  if (!isVaultEventType(draft.type)) throw new InvalidPayload(draft.type, "not a version-3 event type");
+  if (!isVaultEventType(draft.type)) throw new InvalidPayload(draft.type, "not a version-4 event type");
   const roots = draft.roots ?? [];
   read(draft.type, draft.data, roots);
   return { ...draft, roots } as VaultDraft;

@@ -1,5 +1,5 @@
 /**
- * The vault conformance suite: what any version-3 runtime — in memory
+ * The vault conformance suite: what any version-4 runtime — in memory
  * or over SQLite — must show through `Vault`, `VaultRuntime` and
  * `Held`. A commit's objects and events land together or not at all,
  * a damaged object fails explicitly and a verified put repairs it,

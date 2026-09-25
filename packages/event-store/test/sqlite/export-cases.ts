@@ -655,6 +655,29 @@ export const exportCases: ExportCase[] = [
     },
   },
   {
+    name: "a snapshot row whose CID is another's is read under its stored CID until the survey hashes it; from then on no scan of the snapshot returns it, an exact CID scan included, the other rows still read, the survey still reports it, and validation refuses the file",
+    run: async (h) => {
+      const { target, events } = await exported(h);
+      const [sound, misfiled] = events as [Event, Event];
+      const wrongCid = eventCidOf({ ...misfiled, data: { ...misfiled.data, altered: true } });
+      await altered(h, target, (d) => exec(d, "UPDATE events SET cid = ? WHERE cid = ?", wrongCid, misfiled.cid));
+      const snapshot = await opened(h, target);
+      try {
+        const v = snapshot.vault;
+        assertEqual((await all(v.events.scan({ cid: wrongCid }))).map((e) => [e.cid, e.data]), [[wrongCid, misfiled.data]], "before the survey, a scan does not hash: the row reads under its stored CID");
+        assertEqual((await v.events.damaged()).map((d) => d.where), [`events/${wrongCid}`], "the survey places the damage by the stored CID");
+        assertEqual(ids(await all(v.events.scan())), ids(events.filter((e) => e !== misfiled)), "the damaged row is left out of a scan");
+        assertEqual(await all(v.events.scan({ cid: wrongCid })), [], "and out of an exact CID scan");
+        assertEqual((await all(v.events.scan({ cid: sound.cid }))).map((e) => e.cid), [sound.cid], "a sound row is still read by its CID");
+        assertEqual((await v.events.damaged()).map((d) => d.where), [`events/${wrongCid}`], "the survey reports it again");
+        const err = await assertRejects(() => validatePortable(snapshot, { heldRoots: rootsOf }), "InvalidSnapshot", "validation");
+        assertEqual((err as unknown as { problems: { where: string }[] }).problems.map((p) => p.where), [`events/${wrongCid}`], "validation names the row");
+      } finally {
+        snapshot.close();
+      }
+    },
+  },
+  {
     name: "the bound counts the events, tallied before one is read: a history of large events and no object is refused at export with no event loaded, no fold run and no destination made",
     run: async (h) => {
       const c = clock();

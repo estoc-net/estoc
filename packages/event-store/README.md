@@ -231,7 +231,7 @@ same way — parsed strictly, validated, re-canonicalized and compared
 byte for byte, its four columns compared with the event's fields, the
 text columns read as stored bytes — and one that fails is damage: left
 out of every scan and delta, listed by `damaged()` as
-`events/<event_id>` (or the rowid, when the ID itself does not decode)
+`events/<cid>` (or the rowid, when the CID column itself does not decode)
 with its bytes and what was wrong. Damage makes the history
 incomplete, and the store then accepts no write: every read remembers
 the damage it meets, a store surveys every row once before its first
@@ -420,8 +420,10 @@ wrapper, `vault`: the snapshot as a read-only `Vault` —
 `PortableVault` — scanning the immutable event set in canonical order
 from the five tables alone, its damage reported — `damaged()` hashes
 every row against its CID, as validation does; an ordinary scan hands
-back the stored CID — its objects under the ordinary read and damage
-rules, and `changes` and `commit` refused
+back the stored CID — and a row met damaged, by a scan or by the
+survey, left out of every scan after, an exact CID filter included,
+for as long as the snapshot is open; its objects under the ordinary
+read and damage rules, and `changes` and `commit` refused
 with `UnsupportedOperation`, neither consuming a source nor minting
 anything; a closed snapshot refuses every read with `VaultClosed`.
 A CHECK the file declares is SQL the file supplied: the handle runs

@@ -29,7 +29,7 @@ The version-4 vault: events addressed by content.
   validation hash every row against its CID; an ordinary scan or delta
   checks the bytes against the columns and hands back the stored CID
   without rehashing. A row the survey found damaged is left out of
-  every later read.
+  every later read, over a portable snapshot as over a runtime.
 - **SQLite schema 2, vault version 4.** `events.cid` and
   `event_positions.cid` replace `event_id`; `vault_meta.vault_version`
   is 4; `user_version` is 2. Schema 1 and vault 3 are refused wherever

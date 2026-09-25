@@ -87,10 +87,6 @@ export class MemoryEventStore implements EventStore {
     const clean = Array.from(drafts, (draft) => validateDraft(draft)); // every index visited, a hole refused as a draft that is not an object
     if (clean.length === 0 && publish === undefined) return [];
     return this.serialise(() => {
-      // One clock reading and one `at` for the batch. Every envelope of
-      // the batch is brought to the form its canonical bytes parse to
-      // and hashed before any is accepted; one already held, or equal
-      // to an earlier draft's, is answered with the event held.
       const { at } = sampleAt(this.now);
       const staged = new Map<EventCid, { event: Event; bytes: number }>();
       const out = clean.map((draft) => {
