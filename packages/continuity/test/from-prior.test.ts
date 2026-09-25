@@ -44,6 +44,8 @@ async function ending(issuer: Party, audience: Party | null): Promise<string> {
 
 const segments = (jwt: string) => jwt.split(".") as [string, string, string];
 const encode = (value: unknown) => base64urlnopad.encode(new TextEncoder().encode(JSON.stringify(value)));
+/** A signature segment of the right shape that nothing verifies, for cases about the other two segments. */
+const unsigned = base64urlnopad.encode(new Uint8Array(64));
 
 async function failure(promise: Promise<unknown>): Promise<InvalidFromPrior> {
   try {
@@ -80,13 +82,22 @@ describe("inspect", () => {
     expect(inspectFromPrior(await ending(b0, a0)).claims).toEqual({ iss: b0.longForm, sub: undefined, aud: a0.longForm, iat: IAT });
   });
 
-  it("refuses what is not a JWT of the expected shape", () => {
-    const cases = ["", "a.b", "a.b.c", `${encode({ alg: "EdDSA" })}.${encode({ iss: "x", iat: IAT })}.AA`, `${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", iat: 1.5 })}.AA`, `${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", sub: null, iat: IAT })}.AA`, `${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", aud: ["a"], iat: IAT })}.AA`];
-    for (const jwt of cases) expect(() => inspectFromPrior(jwt), jwt).toThrow(InvalidFromPrior);
+  it("refuses what is not a JWT of the expected shape, each case for its own defect", () => {
+    const cases: [string, RegExp][] = [
+      ["", /compact JWT/],
+      ["a.b", /compact JWT/],
+      ["a.b.c", /compact JWT/],
+      [`${encode({ alg: "EdDSA" })}.${encode({ iss: "x", iat: IAT })}.${unsigned}`, /kid/],
+      [`${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", iat: 1.5 })}.${unsigned}`, /iat/],
+      [`${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", sub: null, iat: IAT })}.${unsigned}`, /sub/],
+      [`${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", aud: ["a"], iat: IAT })}.${unsigned}`, /aud/],
+    ];
+    for (const [jwt, defect] of cases) expect(refusal(() => inspectFromPrior(jwt)).message, jwt).toMatch(defect);
+    expect(() => inspectFromPrior(`${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", iat: IAT })}.${unsigned}`)).not.toThrow();
   });
 
   it("refuses a validity window, which this profile does not evaluate", async () => {
-    expect(() => inspectFromPrior(`${encode({ alg: "EdDSA", kid: b0.kid })}.${encode({ iss: b0.longForm, sub: b1.longForm, iat: IAT, exp: IAT + 10 })}.AA`)).toThrow(InvalidFromPrior);
+    expect(refusal(() => inspectFromPrior(`${encode({ alg: "EdDSA", kid: b0.kid })}.${encode({ iss: b0.longForm, sub: b1.longForm, iat: IAT, exp: IAT + 10 })}.${unsigned}`)).message).toMatch(/exp/);
     expect((await failure(verifyFromPrior(await rotation(b0, b1, {}, { nbf: IAT }), b0.document))).failure).toBe("form");
   });
 });

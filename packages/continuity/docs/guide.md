@@ -624,8 +624,8 @@ ACK policy. Those decisions remain with the host that uses the results.
 [test-merge]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/merge.test.ts#L16
 [test-equality]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/merge.test.ts#L60
 [test-compatibility]: https://github.com/estoc-net/estoc/blob/38212acdeb4a88ecfacf070fca880ae81329505b/packages/continuity/test/merge.test.ts#L91
-[test-inspect]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L74
-[test-precheck]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L94
-[test-verify]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L184
-[test-bind]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L344
-[test-create]: https://github.com/estoc-net/estoc/blob/main/packages/continuity/test/from-prior.test.ts#L396
+[test-inspect]: https://github.com/estoc-net/estoc/blob/e655214d9fd220bdd3445e68f800427c114a6390/packages/continuity/test/from-prior.test.ts#L74
+[test-precheck]: https://github.com/estoc-net/estoc/blob/e655214d9fd220bdd3445e68f800427c114a6390/packages/continuity/test/from-prior.test.ts#L94
+[test-verify]: https://github.com/estoc-net/estoc/blob/e655214d9fd220bdd3445e68f800427c114a6390/packages/continuity/test/from-prior.test.ts#L184
+[test-bind]: https://github.com/estoc-net/estoc/blob/e655214d9fd220bdd3445e68f800427c114a6390/packages/continuity/test/from-prior.test.ts#L344
+[test-create]: https://github.com/estoc-net/estoc/blob/e655214d9fd220bdd3445e68f800427c114a6390/packages/continuity/test/from-prior.test.ts#L396
