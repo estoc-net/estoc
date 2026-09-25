@@ -186,10 +186,14 @@ follow [ES §5](event-store.md#eventstore).
 
 Scans order by `at, cid` with `BINARY` text collation, matching the event-store's
 canonical order. Decoded CID byte order is not a substitute for this text order.
+CID/bytes verification follows [ES §5.6](event-store.md#event-damage): acceptance,
+full portable source validation and `damaged()` check the digest; ordinary scans
+and deltas return stored CIDs without rehashing.
 
 If SQL JSON functions are used for filtering, pass `CAST(canonical AS TEXT)`;
 the stored BLOB is UTF-8 JSON, not SQLite JSONB. Preserve JSON primitive types
 when implementing [ES §5.4](event-store.md#scan)'s filter semantics.
+A `cid` filter uses exact `events.cid` equality and the same conjunctions.
 
 Runtime-only control:
 
@@ -226,8 +230,8 @@ Positions/tokens never travel in portable state.
 Portable inspection exposes [ES §9](event-store.md#vault-interface)'s read-only
 `Vault` and scans the immutable event set in canonical order without local
 control tables. It has no change frontier; `changes` is rejected under
-[ES §5.5](event-store.md#changes). Each event is exposed with its verified CID;
-there is no separate same-ID conflict inventory.
+[ES §5.5](event-store.md#changes). Its scans return stored CIDs under the same
+verification rules; inspection does not replace full source validation.
 
 <a id="objects-and-streams"></a>
 
@@ -604,6 +608,8 @@ read and maintenance strategies.
     and allocates no local IDs, positions or tokens.
 15. <a id="sq-15"></a> Driver integers round-trip exactly or fail before acceptance.
 16. <a id="sq-16"></a> Scans/deltas use a fixed cut and exact primitive filter semantics.
+    CID equality composes with every other filter. A CID absent from the delta
+    interval yields no match without preventing an empty delta's frontier advance.
 17. <a id="sq-17"></a> Direct folds and any optional caches agree after imports and erasures.
 18. <a id="sq-18"></a> Uncertain commit stops work; recovery reconciles before any retry.
 

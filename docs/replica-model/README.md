@@ -9,7 +9,7 @@ specifications. SQLite is the sole persistent vault and portable interchange
 format. This guide is informative; linked specification sections define requirements.
 The target uses vault version 4 and SQLite schema 2, retaining the version-3
 seed wrapper and existing key/domain-ID derivation. Event identity and references
-use raw CIDs of five-field canonical envelopes, with no event UUID or nonce.
+use raw CIDs of five-field canonical envelopes.
 Identical envelopes are one event. No old-vault migration is required.
 
 <a id="model-overview"></a>

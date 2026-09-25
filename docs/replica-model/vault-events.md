@@ -1010,8 +1010,8 @@ Channel receipt commits independently. Each source-derived operation rechecks
 its exact DID pair, evidence and applicable policy under one vault operation
 lock. Invitation consumption additionally checks its disclosure and availability.
 Every event reference must
-name an already committed event; use returned IDs, not an assumed same-batch
-ID. Release the vault lock before network calls. Per-message dispatch is
+name an already committed event; use returned CIDs, not an assumed same-batch
+CID. Release the vault lock before network calls. Per-message dispatch is
 separately serialized under [delivery](distributed-delivery.md#send-an-ordinary-message).
 
 <a id="122-relationshipbound"></a>

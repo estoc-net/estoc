@@ -90,7 +90,7 @@ those fields together with a derived `cid`, which is not part of the envelope:
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [field: string]: JsonValue };
 type JsonObject = { [field: string]: JsonValue };
-type EventCid = Cid & { readonly __eventCid: unique symbol };
+type EventCid = string & { readonly __eventCid: unique symbol };
 type AuthorId = string & { readonly __authorId: unique symbol };
 
 type EventEnvelope<D extends JsonObject = JsonObject> = {
@@ -232,8 +232,7 @@ fractional precision are rejected. After clock rollback, `at` follows the newly
 sampled earlier time; it is not clamped or replaced with a logical clock.
 
 An event CID contains no timestamp to compare with `at`. The author's UUID
-identifies a writable incarnation, not the event's time. No
-4096-events-per-millisecond limit is imposed by this profile.
+identifies a writable incarnation, not the event's time.
 
 A caller obtains event CIDs from returned events. Event CIDs carry no authority
 or domain identity. Decisions needing causality use explicit references,
@@ -275,6 +274,7 @@ type Draft<D extends JsonObject = JsonObject> = {
 };
 
 type Filter = {
+  cid?: EventCid;
   author?: AuthorId;
   type?: string;
   data?: { [field: string]: JsonPrimitive | undefined };
@@ -358,9 +358,15 @@ accidental cloned histories, not malicious authorship by a shared-seed holder.
 
 ### 5.4 `scan`
 
-Yield every accepted event once, with its verified CID and parsed envelope, in canonical order
-at one fixed cut. Filters are conjunctions of author equality, type equality
+Yield every accepted event once, with its stored CID and parsed envelope, in
+canonical order at one fixed cut. Normal scans and deltas return stored CIDs
+without recomputing envelope hashes; verification boundaries are in
+[section 5.6](#event-damage).
+
+Filters are conjunctions of exact CID equality, author equality, type equality
 and equality of specified top-level `data` fields to the supplied JSON primitive.
+Validate a supplied `cid` as a canonical raw CID before querying; it matches at
+most one event and does not bypass the other filters.
 `undefined` adds no constraint; `null` matches only present JSON null. Missing,
 boolean and number values cannot be conflated by SQL coercion. Filtering must
 equal applying the filter to the same unfiltered cut. An exact CID lookup may
@@ -394,8 +400,12 @@ to inspect the snapshot.
 ### 5.6 Event damage
 
 Damage includes invalid event bytes, a CID/bytes mismatch and disagreement
-with indexed envelope columns.
-Report location and exclude damaged values from diagnostic scans. Event damage
+with indexed envelope columns. Verify CID/bytes correspondence before acceptance,
+during full [portable source validation](vault-sqlite.md#portable-source-validation)
+and on every `damaged()` call. `damaged()` checks all event rows, including their
+canonical bytes and indexed columns. A normal scan is not a fresh integrity
+check; ordinary reads still report any damage they encounter. Report its location
+and exclude known-damaged values from scans. Event damage
 makes the history incomplete and blocks mutation, GC and full export; structural
 SQLite damage fails the runtime. In-place event repair is outside the phase-1
 contract. Recovery uses a validated snapshot restored into a new runtime under
@@ -613,7 +623,7 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 ### Commit, validation and identity (ES-1–ES-7)
 
 1. <a id="es-1"></a> Append returns the five-field envelope plus its computed raw CID
-    under the local author and survives restart; no event UUID or nonce is inserted.
+    under the local author and survives restart.
 2. <a id="es-2"></a> Pre-resolution crash leaves the whole event or none.
 3. <a id="es-3"></a> A batch and its new objects commit entirely, with one timestamp.
 4. <a id="es-4"></a> JCS-ineligible events fail before acceptance.
@@ -631,8 +641,13 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 8. <a id="es-8"></a> Shuffling/repartitioning events does not change folds.
 9. <a id="es-9"></a> Scans have `(at, cid)` canonical order regardless of physical order;
     memory and SQLite use CID text order even where decoded-byte order differs.
+    An exact CID filter yields at most one event, still conjoined with author,
+    type and data filters; a CID absent from the event set yields none, and an
+    invalid CID is rejected.
 10. <a id="es-10"></a> Event BLOBs contain only the five envelope fields, round-trip
     exactly without LF, hash to their row CID and agree with indexed fields.
+    Acceptance, full portable validation and `damaged()` detect CID/bytes mismatch;
+    ordinary scans and deltas return stored CIDs without recomputing those hashes.
 11. <a id="es-11"></a> Deltas are complete for their cut and reject wrong-generation tokens.
     Each new CID advances the token; exact-duplicate append or ingest allocates
     no position. Object-only repair still invalidates dependent projections.
@@ -648,7 +663,7 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 
 17. <a id="es-17"></a> Timestamps have the exact UTC millisecond grammar and lexical time order.
 18. <a id="es-18"></a> Process durability is not presented as a power-loss guarantee.
-19. <a id="es-19"></a> A same-millisecond batch over 4096 drafts has one timestamp
+19. <a id="es-19"></a> A large same-millisecond batch has one timestamp
     and one result per input in input order. Identical drafts return the same CID
     and add one row/position; different envelopes remain distinct.
 20. <a id="es-20"></a> Clock rollback changes sampled `at`, not the batch timestamp

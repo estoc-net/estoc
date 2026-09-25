@@ -39,8 +39,8 @@ The target now uses vault version 4 / SQLite schema 2 and consumes
 `@estoc/continuity` through the vault. Its package is available, but the storage,
 adapter and application changes below are **not implemented**. The version-3
 seed wrapper, DID/key derivation and deterministic domain-ID transcripts stay unchanged.
-Events now use five-field canonical envelopes and raw CIDs, with no event UUID
-or nonce; typed references use `*EventCid` fields. Equal envelopes deduplicate
+Events now use five-field canonical envelopes and raw CIDs; typed references
+use `*EventCid` fields. Equal envelopes deduplicate
 even within one local batch. The existing UUID implementation does not implement
 this format, and baseline test evidence does not establish CID reference validation.
 Earlier vaults need no migration. Documentation checks do not verify runtime
@@ -48,9 +48,10 @@ behavior, and the package's own tests do not establish host conformance.
 
 | Cases | Status after this revision | Remaining work |
 | --- | --- | --- |
-| ES-1, ES-6, ES-9, ES-10, ES-19, ES-21 | `missing` | Five-field CID identity, digest validation, text-CID order and duplicate local-batch results |
+| ES-1, ES-6, ES-9, ES-10, ES-19, ES-21 | `missing` | Five-field CID identity, verification boundaries, exact-CID filters, text-CID order and duplicate local-batch results |
 | ES-7, ES-11, ES-20, ES-22, ES-32 | `partial` | Adapt author preflight, frontiers, rollback/failure handling and portable inspection to CID events |
 | SQ-10–SQ-12, SQ-14, SQ-29, SQ-35, SQ-36 | `partial` | CID event/position keys, verified CID/envelope round trips, exact-byte deduplication and complete root preflight |
+| SQ-16 | `partial` | Add CID equality to scan/delta filter conjunctions without changing the fixed-cut frontier |
 | VE-37, VE-90, VE-95, VE-111, VE-152; CH-41 | `partial` | Replace UUID event references with validated typed CIDs in schemas, producers and consumers |
 | VE-52 | `partial` | Verify permanent erase coverage across distinct imported event CIDs without reviving the erased relation |
 | DD-34; VE-39 | `partial` | Shared proof verification and canonical received binding; retain local producer spelling constraints |
