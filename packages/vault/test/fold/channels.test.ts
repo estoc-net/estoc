@@ -1,4 +1,5 @@
 import type { LocalDecision } from "@estoc/continuity";
+import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import type { Event, EventCid, JsonObject } from "@estoc/event-store";
 import { p256, p384, p521 } from "@noble/curves/nist";
 import { base64urlnopad } from "@scure/base";
@@ -8,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AUTHENTICATION_METHOD,
+  InvalidDidDocument,
   VaultEventSet,
   anonymousMessageId,
   authorizedMethodIds,
@@ -17,11 +19,14 @@ import {
   foldReceipts,
   foldVault,
   foldVaultChecked,
+  canonicalDidOf,
+  inputDocumentOf,
   methodPublicKey,
   receiptOrderKey,
   type ChannelChecks,
   type ChannelEvidence,
   type Cid,
+  type Did,
   type DidId,
   type EventReference,
   type Keys,
@@ -31,7 +36,7 @@ import {
   type VaultEvent,
   type WireMessageId,
 } from "../../src/index.js";
-import { AUTHOR2, MEDIATED, ROUTE, checksOf, createdDid, expectOrderFree, foldChecked, snapshot, type KeyChecks, type Scene, fakeEventCid } from "./helpers.js";
+import { AUTHOR2, ENDPOINT, MEDIATED, ROUTE, checksOf, createdDid, expectOrderFree, foldChecked, snapshot, type KeyChecks, type Scene, fakeEventCid } from "./helpers.js";
 import { IAT, PEER_ID3, asPeer, channel, evidenceChecks, factsOf, noObjects, peerAgreeingOn, proof, receipt, resolved, rotation, vaults, type Peer } from "./scene.js";
 
 const UNCREATED = "019b7000-0000-7000-8000-000000000c00" as DidId;
@@ -286,6 +291,28 @@ describe("foldCarriers", () => {
     for (const event of [badSignature, ourPredecessor, ourShortPredecessor]) expect(evidence.carriers.get(event.cid)!.facts).toEqual([]);
     expect(evidence.positive(ourPredecessor.cid)).toBe(false);
     expect(evidence.positive(ourShortPredecessor.cid)).toBe(false);
+  });
+
+  it("an issuer the vault would refuse to retain a document for is that proof's business alone: the profile's verdict stands, verified or not, and the fold goes on", async () => {
+    const { scene, keys, peerKeys, a0, b0, b1 } = await vaults();
+    const root = resolved(scene, a0.didId, b1);
+    const input = inputDocumentOf(await peerKeys.didKeys(b0.didId), ENDPOINT);
+    const service = (serviceEndpoint: string) => ({ id: "#same", type: "DIDCommMessaging", serviceEndpoint });
+    const twoServices = encodeLongForm({ ...input, service: [service("https://one.example"), service("https://two.example")] });
+    const { x } = (await peerKeys.signing(didKeyName(b0.didId, "authentication"))).privateJwk();
+    const untyped = encodeLongForm({ verificationMethod: [{ id: "#key-1", publicKeyJwk: { kty: "OKP", crv: "Ed25519", x } }], authentication: ["#key-1"] });
+    for (const iss of [twoServices, untyped]) expect(() => canonicalDidOf(iss)).toThrow(InvalidDidDocument);
+    const carried = async (iss: string) => resign(peerKeys, b0.didId, { alg: "EdDSA", kid: `${iss}${AUTHENTICATION_METHOD}` }, { iss, sub: b1.longFormDid, iat: IAT });
+    const verified = receipt(scene, { local: a0, peer: b1, resolution: root, ordinal: 1, fromPrior: await carried(twoServices) });
+    const [header, payload] = segments(await carried(untyped));
+    const unsigned = receipt(scene, { local: a0, peer: b1, resolution: root, ordinal: 2, fromPrior: `${header}.${payload}.${base64urlnopad.encode(new Uint8Array(64))}` });
+    const { evidence, proofs, checks } = await fold(scene, keys);
+    expect(proofs.proofChecks.get(verified.cid)).toMatchObject({ status: "verified" });
+    expect(evidence.carriers.get(verified.cid)!.facts).toEqual(factsOf(verified, a0, { did: longToShort(twoServices) as Did }, b1));
+    expect(proofs.proofChecks.get(unsigned.cid)).toMatchObject({ status: "invalid" });
+    expect(evidence.carriers.get(unsigned.cid)).toMatchObject({ proof: { status: "invalid" }, facts: [] });
+    expect([evidence.positive(verified.cid), evidence.positive(unsigned.cid)]).toEqual([true, false]);
+    expectSameOverEveryOrder(scene.events, checks, proofs);
   });
 
   it("a link stands on one complete verified carrier while a sibling of the same message is incomplete or invalid, and lends that sibling nothing", async () => {

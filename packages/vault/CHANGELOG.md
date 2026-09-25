@@ -31,6 +31,12 @@
   the sender, `exp`/`nbf` — is invalid at once.
 - **An ending is `unsupported`**, a new `Proof` and `Status` variant:
   retained, applied to nothing, no fact.
+- A carried proof's issuer is compared with the local DID by did:peer:4
+  spelling alone, as the profile already validated it; the vault's
+  document validator no longer runs on it. A hash-valid issuer whose
+  document the vault would refuse to retain used to throw out of the
+  fold, and one such receipt, once recorded or imported, stopped every
+  later scan.
 - **Heads follow the model** (behaviour change): a channel no fact
   mentions is its own head; one a saved rotation leaves has no head
   until the peer confirms the predecessor and never falls back to the

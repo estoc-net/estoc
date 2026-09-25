@@ -1,6 +1,8 @@
+import { SignJWT, importJWK } from "jose";
 import { describe, expect, it } from "vitest";
 
-import { anonymousMessageId, didKeyName, inboundMessageId, readPlaintext, scanVault, signFromPrior, vaultDraft, type DidId, type MediationId, type VaultEvent, type VaultEventType, type VaultFold, type WireMessageId } from "@estoc/vault";
+import { encodeLongForm, type DIDDoc } from "@estoc/did-peer";
+import { InvalidDidDocument, anonymousMessageId, canonicalDidOf, didKeyName, inboundMessageId, readPlaintext, scanVault, signFromPrior, vaultDraft, type DidId, type MediationId, type VaultEvent, type VaultEventType, type VaultFold, type WireMessageId } from "@estoc/vault";
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { PLAIN_TYP, packEncrypted, secretsResolverFor, type IMessage } from "../src/protocol/didcomm.js";
@@ -224,6 +226,44 @@ describe("the receipt", () => {
     ]);
     expect(fold.channels.carriers.get(unreadable!.cid)).toMatchObject({ proof: { status: "invalid" }, facts: [] });
     expect([fold.channels.sources.get(verified!.cid)?.standing.status, fold.channels.sources.get(unreadable!.cid)?.standing.status]).toEqual(["complete", "complete"]);
+    await closeAll(alice, bob);
+  });
+
+  it("a proof whose hash-valid issuer the vault could never retain a document for is received, recorded and judged by the fold like any other, and stops neither the scan nor the next message", async () => {
+    const { alice, bob } = await parties();
+    const { receiver } = await receiving(alice);
+    const routeId = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
+    const { minted: prior } = await createDid(bob.runtime, bob.keys, routeId, BOB_PRIOR);
+    const signing = await bob.keys.signing(didKeyName(BOB_PRIOR, "authentication"));
+    const service = (serviceEndpoint: string) => ({ id: "#same", type: "DIDCommMessaging", serviceEndpoint });
+    const twoServices = encodeLongForm({ ...prior.inputDocument, service: [service("https://one.example"), service("https://two.example")] });
+    const untyped = encodeLongForm({ verificationMethod: [{ id: "#key-1", publicKeyJwk: { kty: "OKP", crv: "Ed25519", x: signing.privateJwk().x } }], authentication: ["#key-1"] });
+    for (const iss of [twoServices, untyped]) expect(() => canonicalDidOf(iss)).toThrow(InvalidDidDocument);
+    const key = await importJWK(signing.privateJwk(), "EdDSA");
+    const carried = (iss: string) => new SignJWT({ iss, sub: bob.longFormDid, iat: IAT }).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: `${iss}#key-1` }).sign(key);
+    const proofs = [await carried(twoServices), await carried(untyped)];
+
+    // the sender's own packer verifies the proof before sealing, so a hostile sender answers its packer with a document of its predecessor's key under each issuer
+    const honest = await peerSealer(bob);
+    const priorDocument = JSON.stringify(await honest.resolver.resolve(prior.longFormDid));
+    const sealer = {
+      ...honest,
+      resolver: {
+        resolve: (did: string) => ([twoServices, untyped].includes(did) ? Promise.resolve(JSON.parse(priorDocument.replaceAll(prior.longFormDid, did)) as DIDDoc) : honest.resolver.resolve(did)),
+      },
+    };
+    for (const from_prior of proofs) expect((await receiver.receive({ packed: await sealed(sealer, alice.longFormDid, { from_prior }), source: DIRECT })).outcome).toBe("received");
+    const [first, second] = await eventsOf(alice, "message.in");
+    expect([first!.data.fromPrior, second!.data.fromPrior]).toEqual(proofs);
+    const fold = await foldOf(alice);
+    const transitions = [first, second].map((event) => fold.channels.carriers.get(event!.cid)!.facts.map(({ kind, at }) => [kind, at.peerDid]));
+    expect(transitions).toEqual([twoServices, untyped].map((iss) => [
+      ["peer-transition", iss.slice(0, iss.lastIndexOf(":"))],
+      ["address-observed", bob.did],
+    ]));
+
+    expect((await receiver.receive({ packed: await sealed(honest, alice.longFormDid), source: DIRECT })).outcome).toBe("received");
+    expect((await foldOf(alice)).channels.sources.size).toBe(3);
     await closeAll(alice, bob);
   });
 

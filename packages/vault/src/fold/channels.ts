@@ -1,31 +1,23 @@
 /**
- * The raw channel evidence: what each inbound observation establishes
- * on its own, before the continuity model is derived over it. A
- * source is one `message.in` with the local entity its key belongs to
- * and the channel its actual endpoints form; its standing says whether
- * the receipt's own authentication evidence is complete, missing or
- * contradicted, and the local side of that evidence is the seed's word
- * that the entity is ours. A carrier is a source that brought a
- * `from_prior` proof: read against the profile and the carrier alone
- * first, which needs no document, then against the verdict the checks
- * beside the fold reached under the issuer's document, then bound to
- * the receipt — this token, this sender, this local DID — into the
- * continuity facts it establishes. A decision is a
- * `did.rotationSelected` checked as far as its own fields and source
- * allow; what passes is one local-decision fact. What needs the whole
- * history — confirmation of a decision's predecessor, joins, contexts,
- * conflicts — is the continuity model's. Alongside, the receipt
- * ordinals give the allocator's high-water mark and the integrity
- * conflicts of one author reusing an ordinal.
+ * The raw channel evidence, what each event establishes on its own,
+ * kept apart from the continuity model derived over it. A source is
+ * one `message.in` read against the local entity and the resolution it
+ * names; a carrier is a source that brought a `from_prior` proof, read
+ * first against the profile and the receipt alone, then against the
+ * verdict reached beside the fold under the issuer's document; a
+ * decision is a `did.rotationSelected` checked as far as its own fields
+ * and its source allow. Whatever needs the whole history, confirmation
+ * of a predecessor, joins, contexts, conflicts, is the model's question
+ * and is not asked here.
  */
 
 import type { ContinuityFact, LocalDecision } from "@estoc/continuity";
 import { InvalidFromPrior, bindFromPrior, precheckFromPrior, verifyFromPrior, type VerifiedFromPrior } from "@estoc/continuity/from-prior";
-import { isLongForm } from "@estoc/did-peer";
+import { isLongForm, longToShort } from "@estoc/did-peer";
 
 import { InvalidDidDocument, InvalidPublicKey } from "../errors.js";
 import { issuerLongFormOf } from "../from-prior.js";
-import { canonicalDidOf, methodPublicKey } from "../peer-document.js";
+import { methodPublicKey } from "../peer-document.js";
 import { channelOf, decisionFactId, didKeyName, inboundMessageId, observationFactId, transitionFactId } from "../ids.js";
 import { agreementKey, decodePublicKey, type DecodedPublicKey, type KeyType } from "../public-key.js";
 import type { VaultEvent } from "../schema.js";
@@ -137,19 +129,10 @@ export function foldChannelEvidence(set: VaultEventSet, routes: RouteFold, check
 }
 
 /**
- * Each observation with the entity and channel it belongs to. An
- * authenticated one is complete when the entity its key name derives
- * from is consistent, the seed has confirmed the entity's keys, the
- * key is the entity's key-agreement key, the resolution it names is
- * here, is its own — same key, same sender under the same spelling —
- * and is verified against its document, the peer key it selected
- * agrees keys and is on the curve the entity's own key-agreement key
- * is, and its message ID is the one its endpoints and wire ID derive.
- * Whatever contradicts the observation does so for good, however much
+ * Whatever contradicts an observation does so for good, however much
  * else is still missing, so each contradiction is looked for as soon
- * as what it needs is here, and every one before any absence is
- * reported. An anonymous one has nothing to authenticate and no
- * channel.
+ * as what it needs is here, and every one is reported before any
+ * absence.
  */
 export function foldSources(set: VaultEventSet, routes: RouteFold, resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>): Map<EventCid, Source> {
   const sources = new Map<EventCid, Source>();
@@ -243,18 +226,7 @@ export function foldReceipts(set: VaultEventSet): ReceiptIntegrity {
   return { nextReceiptOrdinal: max + 1n, conflicts, affected };
 }
 
-/**
- * Each authenticated source that brought a proof, read on its own. The
- * token is checked against the profile and the carrier first, which
- * needs no document: its form, the rules the profile decides without
- * issuer material, that its successor is the sender the carrier
- * authenticated, and that the predecessor it names is not the
- * carrier's own local DID, since no document makes a pair of one DID
- * with itself. An ending is set aside as unsupported. The signature's
- * verdict comes from the checks beside the fold; a verified proof on a
- * complete carrier is then bound to the receipt into its two facts.
- * One carrier's verdict says nothing about another's.
- */
+/** Each proof read against its own carrier alone: one carrier's verdict says nothing about another's. */
 export function foldCarriers(sources: ReadonlyMap<EventCid, Source>, proofChecks: ReadonlyMap<EventCid, ProofCheck>): Map<EventCid, Carrier> {
   const carriers = new Map<EventCid, Carrier>();
   for (const source of sources.values()) {
@@ -276,7 +248,7 @@ function carrierOf(source: Source, jwt: string, sender: Did, check: ProofCheck |
   }
   if (claims.claims.sub === undefined) return refused({ status: "unsupported", because: "an ending is not applied: this vault retains it and ends no relationship by it" });
   const local = source.channel?.localDid ?? null;
-  if (local !== null && canonicalDidOf(claims.claims.iss) === local) return refused({ status: "invalid", because: "the predecessor is the local DID" });
+  if (local !== null && shortFormOf(claims.claims.iss) === local) return refused({ status: "invalid", because: "the predecessor is the local DID" });
   if (check === undefined) return refused({ status: "pending-proof" });
   if (check.status === "invalid") return refused({ status: "invalid", because: check.because });
   const proof: Proof = { status: "verified", proof: check.proof };
@@ -288,20 +260,20 @@ function carrierOf(source: Source, jwt: string, sender: Did, check: ProofCheck |
 }
 
 /**
- * Each rotation decision checked against its own fields: both entities
- * consistent, created and confirmed by the seed, the successor another
- * DID than either old endpoint, the frozen proof a rotation spelled
- * over the two entities' exact long forms and verified under the
- * predecessor's document, and the source, when named, a positive
- * observation in the very pair the decision rotates away from: from
- * the peer the decision names, at the predecessor's key-agreement key.
- * What contradicts the decision does so for good — an entity in
- * conflict, a proof refused, a source that can never be positive:
- * anonymous, of another pair, its authentication contradicted, its own
- * proof refused — so each is looked for as soon as what it needs is
- * here, all before the decision is left pending on what may still
- * arrive. What the predecessor was confirmed by is the model's
- * question, not asked here.
+ * The identity a did:peer:4 spelling the profile has already validated
+ * names. The vault's own document canonicalizer is not used on a
+ * proof's issuer: a document that fails the vault's shape rules is
+ * that proof's failure to report, never the fold's to throw.
+ */
+const shortFormOf = (did: string): string => (isLongForm(did) ? longToShort(did) : did);
+
+/**
+ * What contradicts a decision does so for good, so each contradiction
+ * is looked for as soon as what it needs is here, before the decision
+ * is left pending on what may still arrive. A frozen proof is held to
+ * the two entities' exact long forms, since the vault signed it that
+ * way itself. What the predecessor was confirmed by is the model's
+ * question.
  */
 export function foldDecisions(
   set: VaultEventSet,
@@ -400,14 +372,12 @@ function creationOf(entity: LocalDidEntity | undefined, role: string, missing: s
 }
 
 /**
- * Every proof in the set against its issuer's document: each carried
- * `from_prior` against the long form its issuer presents or a verified
- * retained resolution of its short form holds, each decision's frozen
- * proof against the long form its own issuer is. A token the profile
- * refuses without a document, or an ending, gets no verdict here: the
- * fold reads those on its own. Otherwise there is none while the
- * issuer's document is not here. What depends on the local endpoint,
- * the entities' creations or the source is the fold's to refuse.
+ * Every proof in the set against its issuer's document, read here
+ * rather than in the fold because the material is asynchronous. A
+ * token the profile refuses without a document, or an ending, gets no
+ * verdict: the fold reads those on its own. What depends on the local
+ * endpoint, the entities' creations or the source is the fold's to
+ * refuse.
  */
 export async function verifyProofs(set: VaultEventSet, resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>, readObject: ReadObject): Promise<Map<EventCid, ProofCheck>> {
   const retained: { ref: string; data: VaultData["peer.resolved"] }[] = [];
