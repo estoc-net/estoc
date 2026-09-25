@@ -105,7 +105,7 @@ describe("a contact deleted with its channels denied, successors included", () =
     expect([channelOf(a0, b0), channelOf(a0, b1)].map((channel) => ofAlice.continuity.blocked(channel).map((denial) => denial.data.peerDid))).toEqual([[b0], [b0]]);
     await expect(alice.agent.send({ channel: channelOf(a0, b1) }, hello("to your new address"))).rejects.toBeInstanceOf(Unusable);
     const ofBob = await foldOf(bob);
-    const unanswered = [...ofBob.outbound.outbounds.values()].filter((output) => output.messageId === THIRD || output.intents[0]!.data.rotationEventId !== null);
+    const unanswered = [...ofBob.outbound.outbounds.values()].filter((output) => output.messageId === THIRD || output.intents[0]!.data.rotationEventCid !== null);
     expect(unanswered.map((output) => [output.outcome.status, output.acknowledged])).toEqual([
       ["submitted", false],
       ["submitted", false],

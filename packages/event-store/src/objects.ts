@@ -1,5 +1,5 @@
 /**
- * The version-3 object model: raw DASL objects, whole-resource identity
+ * The version-4 object model: raw DASL objects, whole-resource identity
  * however large, and the `ObjectStore` interface. The model with no
  * store behind it: the byte-source shapes, incremental hashing to a raw
  * CID, and the checks every CID argument passes. What an object means

@@ -2,8 +2,8 @@ import type { Event } from "@estoc/event-store";
 import { describe, expect, it } from "vitest";
 import { v7 as uuidv7 } from "uuid";
 
-import { foldErasures, foldVault, foldVaultChecked, heldRoots, rawCidOfBytes, readState, retainedRoots, VaultEventSet, type Cid, type EventId, type MessageId } from "../../src/index.js";
-import { AUTHOR, expectOrderFree } from "./helpers.js";
+import { foldErasures, foldVault, foldVaultChecked, heldRoots, rawCidOfBytes, readState, retainedRoots, VaultEventSet, type Cid, type MessageId } from "../../src/index.js";
+import { AUTHOR, expectOrderFree, fakeEventCid } from "./helpers.js";
 import { intent, noObjects, packageOf, receipt, resolved, vaults } from "./scene.js";
 
 const held = (events: readonly Event[]): Set<Cid> => heldRoots(VaultEventSet.of(events));
@@ -19,9 +19,9 @@ describe("held roots", () => {
     const inbound = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1, overrides: { bodyCid: attachment } });
     const document = root.data.documentCid;
     expect(held(scene.events)).toEqual(new Set([document, body, attachment]));
-    expect(retainedRoots(VaultEventSet.of(scene.events)).filter((edge) => edge.eventId === first.eventId)).toEqual([
-      { eventId: first.eventId, root: body },
-      { eventId: first.eventId, root: attachment },
+    expect(retainedRoots(VaultEventSet.of(scene.events)).filter((edge) => edge.cid === first.cid)).toEqual([
+      { cid: first.cid, root: body },
+      { cid: first.cid, root: attachment },
     ]);
 
     scene.add("message.erased", { messageId: first.data.messageId, dropCids: [body, attachment, document], because: "user" });
@@ -44,9 +44,9 @@ describe("held roots", () => {
     const root = resolved(scene, a0.didId, b0);
     const foreign = rawCidOfBytes(new Uint8Array([9]));
     const broken = rawCidOfBytes(new Uint8Array([10]));
-    scene.events.push({ eventId: uuidv7() as EventId, at: "2026-09-13T00:00:00.000Z", author: AUTHOR, type: "message.future", roots: [foreign], data: {} });
+    scene.events.push({ cid: fakeEventCid(), at: "2026-09-13T00:00:00.000Z", author: AUTHOR, type: "message.future", roots: [foreign], data: {} });
     const messageId = uuidv7() as MessageId;
-    scene.events.push({ eventId: uuidv7() as EventId, at: "2026-09-13T00:00:01.000Z", author: AUTHOR, type: "message.out", roots: [broken], data: { messageId } });
+    scene.events.push({ cid: fakeEventCid(), at: "2026-09-13T00:00:01.000Z", author: AUTHOR, type: "message.out", roots: [broken], data: { messageId } });
     scene.add("message.erased", { messageId, dropCids: [broken, foreign], because: "user" });
     expect(held(scene.events)).toEqual(new Set([root.data.documentCid, foreign, broken]));
   });

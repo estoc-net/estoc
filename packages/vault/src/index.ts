@@ -23,7 +23,7 @@ export type {
   EffectKey,
   EntityId,
   EpochSeconds,
-  EventId,
+  EventCid,
   EventReference,
   ExecutionId,
   KeyName,

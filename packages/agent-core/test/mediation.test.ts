@@ -46,7 +46,7 @@ describe("creating an arrangement", () => {
     expect(p.created.data.me.did).toContain(":z");
     expect(mediator.seenTypes).toEqual([]);
     const again = await createMediation(p.runtime, p.keys, mediator.did as Did, p.mediationId);
-    expect(again.eventId).toBe(p.created.eventId);
+    expect(again.cid).toBe(p.created.cid);
     const other = await newMediator(201, "http://other-mediator/");
     await expect(createMediation(p.runtime, p.keys, other.did as Did, p.mediationId)).rejects.toBeInstanceOf(EntityConflict);
     expect((await scanVault(p.runtime.vault, p.keys)).mediations.mediations.get(p.mediationId)?.status).toBe("pending");

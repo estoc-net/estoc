@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `Merged` has no `conflicts`: the version-4 vault has no same-ID
+  conflicts to count. Records name events by `cid`.
+
 - **Phase `damaged`**: a vault whose history no longer reads whole is
   not run. The daemon says so with the damage as the detail, whether it
   finds it locked, with its seed at hand, or while the vault runs,

@@ -3,7 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { encodeLongForm, longToShort } from "@estoc/did-peer";
-import { MemoryVault, canonicalize, type JsonObject } from "@estoc/event-store";
+import { MemoryVault, canonicalize, envelopeOf, eventCidOf, type AuthorId, type JsonObject } from "@estoc/event-store";
 import { canonicalPublicKey, didKeyName, peerResolution, rawCidOfBytes, scanVault, type DidId, type Did, type DidUrl } from "@estoc/vault";
 
 import { bls12_381 } from "@noble/curves/bls12-381";
@@ -86,12 +86,13 @@ describe("did:peer:4", () => {
     const resolution = await resolved(good, none);
     const [peerPublicKey] = authorizedKeys(resolution, "keyAgreement").values();
     const event = await commitResolution(runtime, { resolution, localKeyName: LOCAL_KEY, peerPublicKey: peerPublicKey as never });
-    const poisoned = { ...event, author: "019b0000-0000-7000-8000-00000000000e", eventId: "019b0000-0000-7000-8000-00000000000d", at: "2025-01-01T00:00:00.000Z", data: { ...event.data, presentedDid: bad } };
+    const envelope = { ...envelopeOf(event), author: "019b0000-0000-7000-8000-00000000000e" as AuthorId, at: "2025-01-01T00:00:00.000Z", data: { ...event.data, presentedDid: bad } };
+    const poisoned = { ...envelope, cid: eventCidOf(envelope) };
     await runtime.ingest([poisoned]);
     const fold = await scanVault(runtime.vault, keys);
-    expect(fold.checks.resolutionChecks.get(poisoned.eventId as never)).toBe("invalid");
-    expect(fold.checks.resolutionChecks.get(event.eventId)).toBe("verified");
-    expect(fold.set.of("peer.resolved").map((e) => e.eventId)).toEqual([poisoned.eventId, event.eventId]);
+    expect(fold.checks.resolutionChecks.get(poisoned.cid as never)).toBe("invalid");
+    expect(fold.checks.resolutionChecks.get(event.cid)).toBe("verified");
+    expect(fold.set.of("peer.resolved").map((e) => e.cid)).toEqual([poisoned.cid, event.cid]);
     expect(knownLongForms(fold)(shortForm)).toBe(good);
     expect((await resolved(shortForm, knownLongForms(fold))).cid).toBe(resolution.cid);
 

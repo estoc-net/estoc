@@ -25,7 +25,7 @@ import { channelOf, didKeyName, inboundMessageId } from "../ids.js";
 import { methodPublicKey } from "../peer-document.js";
 import { agreementKey, decodePublicKey, type DecodedPublicKey, type KeyType } from "../public-key.js";
 import type { VaultEvent } from "../schema.js";
-import type { AuthorId, Channel, Did, DidId, EventId, MessageId, VaultData } from "../types.js";
+import type { AuthorId, Channel, Did, DidId, EventCid, MessageId, VaultData } from "../types.js";
 import type { EvidenceCheck, ReadObject } from "./evidence.js";
 import type { LocalDidEntity, RouteFold } from "./routes.js";
 import { groupBy, type VaultEventSet } from "./set.js";
@@ -64,7 +64,7 @@ export interface ReceiptIntegrity {
 export interface PeerLink {
   readonly from: Channel;
   readonly to: Channel;
-  readonly carrier: EventId;
+  readonly carrier: EventCid;
 }
 
 /**
@@ -87,8 +87,8 @@ export interface Carrier {
 export interface LocalLink {
   readonly from: Channel;
   readonly to: Channel;
-  readonly decision: EventId;
-  readonly source: EventId | null;
+  readonly decision: EventCid;
+  readonly source: EventCid | null;
 }
 
 /**
@@ -108,13 +108,13 @@ export interface Decision {
 }
 
 export interface ChannelEvidence {
-  readonly sources: ReadonlyMap<EventId, Source>;
+  readonly sources: ReadonlyMap<EventCid, Source>;
   readonly receipts: ReceiptIntegrity;
   /** every source that brought a proof, by its event */
-  readonly carriers: ReadonlyMap<EventId, Carrier>;
+  readonly carriers: ReadonlyMap<EventCid, Carrier>;
   /** the links of the carriers that support one, in canonical event order */
   readonly peerLinks: readonly PeerLink[];
-  readonly decisions: ReadonlyMap<EventId, Decision>;
+  readonly decisions: ReadonlyMap<EventCid, Decision>;
   /** the candidate links of the decisions that pass, in canonical event order */
   readonly localLinks: readonly LocalLink[];
   /**
@@ -123,21 +123,21 @@ export interface ChannelEvidence {
    * what the continuity fold builds from and what intent conflicts are
    * detected over; it authorizes no operation by itself.
    */
-  positive(sourceEventId: EventId): boolean;
+  positive(sourceEventCid: EventCid): boolean;
 }
 
 export type ChannelChecks = {
-  resolutionChecks?: ReadonlyMap<EventId, EvidenceCheck>;
+  resolutionChecks?: ReadonlyMap<EventCid, EvidenceCheck>;
   /** each carried or frozen proof against its issuer's document, from `verifyProofs` */
-  proofChecks?: ReadonlyMap<EventId, EvidenceCheck>;
+  proofChecks?: ReadonlyMap<EventCid, EvidenceCheck>;
 };
 
-const none = new Map<EventId, EvidenceCheck>();
+const none = new Map<EventCid, EvidenceCheck>();
 
 export function foldChannelEvidence(set: VaultEventSet, routes: RouteFold, checks: ChannelChecks = {}): ChannelEvidence {
   const sources = foldSources(set, routes, checks.resolutionChecks ?? none);
   const carriers = foldCarriers(sources, checks.proofChecks ?? none);
-  const positive = (id: EventId) => {
+  const positive = (id: EventCid) => {
     const source = sources.get(id);
     if (source === undefined || source.channel === null || source.standing.status !== "complete") return false;
     return source.event.data.fromPrior === null || carriers.get(id)?.link != null;
@@ -169,19 +169,19 @@ export function foldChannelEvidence(set: VaultEventSet, routes: RouteFold, check
  * reported. An anonymous one has nothing to authenticate and no
  * channel.
  */
-export function foldSources(set: VaultEventSet, routes: RouteFold, resolutionChecks: ReadonlyMap<EventId, EvidenceCheck>): Map<EventId, Source> {
-  const sources = new Map<EventId, Source>();
+export function foldSources(set: VaultEventSet, routes: RouteFold, resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>): Map<EventCid, Source> {
+  const sources = new Map<EventCid, Source>();
   for (const event of set.of("message.in")) {
     const localDidId = routes.entityOfKey(event.data.localKeyName);
     const local = localDidId === null ? null : routes.dids.get(localDidId)!;
-    sources.set(event.eventId, sourceOf(event, localDidId, local, set, resolutionChecks));
+    sources.set(event.cid, sourceOf(event, localDidId, local, set, resolutionChecks));
   }
   return sources;
 }
 
-function sourceOf(event: VaultEvent<"message.in">, localDidId: DidId | null, local: LocalDidEntity | null, set: VaultEventSet, resolutionChecks: ReadonlyMap<EventId, EvidenceCheck>): Source {
+function sourceOf(event: VaultEvent<"message.in">, localDidId: DidId | null, local: LocalDidEntity | null, set: VaultEventSet, resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>): Source {
   const { data } = event;
-  if (data.peerResolutionEventId === null || data.did === null) return { event, localDidId, resolution: null, channel: null, standing: { status: "complete" } };
+  if (data.peerResolutionEventCid === null || data.did === null) return { event, localDidId, resolution: null, channel: null, standing: { status: "complete" } };
   const missing: string[] = [];
   let channel: Channel | null = null;
   let resolution: VaultEvent<"peer.resolved"> | null = null;
@@ -201,7 +201,7 @@ function sourceOf(event: VaultEvent<"message.in">, localDidId: DidId | null, loc
     if (local.identity === "unchecked") missing.push("the local entity's keys are not yet checked against the seed");
   }
 
-  const resolved = set.resolve(data.peerResolutionEventId, "peer.resolved");
+  const resolved = set.resolve(data.peerResolutionEventCid, "peer.resolved");
   if (resolved.status === "missing") missing.push("the resolution it names is not here");
   else if (resolved.status === "mismatched") return conflict(`the resolution it names is a ${resolved.event.type}`);
   else {
@@ -216,7 +216,7 @@ function sourceOf(event: VaultEvent<"message.in">, localDidId: DidId | null, loc
       if (!(err instanceof InvalidPublicKey)) throw err;
       return conflict(err.message);
     }
-    const check = resolutionChecks.get(resolution.eventId);
+    const check = resolutionChecks.get(resolution.cid);
     if (check === "invalid") return conflict("the resolution's snapshot is not its document's");
     if (localKeyType !== null && peerKey.type !== localKeyType) return conflict(`the peer key is ${peerKey.type} and the entity's key-agreement key ${localKeyType}: no key is agreed across curves`);
     if (check === undefined) missing.push("the resolution's document is not here");
@@ -271,18 +271,18 @@ export function foldReceipts(set: VaultEventSet): ReceiptIntegrity {
  * names the peer's predecessor; with the carrier's own endpoints it is
  * a link. One carrier's verdict says nothing about another's.
  */
-export function foldCarriers(sources: ReadonlyMap<EventId, Source>, proofChecks: ReadonlyMap<EventId, EvidenceCheck>): Map<EventId, Carrier> {
-  const carriers = new Map<EventId, Carrier>();
+export function foldCarriers(sources: ReadonlyMap<EventCid, Source>, proofChecks: ReadonlyMap<EventCid, EvidenceCheck>): Map<EventCid, Carrier> {
+  const carriers = new Map<EventCid, Carrier>();
   for (const source of sources.values()) {
-    const { eventId, data } = source.event;
+    const { cid, data } = source.event;
     if (data.fromPrior === null || data.presentedDid === null) continue;
     const local = source.channel?.localDid ?? null;
-    const proof = proofOf(data.fromPrior, data.presentedDid, local, proofChecks.get(eventId));
+    const proof = proofOf(data.fromPrior, data.presentedDid, local, proofChecks.get(cid));
     const link: PeerLink | null =
       proof.status === "verified" && source.channel !== null && local !== null && source.standing.status === "complete"
-        ? { from: channelOf(local, proof.claims.predecessorDid), to: source.channel, carrier: eventId }
+        ? { from: channelOf(local, proof.claims.predecessorDid), to: source.channel, carrier: cid }
         : null;
-    carriers.set(eventId, { source, proof, link });
+    carriers.set(cid, { source, proof, link });
   }
   return carriers;
 }
@@ -321,18 +321,18 @@ function proofOf(jwt: string, presentedDid: Did, local: Did | null, check: Evide
 export function foldDecisions(
   set: VaultEventSet,
   routes: RouteFold,
-  sources: ReadonlyMap<EventId, Source>,
-  carriers: ReadonlyMap<EventId, Carrier>,
-  proofChecks: ReadonlyMap<EventId, EvidenceCheck>
-): Map<EventId, Decision> {
-  const decisions = new Map<EventId, Decision>();
+  sources: ReadonlyMap<EventCid, Source>,
+  carriers: ReadonlyMap<EventCid, Carrier>,
+  proofChecks: ReadonlyMap<EventCid, EvidenceCheck>
+): Map<EventCid, Decision> {
+  const decisions = new Map<EventCid, Decision>();
   for (const event of set.of("did.rotationSelected")) {
     const { data } = event;
     const from = routes.dids.get(data.fromDidId);
     const to = routes.dids.get(data.toDidId);
     const channel = from?.created == null || from.conflict || from.created.did === data.peerDid ? null : channelOf(from.created.did, data.peerDid);
-    const status = decisionStatus(event, from, to, channel, set, sources, carriers, proofChecks.get(event.eventId));
-    decisions.set(event.eventId, { event, channel, status });
+    const status = decisionStatus(event, from, to, channel, set, sources, carriers, proofChecks.get(event.cid));
+    decisions.set(event.cid, { event, channel, status });
   }
   return decisions;
 }
@@ -343,8 +343,8 @@ function decisionStatus(
   to: LocalDidEntity | undefined,
   channel: Channel | null,
   set: VaultEventSet,
-  sources: ReadonlyMap<EventId, Source>,
-  carriers: ReadonlyMap<EventId, Carrier>,
+  sources: ReadonlyMap<EventCid, Source>,
+  carriers: ReadonlyMap<EventCid, Carrier>,
   check: EvidenceCheck | undefined
 ): DecisionStatus {
   const { data } = event;
@@ -372,17 +372,17 @@ function decisionStatus(
   if (check === "invalid") return invalid("the proof does not verify under the predecessor's document");
   if (check === undefined) missing.push("the proof is not yet checked");
 
-  if (data.sourceEventId !== null) {
-    const resolved = set.resolve(data.sourceEventId, "message.in");
+  if (data.sourceEventCid !== null) {
+    const resolved = set.resolve(data.sourceEventCid, "message.in");
     if (resolved.status === "missing") missing.push("the source it names is not here");
     else if (resolved.status === "mismatched") return conflict(`the source it names is a ${resolved.event.type}`);
     else {
-      const source = sources.get(data.sourceEventId)!;
-      if (source.event.data.peerResolutionEventId === null) return conflict("the source is anonymous, in no pair");
+      const source = sources.get(data.sourceEventCid)!;
+      if (source.event.data.peerResolutionEventCid === null) return conflict("the source is anonymous, in no pair");
       if (source.event.data.did !== data.peerDid) return conflict("the source is not from the peer the decision rotates away from");
       if (source.event.data.localKeyName !== didKeyName(data.fromDidId, "key-agreement")) return conflict("the source is not at the predecessor's key-agreement key");
       if (source.standing.status === "conflict") return conflict(`the source's authentication is in conflict: ${source.standing.because}`);
-      const carrier = carriers.get(data.sourceEventId);
+      const carrier = carriers.get(data.sourceEventCid);
       if (carrier?.proof.status === "invalid") return conflict(`the source's proof is invalid: ${carrier.proof.because}`);
       if (source.standing.status === "incomplete") missing.push(`the source's authentication is incomplete: ${source.standing.because}`);
       if (carrier?.proof.status === "pending-proof") missing.push("the source's proof is not yet verified");
@@ -390,7 +390,7 @@ function decisionStatus(
   }
 
   if (missing.length > 0) return { status: "pending", because: missing[0]! };
-  return { status: "candidate", link: { from: channel!, to: channelOf(successor!.did, data.peerDid), decision: event.eventId, source: data.sourceEventId } };
+  return { status: "candidate", link: { from: channel!, to: channelOf(successor!.did, data.peerDid), decision: event.cid, source: data.sourceEventCid } };
 }
 
 function creationOf(entity: LocalDidEntity | undefined, role: string, missing: string[]): VaultData["did.created"] | string | null {
@@ -414,9 +414,9 @@ function creationOf(entity: LocalDidEntity | undefined, role: string, missing: s
  * issuer's document is not here. What depends on the local endpoint,
  * the entities' creations or the source is the fold's to refuse.
  */
-export async function verifyProofs(set: VaultEventSet, resolutionChecks: ReadonlyMap<EventId, EvidenceCheck>, readObject: ReadObject): Promise<Map<EventId, EvidenceCheck>> {
+export async function verifyProofs(set: VaultEventSet, resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>, readObject: ReadObject): Promise<Map<EventCid, EvidenceCheck>> {
   const retained: VaultData["peer.resolved"][] = [];
-  for (const event of set.of("peer.resolved")) if (resolutionChecks.get(event.eventId) === "verified") retained.push(event.data);
+  for (const event of set.of("peer.resolved")) if (resolutionChecks.get(event.cid) === "verified") retained.push(event.data);
   const documents = new Map<Did, ReturnType<typeof issuerDocumentOf>>();
   const documentOf = (iss: Did) => {
     let document = documents.get(iss);
@@ -426,26 +426,26 @@ export async function verifyProofs(set: VaultEventSet, resolutionChecks: Readonl
     }
     return document;
   };
-  const checks = new Map<EventId, EvidenceCheck>();
-  const verify = async (eventId: EventId, jwt: string, claims: () => { iss: Did }) => {
+  const checks = new Map<EventCid, EvidenceCheck>();
+  const verify = async (cid: EventCid, jwt: string, claims: () => { iss: Did }) => {
     try {
       const document = await documentOf(claims().iss);
       if (document === null) return;
       await verifyFromPrior(jwt, document);
-      checks.set(eventId, "verified");
+      checks.set(cid, "verified");
     } catch (err) {
       if (!(err instanceof InvalidFromPrior)) throw err;
-      checks.set(eventId, "invalid");
+      checks.set(cid, "invalid");
     }
   };
   for (const event of set.of("message.in")) {
     const { fromPrior, presentedDid } = event.data;
     if (fromPrior === null || presentedDid === null) continue;
-    await verify(event.eventId, fromPrior, () => carriedClaims(fromPrior, presentedDid));
+    await verify(event.cid, fromPrior, () => carriedClaims(fromPrior, presentedDid));
   }
   for (const event of set.of("did.rotationSelected")) {
     const { fromPrior } = event.data;
-    await verify(event.eventId, fromPrior, () => {
+    await verify(event.cid, fromPrior, () => {
       const claims = fromPriorClaims(fromPrior);
       if (!isLongForm(claims.iss)) throw new InvalidFromPrior("a decision's issuer is its own long form");
       return claims;

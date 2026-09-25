@@ -245,7 +245,7 @@ function forget() {
 
     <div v-if="snapshot && snapshot.unplaced.inputs.length + snapshot.unplaced.outputs.length > 0" class="rail-section">
       <div class="eyebrow">In no conversation</div>
-      <p v-for="input in snapshot.unplaced.inputs" :key="input.sourceEventId" class="status-line" :class="{ error: input.standing === 'conflict' }">received: {{ input.because }}</p>
+      <p v-for="input in snapshot.unplaced.inputs" :key="input.sourceEventCid" class="status-line" :class="{ error: input.standing === 'conflict' }">received: {{ input.because }}</p>
       <p v-for="output in snapshot.unplaced.outputs" :key="output.message.messageId" class="status-line error">
         a message of yours names {{ output.candidates.length }} channels ({{ output.candidates.map((c) => shortDid(c.peerDid)).join(", ") }}) and goes out in none
       </p>

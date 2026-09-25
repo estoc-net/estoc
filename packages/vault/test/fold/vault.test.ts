@@ -12,7 +12,7 @@ const encoder = new TextEncoder();
 const readable = ({ set, ...fold }: VaultFold) => (expect(set).toBeInstanceOf(VaultEventSet), fold);
 
 async function memoryVault(events: readonly Event[]): Promise<MemoryVault> {
-  const vault = new MemoryVault({ metadata: { version: 3, anchor: await Keys.anchorOf(await importSeed(SEED)) } });
+  const vault = new MemoryVault({ metadata: { version: 4, anchor: await Keys.anchorOf(await importSeed(SEED)) } });
   await vault.ingest(events);
   return vault;
 }
@@ -28,7 +28,7 @@ describe("the whole fold", () => {
     scene.add("message.erased", { messageId: out.data.messageId, dropCids: [pkg.data.envelopeCid], because: "user" });
     const checks = await checkVault(VaultEventSet.of(scene.events), keys, noObjects);
     expect(checks.didKeys.get(a0.didId)).toBe("verified");
-    expect(checks.resolutionChecks.get(root.eventId)).toBe("verified");
+    expect(checks.resolutionChecks.get(root.cid)).toBe("verified");
     const check = (fold: VaultFold) => {
       expect(fold.label).toBe("me");
       expect(fold.authors).toHaveLength(1);
@@ -36,8 +36,8 @@ describe("the whole fold", () => {
       expect(fold.routes.dids.get(a0.didId)!.live).toBe(true);
       expect(fold.erasures.get(out.data.messageId)).toEqual(new Set([pkg.data.envelopeCid]));
       expect(fold.held).toEqual(new Set([root.data.documentCid, inbound.data.bodyCid, out.data.bodyCid]));
-      expect(fold.retained.filter((edge) => edge.eventId === pkg.eventId)).toEqual([]);
-      expect(fold.retained.filter((edge) => edge.eventId === out.eventId)).toEqual([{ eventId: out.eventId, root: out.data.bodyCid }]);
+      expect(fold.retained.filter((edge) => edge.cid === pkg.cid)).toEqual([]);
+      expect(fold.retained.filter((edge) => edge.cid === out.cid)).toEqual([{ cid: out.cid, root: out.data.bodyCid }]);
     };
     check(foldVault(VaultEventSet.of(scene.events), checks));
     expectOrderFree(scene.events, (set) => readable(foldVault(set, checks)));

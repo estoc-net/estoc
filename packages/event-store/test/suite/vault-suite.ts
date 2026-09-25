@@ -1,5 +1,5 @@
 /**
- * The vault conformance suite: what any version-3 runtime — in memory
+ * The vault conformance suite: what any version-4 runtime — in memory
  * or over SQLite — must show through `Vault`, `VaultRuntime` and
  * `Held`. A commit's objects and events land together or not at all,
  * a damaged object fails explicitly and a verified put repairs it,
@@ -34,7 +34,7 @@ import {
   type Runtime,
   type WrappedSeed,
 } from "../../src/index.js";
-import { META, REWRAPPED, WRAPPED, all, authorN, clock, expectBytes } from "./helpers.js";
+import { META, REWRAPPED, WRAPPED, all, altered, authorN, clock, eventOf, expectBytes } from "./helpers.js";
 import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, join } from "./object-store-suite.js";
 
 export interface VaultUnderTest {
@@ -129,7 +129,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(v.metadata).toEqual(META);
       expect(Object.isFrozen(v.metadata)).toBe(true);
       expect(vault.metadata).toBe(v.metadata);
-      expect(Object.keys(v.events).sort()).toEqual(["changes", "conflicting", "damaged", "scan"]);
+      expect(Object.keys(v.events).sort()).toEqual(["changes", "damaged", "scan"]);
       expect("append" in v.events).toBe(false);
       expect("appendAll" in v.events).toBe(false);
       expect("ingest" in v.events).toBe(false);
@@ -169,7 +169,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await v.objects.stat(WORLD_CID)).toEqual({ cid: WORLD_CID, codec: "raw", size: 5 });
       expectBytes(await v.objects.read(WORLD_CID, 5), WORLD);
       expectBytes((await drain((await v.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>)).bytes, HELLO);
-      expect((await all(v.events.scan())).map((e) => e.eventId)).toEqual(events.map((e) => e.eventId).sort());
+      expect((await all(v.events.scan())).map((e) => e.cid)).toEqual(events.map((e) => e.cid).sort());
     });
 
     it("with no objects, a reused root that is present passes; an absent root is MissingRoot and appends nothing", async () => {
@@ -309,7 +309,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       await expect(v.commit([], [draft([HELLO_CID])])).rejects.toThrow(DamagedObject);
       expect((await all(v.events.scan())).length).toBe(1);
       await expect(v.objects.has(HELLO_CID)).rejects.toThrow(DamagedObject);
-      const events = await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+      const events = await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID], { repaired: true })]);
       expect(events.length).toBe(1);
       expect(await v.objects.has(HELLO_CID)).toBe(true);
       expectBytes(await v.objects.read(HELLO_CID, 5), HELLO);
@@ -783,7 +783,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       await entered.wait;
       expect(await settled(locked)).toBe(false); // the operation's own promise rejected, its collection pass has not ended
       expect(vault.lock.held).toBe(true);
-      const committing = v.commit([], [draft([HELLO_CID])]);
+      const committing = v.commit([], [draft([HELLO_CID], { again: true })]);
       expect(await settled(committing)).toBe(false);
       resume.open();
       expect(await collecting).toEqual({ removed: [WORLD_CID] });
@@ -818,7 +818,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       await entered.wait;
       expect(await settled(locked)).toBe(false);
       expect(vault.lock.held).toBe(true);
-      const committing = v.commit([], [draft([HELLO_CID])]);
+      const committing = v.commit([], [draft([HELLO_CID], { again: true })]);
       expect(await settled(committing)).toBe(false);
       resume.open();
       expect(await collecting).toEqual({ removed: [WORLD_CID] });
@@ -937,7 +937,6 @@ export function vaultSuite(name: string, opener: OpenVault): void {
           () => all(view.events.scan()),
           () => view.events.changes(),
           () => view.events.damaged(),
-          () => view.events.conflicting(),
         ]) {
           await expect(attempt()).rejects.toThrow(UnsupportedOperation);
         }
@@ -1100,11 +1099,11 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await settled(ingesting)).toBe(false);
       g.open();
       await locked;
-      expect(await ingesting).toEqual({ added: 1, duplicates: 0, conflicts: [], rejected: [] });
+      expect(await ingesting).toEqual({ added: 1, duplicates: 0, rejected: [] });
       expect(await vault.ingest([foreign])).toMatchObject({ added: 0, duplicates: 1 });
       const [own] = await vault.vault.commit([], [draft()]);
-      const forked = { ...(own as Event), eventId: (foreign as Event).eventId.replace(/.$/, "f") };
-      await expect(vault.ingest([forked])).rejects.toThrow(ForkedAuthor);
+      await expect(vault.ingest([altered(own as Event)])).rejects.toThrow(ForkedAuthor);
+      expect(await vault.ingest([own])).toMatchObject({ added: 0, duplicates: 1 });
       expect((await all(vault.vault.events.scan())).length).toBe(2);
     });
 
@@ -1118,19 +1117,19 @@ export function vaultSuite(name: string, opener: OpenVault): void {
         yield value;
       }
       const direct = await (await open(authorN(3))).vault.ingest(reused());
-      expect(direct).toEqual({ added: 2, duplicates: 0, conflicts: [], rejected: [] });
+      expect(direct).toEqual({ added: 2, duplicates: 0, rejected: [] });
       const held = await (await open(authorN(3))).vault.locked((h) => h.ingest(reused()));
-      expect(held).toEqual({ added: 2, duplicates: 0, conflicts: [], rejected: [] });
-      // the same ID under two contents, through one reused object: a conflict, not a duplicate
-      async function* conflicting(): AsyncIterable<unknown> {
+      expect(held).toEqual({ added: 2, duplicates: 0, rejected: [] });
+      // other content under the first event's CID, through one reused object: read as yielded, refused as it was
+      async function* relabelled(): AsyncIterable<unknown> {
         const value = structuredClone(first);
         yield value;
         value.data = { n: 3 };
         yield value;
       }
-      const conflicted = await (await open(authorN(3))).vault.ingest(conflicting());
-      expect(conflicted.added).toBe(1);
-      expect(conflicted.conflicts.map((c) => [c.eventId, c.kept.data, c.rejected.data])).toEqual([[first.eventId, { n: 1 }, { n: 3 }]]);
+      const refused = await (await open(authorN(3))).vault.ingest(relabelled());
+      expect(refused.added).toBe(1);
+      expect(refused.rejected.map((r) => [(r.value as Event).data, r.error])).toEqual([[{ n: 3 }, expect.stringMatching(/is not the envelope's/)]]);
       // what the store holds is the runtime's own copy: mutating the source afterwards changes nothing
       const vault = (await open(authorN(3))).vault;
       const value = structuredClone(first);
@@ -1146,7 +1145,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
         const bad = { ...(good as Event), at: "yesterday" };
         yield bad;
         bad.at = (good as Event).at; // mended after the fact: too late, it was read as it was yielded
-        yield { ...(good as Event), data: { n: -0 } }; // a canonical form of its own: -0 becomes 0
+        yield eventOf({ ...(good as Event), data: { n: -0 } }); // a canonical form of its own: -0 becomes 0
         yield 42;
       }
       const outcome = await (await open(authorN(3))).vault.ingest(mixed());
@@ -1157,7 +1156,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
 
     it("the held view ingests too, for import and restore", async () => {
       const other = (await open(authorN(2))).vault;
-      const events = await other.vault.commit([], [draft(), draft()]);
+      const events = await other.vault.commit([], [draft([], { n: 1 }), draft([], { n: 2 })]);
       const { vault } = await open();
       const outcome = await vault.locked((held) => held.ingest(events));
       expect(outcome.added).toBe(2);

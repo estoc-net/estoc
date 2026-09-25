@@ -15,13 +15,13 @@ export { canonicalize, canonicalText, parseStrict, forbiddenIn, compareCodeUnits
 
 export type {
   Cid,
-  EventId,
+  EventCid,
   AuthorId,
+  EventEnvelope,
   Event,
   Draft,
   Filter,
   ChangeToken,
-  Conflict,
   EventTally,
   Rejected,
   Damaged,
@@ -30,23 +30,28 @@ export type {
 } from "./event.js";
 export {
   isUuidv7,
-  isEventId,
   isAuthorId,
   isRawCid,
-  timestampOf,
+  isEventCid,
   isCanonicalAt,
   atOf,
+  sampleAt,
   MAX_T,
+  validateEnvelope,
   validateEvent,
   validateDraft,
+  envelopeOf,
+  canonicalEnvelope,
   canonicalEvent,
   canonicalEventBytes,
+  canonicalEventText,
+  eventCidOf,
+  eventCidOfBytes,
   compareEvents,
+  checkFilter,
   matches,
   matchesData,
 } from "./event.js";
-
-export { mint, type Minted } from "./mint.js";
 
 export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
 
@@ -69,7 +74,7 @@ export { APPLICATION_ID, SCHEMA_VERSION, createTables, checkSchema, type Databas
 export type { Locked, RuntimeDatabase, PortableDatabase, CreateRuntimeOptions, OpenRuntimeOptions } from "./sqlite/open.js";
 export { createRuntime, publishedRuntime, openRuntime, openInspector, openPortable, type OpenPortableOptions } from "./sqlite/open.js";
 
-export { SqliteEventStore, type SqliteEventStoreOptions, type EventStoreDatabase } from "./sqlite/events.js";
+export { SqliteEventStore, type SqliteEventStoreOptions, type EventStoreDatabase, type DecodeOptions } from "./sqlite/events.js";
 
 export { SqliteObjectStore, SqlitePreparation, CHUNK_BYTES, type SqliteObjectStoreOptions, type ObjectStoreDatabase } from "./sqlite/objects.js";
 

@@ -3,7 +3,7 @@ import { sha256 } from "@noble/hashes/sha2";
 import { base58, base64urlnopad } from "@scure/base";
 import { describe, expect, it } from "vitest";
 
-import { InvalidDidDocument, VaultEventSet, authorizedMethodIds, canonicalPublicKey, didKeyName, foldVaultChecked, methodPublicKey, rawCidOfBytes, resolvedDocumentOf, verifyResolutions, type Cid, type Did, type EventId, type EvidenceCheck, type Keys } from "../../src/index.js";
+import { InvalidDidDocument, VaultEventSet, authorizedMethodIds, canonicalPublicKey, didKeyName, foldVaultChecked, methodPublicKey, rawCidOfBytes, resolvedDocumentOf, verifyResolutions, type Cid, type Did, type EventCid, type EvidenceCheck, type Keys } from "../../src/index.js";
 import { PEER_ID0, PEER_ID3, noObjects, peerAgreeingOn, resolved, vaults, type Peer } from "./scene.js";
 
 const WEB_DID = "did:web:bob.example" as Did;
@@ -36,11 +36,11 @@ describe("verifyResolutions", () => {
     const web = await webPeer(peerKeys);
     const fetched = resolved(scene, a0.didId, web);
     const set = VaultEventSet.of(scene.events);
-    expect(await verifyResolutions(set, noObjects)).toEqual(new Map<EventId, EvidenceCheck>([[long.eventId, "verified"]]));
+    expect(await verifyResolutions(set, noObjects)).toEqual(new Map<EventCid, EvidenceCheck>([[long.cid, "verified"]]));
     expect(await resolvedDocumentOf(short.data, noObjects)).toBeNull();
     expect(await resolvedDocumentOf(fetched.data, noObjects)).toBeNull();
     const readObject = readerOf(new Map([[web.resolution.cid, web.bytes], [b0.resolution.cid, b0.resolution.bytes]]));
-    expect(await verifyResolutions(set, readObject)).toEqual(new Map<EventId, EvidenceCheck>([[long.eventId, "verified"], [short.eventId, "verified"], [fetched.eventId, "verified"]]));
+    expect(await verifyResolutions(set, readObject)).toEqual(new Map<EventCid, EvidenceCheck>([[long.cid, "verified"], [short.cid, "verified"], [fetched.cid, "verified"]]));
     expect(await resolvedDocumentOf(fetched.data, readObject)).toEqual(web.resolution.document);
     expect(await resolvedDocumentOf(long.data, noObjects)).toEqual(b0.resolution.document);
   });
@@ -52,10 +52,10 @@ describe("verifyResolutions", () => {
     const wrongKey = resolved(scene, a0.didId, b0, { peerPublicKey: b2.publicKey });
     const genuine = resolved(scene, a0.didId, b0);
     const checks = await verifyResolutions(VaultEventSet.of(scene.events), noObjects);
-    expect(checks.get(forged.eventId)).toBe("invalid");
-    expect(checks.get(noMethods.eventId)).toBe("invalid");
-    expect(checks.get(wrongKey.eventId)).toBe("invalid");
-    expect(checks.get(genuine.eventId)).toBe("verified");
+    expect(checks.get(forged.cid)).toBe("invalid");
+    expect(checks.get(noMethods.cid)).toBe("invalid");
+    expect(checks.get(wrongKey.cid)).toBe("invalid");
+    expect(checks.get(genuine.cid)).toBe("verified");
     await expect(resolvedDocumentOf(forged.data, noObjects)).rejects.toBeInstanceOf(InvalidDidDocument);
   });
 
@@ -70,10 +70,10 @@ describe("verifyResolutions", () => {
     const listedAndAgreeing = resolved(scene, a0.didId, signingListed, { peerPublicKey: agreeingKey.publicKey });
     const genuine = resolved(scene, a0.didId, b0);
     const checks = await verifyResolutions(VaultEventSet.of(scene.events), readerOf(new Map([[signingListed.resolution.cid, signingListed.bytes]])));
-    expect(checks.get(signingOnly.eventId)).toBe("invalid");
-    expect(checks.get(listedButSigning.eventId)).toBe("invalid");
-    expect(checks.get(listedAndAgreeing.eventId)).toBe("verified");
-    expect(checks.get(genuine.eventId)).toBe("verified");
+    expect(checks.get(signingOnly.cid)).toBe("invalid");
+    expect(checks.get(listedButSigning.cid)).toBe("invalid");
+    expect(checks.get(listedAndAgreeing.cid)).toBe("verified");
+    expect(checks.get(genuine.cid)).toBe("verified");
   });
 
   it("takes no low-order X25519 point as the peer key, however the document lists it: with such a point every shared secret is zero", async () => {
@@ -84,10 +84,10 @@ describe("verifyResolutions", () => {
     const fetched = resolved(scene, a0.didId, web);
     const genuine = resolved(scene, a0.didId, b0);
     const checks = await verifyResolutions(VaultEventSet.of(scene.events), readerOf(new Map([[web.resolution.cid, web.bytes]])));
-    for (const event of derived) expect(checks.get(event.eventId)).toBe("invalid");
+    for (const event of derived) expect(checks.get(event.cid)).toBe("invalid");
     expect(web.publicKey).toBe(lowOrder(0));
-    expect(checks.get(fetched.eventId)).toBe("invalid");
-    expect(checks.get(genuine.eventId)).toBe("verified");
+    expect(checks.get(fetched.cid)).toBe("invalid");
+    expect(checks.get(genuine.cid)).toBe("verified");
   });
 
   it("a numalgo-4 document read back must be what its long form derives: another key's document under this DID's id is no snapshot of it", async () => {
@@ -104,8 +104,8 @@ describe("verifyResolutions", () => {
     const genuine = resolved(scene, a0.didId, b0, { short: true });
     const readObject = readerOf(new Map([[forged.data.documentCid, forgedBytes], [b0.resolution.cid, b0.resolution.bytes]]));
     const checks = await verifyResolutions(VaultEventSet.of(scene.events), readObject);
-    expect(checks.get(forged.eventId)).toBe("invalid");
-    expect(checks.get(genuine.eventId)).toBe("verified");
+    expect(checks.get(forged.cid)).toBe("invalid");
+    expect(checks.get(genuine.cid)).toBe("verified");
     expect(await resolvedDocumentOf(genuine.data, readObject)).toEqual(b0.resolution.document);
     expect(await resolvedDocumentOf(genuine.data, noObjects)).toBeNull();
   });
@@ -119,8 +119,8 @@ describe("verifyResolutions", () => {
     const set = VaultEventSet.of(scene.events);
     expect(set.invalid).toEqual([]);
     const checks = await verifyResolutions(set, noObjects);
-    expect(checks.get(malformed.eventId)).toBe("invalid");
-    expect(checks.get(genuine.eventId)).toBe("verified");
+    expect(checks.get(malformed.cid)).toBe("invalid");
+    expect(checks.get(genuine.cid)).toBe("verified");
     await expect(foldVaultChecked(set, null, noObjects)).resolves.toBeDefined();
   });
 
@@ -133,9 +133,9 @@ describe("verifyResolutions", () => {
     const recased = resolved(scene, a0.didId, web, { presentedDid: "did:web:Bob.Example" as Did });
     const exact = resolved(scene, a0.didId, web);
     const checks = await verifyResolutions(VaultEventSet.of(scene.events), readerOf(objects));
-    expect(checks.get(misspelt.eventId)).toBe("invalid");
-    expect(checks.get(recased.eventId)).toBe("invalid");
-    expect(checks.get(exact.eventId)).toBe("verified");
+    expect(checks.get(misspelt.cid)).toBe("invalid");
+    expect(checks.get(recased.cid)).toBe("invalid");
+    expect(checks.get(exact.cid)).toBe("verified");
   });
 
   it("a document read back must be in canonical form: the same did:web document pretty-printed, under its own CID, is no snapshot", async () => {
@@ -147,7 +147,7 @@ describe("verifyResolutions", () => {
     const web: Peer = { ...canonical, resolution: { ...canonical.resolution, bytes: pretty, cid } };
     const root = resolved(scene, a0.didId, web);
     const readObject = readerOf(new Map([[cid, pretty]]));
-    expect((await verifyResolutions(VaultEventSet.of(scene.events), readObject)).get(root.eventId)).toBe("invalid");
-    expect((await verifyResolutions(VaultEventSet.of(scene.events), async () => new Uint8Array([1]))).get(root.eventId)).toBe("invalid");
+    expect((await verifyResolutions(VaultEventSet.of(scene.events), readObject)).get(root.cid)).toBe("invalid");
+    expect((await verifyResolutions(VaultEventSet.of(scene.events), async () => new Uint8Array([1]))).get(root.cid)).toBe("invalid");
   });
 });

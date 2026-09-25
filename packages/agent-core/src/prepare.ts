@@ -194,7 +194,7 @@ export async function prepareUnderLock(held: Held, keys: Keys, messageId: Messag
           senderDidId: sender.didId,
           localKeyName: sender.keyNames.keyAgreement,
           recipientDid: channel.peerDid,
-          peerResolutionEventId: resolved.eventId as EventReference<"peer.resolved">,
+          peerResolutionEventCid: resolved.cid as EventReference<"peer.resolved">,
           fromPrior: ends.fromPrior,
           intentHash: intent.intentHash,
           plaintextHash: plaintextHash(plaintext),
@@ -260,8 +260,8 @@ function proofOf(fold: VaultFold, sender: LocalDidEntity, channel: Channel): str
   if (decisions.length === 0) return null;
   for (const decision of decisions) {
     const { status } = decision;
-    if (status.status === "pending") return { pending: `the rotation ${decision.event.eventId} to the sender is pending: ${status.because}` };
-    if (status.status !== "candidate") return { because: `the rotation ${decision.event.eventId} to the sender is ${status.status}: ${status.because}` };
+    if (status.status === "pending") return { pending: `the rotation ${decision.event.cid} to the sender is pending: ${status.because}` };
+    if (status.status !== "candidate") return { because: `the rotation ${decision.event.cid} to the sender is ${status.status}: ${status.because}` };
   }
   const proofs = new Set(decisions.map((decision) => decision.event.data.fromPrior));
   if (proofs.size > 1) return { because: `${decisions.length} rotations to the sender toward ${channel.peerDid} freeze different proofs` };

@@ -1,4 +1,4 @@
-import type { Cid, EventId, JsonObject } from "@estoc/event-store";
+import type { Cid, JsonObject } from "@estoc/event-store";
 import { SignJWT, importJWK } from "jose";
 import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it } from "vitest";
@@ -24,7 +24,7 @@ import {
   type VaultData,
   type WireMessageId,
 } from "../../src/index.js";
-import { AUTHOR, AUTHOR2, HASH, cidOf, expectOrderFree, type Scene } from "./helpers.js";
+import { AUTHOR, AUTHOR2, HASH, cidOf, expectOrderFree, type Scene, fakeEventCid } from "./helpers.js";
 import { IAT, blocked, noObjects, proof, receipt, resolved, vaults, type Local, type Peer } from "./scene.js";
 
 const fold = (scene: Scene, keys: Keys | null, readObject: ReadObject = noObjects) => foldVaultChecked(scene.set(), keys, readObject);
@@ -59,16 +59,16 @@ function picture(vault: VaultFold) {
       id: execution.id,
       messageId: execution.messageId,
       channel: execution.channel,
-      members: execution.members.map(({ source, positive, witness }) => [source.event.eventId, positive, witness]),
-      siblings: execution.siblings.map(({ event, standing }) => [event.eventId, standing]),
+      members: execution.members.map(({ source, positive, witness }) => [source.event.cid, positive, witness]),
+      siblings: execution.siblings.map(({ event, standing }) => [event.cid, standing]),
       intentHash: execution.intentHash,
       kind: execution.kind,
       status: execution.status,
       firstReceiptKey: execution.firstReceiptKey,
       erased: execution.erased,
     })),
-    anonymous: inbound.anonymous.map(({ event }) => event.eventId),
-    unplaced: inbound.unplaced.map(({ event, standing }) => [event.eventId, standing]),
+    anonymous: inbound.anonymous.map(({ event }) => event.cid),
+    unplaced: inbound.unplaced.map(({ event, standing }) => [event.cid, standing]),
   };
 }
 
@@ -99,20 +99,20 @@ describe("an inbound input", () => {
       firstReceiptKey: { ordinal: 1n, author: AUTHOR },
       erased: false,
     });
-    expect(execution.members.map(({ source, positive, witness }) => [source.event.eventId, positive, witness])).toEqual([
-      [first.eventId, true, { status: "complete" }],
-      [later.eventId, true, { status: "complete" }],
+    expect(execution.members.map(({ source, positive, witness }) => [source.event.cid, positive, witness])).toEqual([
+      [first.cid, true, { status: "complete" }],
+      [later.cid, true, { status: "complete" }],
     ]);
     expect(inbound.executions.get(execution.id)).toBe(execution);
-    expect(inbound.ofSource(later.eventId)).toBe(execution);
+    expect(inbound.ofSource(later.cid)).toBe(execution);
     for (const other of [atA1, fromB1, otherWire]) {
-      const own = inbound.ofSource(other.eventId)!;
+      const own = inbound.ofSource(other.cid)!;
       expect(own).not.toBe(execution);
-      expect(own.members.map(({ source }) => source.event.eventId)).toEqual([other.eventId]);
+      expect(own.members.map(({ source }) => source.event.cid)).toEqual([other.cid]);
       expect(own.status).toEqual({ status: "complete" });
     }
-    expect(inbound.ofSource(atA1.eventId)!.id).toBe(executionId(b0.did, a1.did, wire as WireMessageId));
-    expect(inbound.ofSource(fromB1.eventId)!.id).toBe(executionId(b1.did, a0.did, wire as WireMessageId));
+    expect(inbound.ofSource(atA1.cid)!.id).toBe(executionId(b0.did, a1.did, wire as WireMessageId));
+    expect(inbound.ofSource(fromB1.cid)!.id).toBe(executionId(b1.did, a0.did, wire as WireMessageId));
     expect(inbound.ofMessage(uuidv7() as VaultData["message.in"]["messageId"])).toBeNull();
     expect(inbound.anonymous).toEqual([]);
     expect(inbound.unplaced).toEqual([]);
@@ -127,7 +127,7 @@ describe("an inbound input", () => {
     const nineByA = observe(scene, { local: a0, peer: b0, ordinal: 9, wire, author: AUTHOR });
     const vault = await fold(scene, keys);
     const execution = vault.inbound.ofMessage(ten.data.messageId)!;
-    expect(execution.members.map(({ source }) => source.event.eventId)).toEqual([nineByA.eventId, nineByB.eventId, ten.eventId]);
+    expect(execution.members.map(({ source }) => source.event.cid)).toEqual([nineByA.cid, nineByB.cid, ten.cid]);
     expect(execution.firstReceiptKey).toEqual({ ordinal: 9n, author: AUTHOR });
     expectSameOverEveryOrder(scene, vault.checks);
   });
@@ -141,9 +141,9 @@ describe("an inbound input", () => {
     const conflict = { status: "conflict", because: "2 intents are authenticated for one input" };
     let execution = vault.inbound.ofMessage(plain.data.messageId)!;
     expect(execution).toMatchObject({ status: conflict, intentHash: null, kind: null, firstReceiptKey: null });
-    expect(execution.members.map(({ source, positive, witness }) => [source.event.eventId, positive, witness])).toEqual([
-      [plain.eventId, true, { status: "complete" }],
-      [carried.eventId, true, { status: "complete" }],
+    expect(execution.members.map(({ source, positive, witness }) => [source.event.cid, positive, witness])).toEqual([
+      [plain.cid, true, { status: "complete" }],
+      [carried.cid, true, { status: "complete" }],
     ]);
     expectSameOverEveryOrder(scene, vault.checks);
 
@@ -169,9 +169,9 @@ describe("an inbound input", () => {
     let vault = await fold(scene, keys);
     let execution = vault.inbound.ofMessage(refused.data.messageId)!;
     expect(execution).toMatchObject({ status: { status: "pending", because: "no observation is a complete witness: the proof is not yet verified" }, intentHash: null, kind: null, firstReceiptKey: null });
-    expect(execution.members.map(({ source, positive, witness }) => [source.event.eventId, positive, witness])).toEqual([
-      [refused.eventId, false, { status: "invalid", because: "not a compact JWT" }],
-      [waiting.eventId, false, { status: "pending", because: "the proof is not yet verified" }],
+    expect(execution.members.map(({ source, positive, witness }) => [source.event.cid, positive, witness])).toEqual([
+      [refused.cid, false, { status: "invalid", because: "not a compact JWT" }],
+      [waiting.cid, false, { status: "pending", because: "the proof is not yet verified" }],
     ]);
     expectSameOverEveryOrder(scene, vault.checks);
 
@@ -179,20 +179,20 @@ describe("an inbound input", () => {
     vault = await fold(scene, keys);
     execution = vault.inbound.ofMessage(refused.data.messageId)!;
     expect(execution).toMatchObject({ status: { status: "complete" }, intentHash: HASH, kind: "application", firstReceiptKey: { ordinal: 3n, author: AUTHOR } });
-    expect(execution.members.map(({ source, positive }) => [source.event.eventId, positive])).toEqual([
-      [refused.eventId, false],
-      [waiting.eventId, false],
-      [plain.eventId, true],
+    expect(execution.members.map(({ source, positive }) => [source.event.cid, positive])).toEqual([
+      [refused.cid, false],
+      [waiting.cid, false],
+      [plain.cid, true],
     ]);
     expectSameOverEveryOrder(scene, vault.checks);
 
     resolved(scene, a1.didId, b0, { short: true });
     vault = await fold(scene, keys, readerOf(new Map([[b0.resolution.cid, b0.resolution.bytes]])));
     execution = vault.inbound.ofMessage(refused.data.messageId)!;
-    expect(execution.members.map(({ source, positive, witness }) => [source.event.eventId, positive, witness.status])).toEqual([
-      [refused.eventId, false, "invalid"],
-      [waiting.eventId, true, "complete"],
-      [plain.eventId, true, "complete"],
+    expect(execution.members.map(({ source, positive, witness }) => [source.event.cid, positive, witness.status])).toEqual([
+      [refused.cid, false, "invalid"],
+      [waiting.cid, true, "complete"],
+      [plain.cid, true, "complete"],
     ]);
     expect(execution).toMatchObject({ status: { status: "conflict", because: "2 intents are authenticated for one input" }, intentHash: null, firstReceiptKey: null });
     expectSameOverEveryOrder(scene, vault.checks);
@@ -202,45 +202,45 @@ describe("an inbound input", () => {
     const { scene, keys, a0, b0, b1 } = await vaults();
     const wire = uuidv7();
     const complete = observe(scene, { local: a0, peer: b0, ordinal: 1, wire });
-    const missingResolution = observe(scene, { local: a0, peer: b0, ordinal: 2, wire, overrides: { peerResolutionEventId: uuidv7() as VaultData["message.in"]["peerResolutionEventId"] } });
+    const missingResolution = observe(scene, { local: a0, peer: b0, ordinal: 2, wire, overrides: { peerResolutionEventCid: fakeEventCid() as VaultData["message.in"]["peerResolutionEventCid"] } });
     const wrongResolution = receipt(scene, { local: a0, peer: b0, resolution: resolved(scene, a0.didId, b1), ordinal: 3, wire, presentedDid: b0.longFormDid });
-    const alone = observe(scene, { local: a0, peer: b0, ordinal: 4, wire: uuidv7(), overrides: { peerResolutionEventId: uuidv7() as VaultData["message.in"]["peerResolutionEventId"] } });
+    const alone = observe(scene, { local: a0, peer: b0, ordinal: 4, wire: uuidv7(), overrides: { peerResolutionEventCid: fakeEventCid() as VaultData["message.in"]["peerResolutionEventCid"] } });
     const anonymousWire = uuidv7() as WireMessageId;
     const anonymous = observe(scene, {
       local: a0,
       peer: b0,
       ordinal: 5,
       wire: anonymousWire,
-      overrides: { messageId: anonymousMessageId(didKeyName(a0.didId, "key-agreement"), anonymousWire), peerResolutionEventId: null, presentedDid: null, did: null },
+      overrides: { messageId: anonymousMessageId(didKeyName(a0.didId, "key-agreement"), anonymousWire), peerResolutionEventCid: null, presentedDid: null, did: null },
     });
     const vault = await fold(scene, keys);
     const { inbound } = vault;
     const execution = inbound.ofMessage(complete.data.messageId)!;
     expect(execution.status).toEqual({ status: "complete" });
-    expect(execution.members.map(({ source }) => source.event.eventId)).toEqual([complete.eventId]);
-    expect(execution.siblings.map(({ event, standing }) => [event.eventId, standing])).toEqual([
-      [missingResolution.eventId, { status: "incomplete", because: "the resolution it names is not here" }],
-      [wrongResolution.eventId, { status: "conflict", because: "the resolution it names is not of this sender at this key" }],
+    expect(execution.members.map(({ source }) => source.event.cid)).toEqual([complete.cid]);
+    expect(execution.siblings.map(({ event, standing }) => [event.cid, standing])).toEqual([
+      [missingResolution.cid, { status: "incomplete", because: "the resolution it names is not here" }],
+      [wrongResolution.cid, { status: "conflict", because: "the resolution it names is not of this sender at this key" }],
     ]);
-    expect(inbound.ofSource(missingResolution.eventId)).toBe(execution);
-    expect(inbound.ofSource(wrongResolution.eventId)).toBe(execution);
-    expect(inbound.unplaced.map(({ event }) => event.eventId)).toEqual([alone.eventId]);
-    expect(inbound.ofSource(alone.eventId)).toBeNull();
-    expect(inbound.anonymous.map(({ event }) => event.eventId)).toEqual([anonymous.eventId]);
-    expect(inbound.ofSource(anonymous.eventId)).toBeNull();
-    expect(inbound.ofSource(uuidv7() as EventId)).toBeNull();
+    expect(inbound.ofSource(missingResolution.cid)).toBe(execution);
+    expect(inbound.ofSource(wrongResolution.cid)).toBe(execution);
+    expect(inbound.unplaced.map(({ event }) => event.cid)).toEqual([alone.cid]);
+    expect(inbound.ofSource(alone.cid)).toBeNull();
+    expect(inbound.anonymous.map(({ event }) => event.cid)).toEqual([anonymous.cid]);
+    expect(inbound.ofSource(anonymous.cid)).toBeNull();
+    expect(inbound.ofSource(fakeEventCid())).toBeNull();
     expect(inbound.executions.size).toBe(1);
     expectSameOverEveryOrder(scene, vault.checks);
 
     const unseeded = await fold(scene, null);
     expect(unseeded.inbound.executions.size).toBe(0);
-    expect(unseeded.inbound.unplaced.map(({ event, standing }) => [event.eventId, standing.status])).toEqual([
-      [complete.eventId, "incomplete"],
-      [missingResolution.eventId, "incomplete"],
-      [wrongResolution.eventId, "conflict"],
-      [alone.eventId, "incomplete"],
+    expect(unseeded.inbound.unplaced.map(({ event, standing }) => [event.cid, standing.status])).toEqual([
+      [complete.cid, "incomplete"],
+      [missingResolution.cid, "incomplete"],
+      [wrongResolution.cid, "conflict"],
+      [alone.cid, "incomplete"],
     ]);
-    expect(unseeded.inbound.anonymous.map(({ event }) => event.eventId)).toEqual([anonymous.eventId]);
+    expect(unseeded.inbound.anonymous.map(({ event }) => event.cid)).toEqual([anonymous.cid]);
     expectSameOverEveryOrder(scene, unseeded.checks);
   });
 
@@ -266,7 +266,7 @@ describe("an inbound input", () => {
     const vault = await fold(scene, keys);
     for (const [kind, event] of observed) {
       expect(kindOf(event.data)).toBe(kind);
-      const execution = vault.inbound.ofSource(event.eventId)!;
+      const execution = vault.inbound.ofSource(event.cid)!;
       expect(execution).toMatchObject({ kind, status: { status: "complete" }, erased: event === erased });
     }
     expectSameOverEveryOrder(scene, vault.checks);

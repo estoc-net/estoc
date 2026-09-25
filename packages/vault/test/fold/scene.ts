@@ -121,7 +121,7 @@ export function resolved(scene: Scene, local: DidId, peer: Peer, options: Resolv
   });
 }
 
-export const ref = <T extends VaultEvent>(event: T) => event.eventId as EventReference<T["type"]>;
+export const ref = <T extends VaultEvent>(event: T) => event.cid as EventReference<T["type"]>;
 
 export type Receipt = {
   local: Local;
@@ -147,7 +147,7 @@ export function receipt(scene: Scene, r: Receipt, options: EventOptions = {}): V
       plaintextHash: HASH as VaultData["message.in"]["plaintextHash"],
       localKeyName: didKeyName(r.local.didId, "key-agreement"),
       msgType: "https://didcomm.org/basicmessage/2.0/message",
-      peerResolutionEventId: ref(r.resolution),
+      peerResolutionEventCid: ref(r.resolution),
       presentedDid: r.presentedDid ?? r.resolution.data.presentedDid,
       did: r.peer.did,
       thid: null,
@@ -187,7 +187,7 @@ export async function rotation(scene: Scene, keys: Keys, r: Rotation, options: E
       fromDidId: r.from.didId,
       peerDid: r.peer.did,
       toDidId: r.to.didId,
-      sourceEventId: r.source == null ? null : ref(r.source),
+      sourceEventCid: r.source == null ? null : ref(r.source),
       fromPrior: r.fromPrior ?? (await proof(keys, r.from, r.to)),
       ...r.overrides,
     },
@@ -202,7 +202,7 @@ export function invitation(scene: Scene, local: Local, oobId = uuidv7(), overrid
 
 /** The record that a receipt consumed an invitation. */
 export function consumed(scene: Scene, disclosure: VaultEvent<"did.disclosed">, source: VaultEvent<"message.in">, options: EventOptions = {}): VaultEvent<"invitation.consumed"> {
-  return scene.add("invitation.consumed", { disclosureEventId: ref(disclosure), sourceEventId: ref(source) }, options);
+  return scene.add("invitation.consumed", { disclosureEventCid: ref(disclosure), sourceEventCid: ref(source) }, options);
 }
 
 /** Our permanent denial of a channel, with or without its verified successors. */
@@ -240,8 +240,8 @@ export function intent(scene: Scene, sender: Local, recipient: Peer, overrides: 
       executionId: null,
       effectType: null,
       effectKey: null,
-      sourceEventId: null,
-      rotationEventId: null,
+      sourceEventCid: null,
+      rotationEventCid: null,
       ...overrides,
     },
     options
@@ -251,7 +251,7 @@ export function intent(scene: Scene, sender: Local, recipient: Peer, overrides: 
 /** An automatic effect's intent: the tuple, its key and the message ID the key derives, from the source it answers. */
 export function automatic(scene: Scene, sender: Local, recipient: Peer, source: VaultEvent<"message.in">, executionId: ExecutionId, effectType = PURE_ACK, overrides: Partial<MessageOut> = {}): VaultEvent<"message.out"> {
   const key = effectKey(executionId, effectType);
-  return intent(scene, sender, recipient, { messageId: automaticMessageId(key), msgType: "https://didcomm.org/empty/1.0/empty", executionId, effectType, effectKey: key, sourceEventId: ref(source), ...overrides });
+  return intent(scene, sender, recipient, { messageId: automaticMessageId(key), msgType: "https://didcomm.org/empty/1.0/empty", executionId, effectType, effectKey: key, sourceEventCid: ref(source), ...overrides });
 }
 
 export type PackageInput = { sender: DidId; recipient: Peer; resolution: VaultEvent<"peer.resolved">; fromPrior?: string | null; packageId?: PackageId; overrides?: Partial<VaultData["message.prepared"]> };
@@ -267,7 +267,7 @@ export function packageOf(scene: Scene, out: VaultEvent<"message.out">, input: P
       senderDidId: input.sender,
       localKeyName: didKeyName(input.sender, "key-agreement"),
       recipientDid: input.recipient.did,
-      peerResolutionEventId: ref(input.resolution),
+      peerResolutionEventCid: ref(input.resolution),
       fromPrior: input.fromPrior ?? null,
       intentHash: out.data.intentHash,
       plaintextHash: HASH as VaultData["message.prepared"]["plaintextHash"],

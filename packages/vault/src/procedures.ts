@@ -23,7 +23,7 @@ import { channelPolicy, messageIdsOf, senderGate } from "./fold/views.js";
 import type { Keys } from "./identity.js";
 import { automaticMessageId, channelKey, channelOf, compareChannels, effectKey, sameChannel } from "./ids.js";
 import { vaultDraft, type VaultDraft } from "./schema.js";
-import type { Channel, Cid, ContactId, Did, EffectKey, EventId, EventReference, ExecutionId, MessageId } from "./types.js";
+import type { Channel, Cid, ContactId, Did, EffectKey, EventCid, EventReference, ExecutionId, MessageId } from "./types.js";
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -137,11 +137,11 @@ export function closeErasures(runtime: VaultRuntime, keys: Keys | null, options:
  */
 export function consumptionDrafts(fold: VaultFold): VaultDraft<"invitation.consumed">[] {
   const drafts: VaultDraft<"invitation.consumed">[] = [];
-  for (const [disclosureEventId, invitation] of fold.invitations.invitations) {
+  for (const [disclosureEventCid, invitation] of fold.invitations.invitations) {
     if (invitation.status.status !== "available") continue;
     for (const { source, eligibility } of invitation.candidates) {
       if (eligibility.status === "refused" || eligibility.status === "invalid") continue;
-      if (eligibility.status === "eligible") drafts.push(vaultDraft("invitation.consumed", { disclosureEventId: disclosureEventId as EventReference<"did.disclosed">, sourceEventId: source.event.eventId as EventReference<"message.in"> }));
+      if (eligibility.status === "eligible") drafts.push(vaultDraft("invitation.consumed", { disclosureEventCid: disclosureEventCid as EventReference<"did.disclosed">, sourceEventCid: source.event.cid as EventReference<"message.in"> }));
       break;
     }
   }
@@ -270,7 +270,7 @@ function missingResponses(fold: VaultFold): MissingResponse[] {
     if (execution.status.status !== "complete") continue;
     const source = execution.members.find((member) => member.witness.status === "complete")!.source;
     const candidates: string[] = [];
-    if (fold.outbound.ackTargets(source.event.eventId).length > 0) candidates.push(PURE_ACK_EFFECT);
+    if (fold.outbound.ackTargets(source.event.cid).length > 0) candidates.push(PURE_ACK_EFFECT);
     if (source.event.data.msgType === PING_TYPE && !execution.erased) candidates.push(PING_RESPONSE_EFFECT);
     if (candidates.length === 0) continue;
     const channel = responseChannel(fold, execution);
@@ -298,20 +298,20 @@ export type NotificationChannel = { status: "selected"; channel: Channel; source
 export function notificationChannel(fold: VaultFold, decision: Decision): NotificationChannel {
   const none = (because: string): NotificationChannel => ({ status: "none", because });
   if (decision.channel === null) return none("the decision's predecessor is not known here");
-  const continuity = fold.continuity.status(decision.event.eventId);
+  const continuity = fold.continuity.status(decision.event.cid);
   if (continuity.status !== "verified") return none(`the rotation is not verified: ${continuity.status}${"because" in continuity ? `, ${continuity.because}` : ""}`);
   const successor = fold.routes.dids.get(decision.event.data.toDidId)?.created?.did;
   if (successor === undefined) return none("the successor has no consistent creation here");
   const channel = channelOf(successor, decision.channel.peerDid);
   const gate = senderGate(fold, channel);
   if (gate.status === "closed") return none(`the successor cannot send to the peer: ${gate.because}`);
-  const { sourceEventId } = decision.event.data;
-  if (sourceEventId === null) return { status: "selected", channel, source: null };
-  const source = fold.channels.sources.get(sourceEventId as EventId) ?? null;
+  const { sourceEventCid } = decision.event.data;
+  if (sourceEventCid === null) return { status: "selected", channel, source: null };
+  const source = fold.channels.sources.get(sourceEventCid as EventCid) ?? null;
   if (source === null) return none("the source is not here");
-  const witness = fold.continuity.witness(source.event.eventId);
+  const witness = fold.continuity.witness(source.event.cid);
   if (witness.status !== "complete") return none(`the source is no complete witness: ${witness.because}`);
-  const execution = fold.inbound.ofSource(source.event.eventId);
+  const execution = fold.inbound.ofSource(source.event.cid);
   if (execution === null) return none("the source is in no input here");
   if (execution.status.status !== "complete") return none(`the source's input is not established: ${execution.status.because}`);
   if (kindOf(source.event.data) !== "application") return none(`a control input triggers no notification: the source is ${kindOf(source.event.data)}`);
@@ -324,7 +324,7 @@ function missingNotifications(fold: VaultFold): { notifications: MissingNotifica
   const notifications: MissingNotification[] = [];
   const conflicts: NotificationConflict[] = [];
   for (const decision of fold.channels.decisions.values()) {
-    const notification = fold.outbound.notificationFor(decision.event.eventId);
+    const notification = fold.outbound.notificationFor(decision.event.cid);
     if (notification.status === "conflict") conflicts.push({ decision, notification });
     if (notification.status !== "none") continue;
     const selected = notificationChannel(fold, decision);
@@ -350,7 +350,7 @@ export function decisionFor(fold: VaultFold, localDid: Did, peerDid: Did): Exist
   const conflict = (because: string): ExistingDecision => ({ status: "conflict", decisions, because });
   for (const decision of decisions) {
     if (decision.status.status === "conflict") return conflict(decision.status.because);
-    const continuity = fold.continuity.status(decision.event.eventId);
+    const continuity = fold.continuity.status(decision.event.cid);
     if (continuity.status === "conflict") return conflict(continuity.because);
   }
   for (const decision of decisions) if (decision.status.status === "pending") return { status: "defer", decision, because: decision.status.because };

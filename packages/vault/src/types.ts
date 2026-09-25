@@ -1,5 +1,5 @@
 /**
- * The identifier vocabulary of the version-3 vault and the payload of
+ * The identifier vocabulary of the version-4 vault and the payload of
  * each event type. Every kind of value a payload or a runtime interface
  * names is a distinct nominal type over the validated string it
  * serializes as, with no wrapper and no prefix. Nothing here checks a
@@ -8,9 +8,9 @@
  * content identity from `@estoc/dasl` through it.
  */
 
-import type { AuthorId, Cid, EventId, JsonObject } from "@estoc/event-store";
+import type { AuthorId, Cid, EventCid, JsonObject } from "@estoc/event-store";
 
-export type { AuthorId, Cid, EventId };
+export type { AuthorId, Cid, EventCid };
 
 export type EntityId<Kind extends string> = string & { readonly __entity: Kind };
 
@@ -53,7 +53,7 @@ export type Channel = { localDid: Did; peerDid: Did };
  * records what the target must be; it is no proof the target is
  * available or valid.
  */
-export type EventReference<T extends string> = EventId & { readonly __eventType: T };
+export type EventReference<T extends string> = EventCid & { readonly __eventType: T };
 
 // ---- payloads -----------------------------------------------------------
 
@@ -96,8 +96,8 @@ export type MessageOut = {
   executionId: ExecutionId | null;
   effectType: string | null;
   effectKey: EffectKey | null;
-  sourceEventId: EventReference<"message.in"> | null;
-  rotationEventId: EventReference<"did.rotationSelected"> | null;
+  sourceEventCid: EventReference<"message.in"> | null;
+  rotationEventCid: EventReference<"did.rotationSelected"> | null;
 };
 
 /** Where an inbound observation arrived: both null for direct transport without them. */
@@ -105,7 +105,7 @@ export type ReceivedVia = { mediationId: MediationId | null; deliveryId: Deliver
 
 /**
  * One durable inbound observation. An anonymous observation has null
- * `peerResolutionEventId`, `did` and `presentedDid` together; every
+ * `peerResolutionEventCid`, `did` and `presentedDid` together; every
  * other observation names its resolution evidence. `fromPrior` is the
  * original string off the wire, whatever it turns out to be.
  */
@@ -117,7 +117,7 @@ export type MessageIn = {
   plaintextHash: MessageHash;
   localKeyName: KeyName;
   msgType: string;
-  peerResolutionEventId: EventReference<"peer.resolved"> | null;
+  peerResolutionEventCid: EventReference<"peer.resolved"> | null;
   presentedDid: Did | null;
   did: Did | null;
   thid: string | null;
@@ -134,7 +134,7 @@ export type MessageIn = {
   receivedVia: ReceivedVia;
 };
 
-/** The payload of each version-3 event type, by type name. */
+/** The payload of each version-4 event type, by type name. */
 export type VaultData = {
   "identity.label": { name: string };
   "peer.resolved": {
@@ -158,8 +158,8 @@ export type VaultData = {
   "route.retired": { routeId: RouteId; because: string };
   "did.disclosed": { didId: DidId; as: DisclosureAs; uses: DisclosureUses; oobId: string | null; goal: string | null };
   "did.retired": { didId: DidId; because: string };
-  "invitation.consumed": { disclosureEventId: EventReference<"did.disclosed">; sourceEventId: EventReference<"message.in"> };
-  "did.rotationSelected": { fromDidId: DidId; peerDid: Did; toDidId: DidId; sourceEventId: EventReference<"message.in"> | null; fromPrior: string };
+  "invitation.consumed": { disclosureEventCid: EventReference<"did.disclosed">; sourceEventCid: EventReference<"message.in"> };
+  "did.rotationSelected": { fromDidId: DidId; peerDid: Did; toDidId: DidId; sourceEventCid: EventReference<"message.in"> | null; fromPrior: string };
   "channel.blocked": { localDid: Did; peerDid: Did; includeSuccessors: boolean };
   "contact.created": { contactId: ContactId; because: ContactOrigin };
   "contact.petname": { contactId: ContactId; name: string };
@@ -175,7 +175,7 @@ export type VaultData = {
     senderDidId: DidId;
     localKeyName: KeyName;
     recipientDid: Did;
-    peerResolutionEventId: EventReference<"peer.resolved">;
+    peerResolutionEventCid: EventReference<"peer.resolved">;
     fromPrior: string | null;
     intentHash: MessageHash;
     plaintextHash: MessageHash;

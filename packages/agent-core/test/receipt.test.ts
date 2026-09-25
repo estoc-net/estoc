@@ -86,7 +86,7 @@ describe("the receipt", () => {
     const received = await receiver.receive(delivery);
     const [event, ...more] = await eventsOf(alice, "message.in");
     const [resolved] = await eventsOf(alice, "peer.resolved");
-    expect([more, received]).toEqual([[], { outcome: "received", key: deliveryKey(delivery), eventId: event!.eventId, live: true }]);
+    expect([more, received]).toEqual([[], { outcome: "received", key: deliveryKey(delivery), cid: event!.cid, live: true }]);
     const read = readPlaintext(seen[0]!.plaintext);
     expect(event!.data).toEqual({
       messageId: inboundMessageId(bob.did, alice.did, wire),
@@ -96,7 +96,7 @@ describe("the receipt", () => {
       plaintextHash: read.plaintextHash,
       localKeyName: didKeyName(DID, "key-agreement"),
       msgType: BASIC_MESSAGE,
-      peerResolutionEventId: resolved!.eventId,
+      peerResolutionEventCid: resolved!.cid,
       presentedDid: bob.longFormDid,
       did: bob.did,
       thid: "t1",
@@ -116,16 +116,16 @@ describe("the receipt", () => {
     expect([event!.roots, read.stored.attachmentCids.length]).toEqual([read.stored.roots, 1]);
     for (const cid of read.stored.roots) expect(await alice.runtime.vault.objects.has(cid)).toBe(true);
     const fold = await foldOf(alice);
-    const source = fold.channels.sources.get(event!.eventId)!;
-    expect([source.standing.status, source.channel, source.resolution?.eventId]).toEqual(["complete", { localDid: alice.did, peerDid: bob.did }, resolved!.eventId]);
-    expect(fold.inbound.ofSource(event!.eventId)).toMatchObject({ messageId: event!.data.messageId, status: { status: "complete" }, members: [{ source: { event: { eventId: event!.eventId } } }] });
-    expect((await trace.read({ type: "diag.receive" })).map((entry) => entry.data)).toEqual([{ via: "direct", outcome: "received", eventId: event!.eventId }]);
+    const source = fold.channels.sources.get(event!.cid)!;
+    expect([source.standing.status, source.channel, source.resolution?.cid]).toEqual(["complete", { localDid: alice.did, peerDid: bob.did }, resolved!.cid]);
+    expect(fold.inbound.ofSource(event!.cid)).toMatchObject({ messageId: event!.data.messageId, status: { status: "complete" }, members: [{ source: { event: { cid: event!.cid } } }] });
+    expect((await trace.read({ type: "diag.receive" })).map((entry) => entry.data)).toEqual([{ via: "direct", outcome: "received", cid: event!.cid }]);
 
     expect((await receiver.receive({ packed: await sealed(sealer, alice.longFormDid), source: DIRECT })).outcome).toBe("received");
     const events = await eventsOf(alice, "message.in");
-    expect(events.map(({ data }) => [data.receiptOrdinal, data.peerResolutionEventId])).toEqual([
-      ["1", resolved!.eventId],
-      ["2", resolved!.eventId],
+    expect(events.map(({ data }) => [data.receiptOrdinal, data.peerResolutionEventCid])).toEqual([
+      ["1", resolved!.cid],
+      ["2", resolved!.cid],
     ]);
     expect(await eventsOf(alice, "peer.resolved")).toHaveLength(1);
     await closeAll(alice, bob);
@@ -149,7 +149,7 @@ describe("the receipt", () => {
     ]);
     const fold = await foldOf(alice);
     const events = await eventsOf(alice, "message.in");
-    expect(events.map(({ eventId, data }) => [data.localKeyName, fold.channels.sources.get(eventId)?.standing.status, fold.channels.sources.get(eventId)?.channel])).toEqual([
+    expect(events.map(({ cid, data }) => [data.localKeyName, fold.channels.sources.get(cid)?.standing.status, fold.channels.sources.get(cid)?.channel])).toEqual([
       [didKeyName(DID, "key-agreement"), "complete", { localDid: alice.did, peerDid: bob.did }],
       [didKeyName(DID, "key-agreement"), "complete", { localDid: alice.did, peerDid: bob.did }],
     ]);
@@ -191,10 +191,10 @@ describe("the receipt", () => {
     const wire = crypto.randomUUID();
     expect((await receiver.receive({ packed: await sealed(null, alice.longFormDid, { id: wire }), source: DIRECT })).outcome).toBe("received");
     const [event] = await eventsOf(alice, "message.in");
-    expect(event!.data).toMatchObject({ messageId: anonymousMessageId(didKeyName(DID, "key-agreement"), wire as WireMessageId), peerResolutionEventId: null, presentedDid: null, did: null, localKeyName: didKeyName(DID, "key-agreement") });
+    expect(event!.data).toMatchObject({ messageId: anonymousMessageId(didKeyName(DID, "key-agreement"), wire as WireMessageId), peerResolutionEventCid: null, presentedDid: null, did: null, localKeyName: didKeyName(DID, "key-agreement") });
     expect(await eventsOf(alice, "peer.resolved")).toEqual([]);
     const fold = await foldOf(alice);
-    expect([fold.inbound.anonymous.map(({ event: { eventId } }) => eventId), fold.inbound.executions.size]).toEqual([[event!.eventId], 0]);
+    expect([fold.inbound.anonymous.map(({ event: { cid } }) => cid), fold.inbound.executions.size]).toEqual([[event!.cid], 0]);
 
     const anonymous = seen[0] as Authenticated;
     const withProof = { ...anonymous, plaintext: { ...anonymous.plaintext, from_prior: "not-a-proof" } as IMessage, fromPrior: "not-a-proof" };
@@ -218,9 +218,9 @@ describe("the receipt", () => {
     const [verified, unreadable] = await eventsOf(alice, "message.in");
     expect([verified!.data.fromPrior, unreadable!.data.fromPrior]).toEqual([proof, "not-a-jwt"]);
     const fold = await foldOf(alice);
-    expect(fold.channels.carriers.get(verified!.eventId)?.link).toEqual({ from: { localDid: alice.did, peerDid: prior.did }, to: { localDid: alice.did, peerDid: bob.did }, carrier: verified!.eventId });
-    expect(fold.channels.carriers.get(unreadable!.eventId)).toMatchObject({ link: null });
-    expect([fold.channels.sources.get(verified!.eventId)?.standing.status, fold.channels.sources.get(unreadable!.eventId)?.standing.status]).toEqual(["complete", "complete"]);
+    expect(fold.channels.carriers.get(verified!.cid)?.link).toEqual({ from: { localDid: alice.did, peerDid: prior.did }, to: { localDid: alice.did, peerDid: bob.did }, carrier: verified!.cid });
+    expect(fold.channels.carriers.get(unreadable!.cid)).toMatchObject({ link: null });
+    expect([fold.channels.sources.get(verified!.cid)?.standing.status, fold.channels.sources.get(unreadable!.cid)?.standing.status]).toEqual(["complete", "complete"]);
     await closeAll(alice, bob);
   });
 
@@ -279,7 +279,7 @@ describe("the receipt", () => {
     expect(await drain.drain()).toEqual({ acked: 1, ended: "empty" });
     const [event, ...more] = await eventsOf(p, "message.in");
     const [resolved] = await eventsOf(p, "peer.resolved");
-    expect([more, event!.data.receivedVia, event!.data.peerResolutionEventId]).toEqual([[], { mediationId: p.mediationId, deliveryId: "q1" }, resolved!.eventId]);
+    expect([more, event!.data.receivedVia, event!.data.peerResolutionEventCid]).toEqual([[], { mediationId: p.mediationId, deliveryId: "q1" }, resolved!.cid]);
     expect([(await eventsOf(p, "peer.resolved")).length, mediator.queues.get(account) ?? []]).toEqual([1, []]);
     await closeAll(p, bob);
   });

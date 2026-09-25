@@ -84,7 +84,7 @@ describe("the contacts", () => {
         conflicts: continuity.conflicts,
         heads: [channel(a0, b0), channel(a0, b1), channel(a1, b0)].map((c) => [continuity.head(c), continuity.blocked(c), continuity.superseded(c)]),
         executions: inbound.executions,
-        outbounds: [...outbound.outbounds.values()].map((o) => [o.messageId, o.channel, o.outcome, o.work.kind, o.acknowledged, o.ackWitnesses.map(({ source }) => source.event.eventId)]),
+        outbounds: [...outbound.outbounds.values()].map((o) => [o.messageId, o.channel, o.outcome, o.work.kind, o.acknowledged, o.ackWitnesses.map(({ source }) => source.event.cid)]),
         invitations: invitations.invitations,
       });
     };

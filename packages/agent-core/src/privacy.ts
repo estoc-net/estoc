@@ -21,14 +21,14 @@ import { rotate, type RotateOptions, type Rotated, type RotationTarget } from ".
 export type PrivacyPolicy = { status: "rotate"; target: RotationTarget } | { status: "reuse"; decision: Decision } | { status: "none"; because: string };
 
 /** What the policy makes of an observation over the fold: pure, and read again under the lock by the rotation it selects. */
-export function privacyPolicy(fold: VaultFold, eventId: EventReference<"message.in">): PrivacyPolicy {
+export function privacyPolicy(fold: VaultFold, cid: EventReference<"message.in">): PrivacyPolicy {
   const none = (because: string): PrivacyPolicy => ({ status: "none", because });
-  const source = fold.channels.sources.get(eventId);
+  const source = fold.channels.sources.get(cid);
   if (source === undefined) return none("the observation is not here");
   if (source.channel === null || source.localDidId === null) return none("the observation is anonymous or in no channel");
-  const witness = fold.continuity.witness(eventId);
+  const witness = fold.continuity.witness(cid);
   if (witness.status !== "complete") return none(`the observation is no complete witness: ${witness.because}`);
-  const execution = fold.inbound.ofSource(eventId);
+  const execution = fold.inbound.ofSource(cid);
   if (execution === null) return none("the observation is in no input here");
   if (execution.status.status !== "complete") return none(`the input is not established: ${execution.status.because}`);
   const kind = kindOf(source.event.data);
@@ -40,7 +40,7 @@ export function privacyPolicy(fold: VaultFold, eventId: EventReference<"message.
   const existing = decisionFor(fold, source.channel.localDid, source.channel.peerDid);
   if (existing.status === "reuse") return { status: "reuse", decision: existing.decision };
   if (existing.status !== "none") return none(existing.because);
-  return { status: "rotate", target: { localDidId: entity.didId, peerDid: source.channel.peerDid, sourceEventId: eventId } };
+  return { status: "rotate", target: { localDidId: entity.didId, peerDid: source.channel.peerDid, sourceEventCid: cid } };
 }
 
 export type PrivateAddress =
@@ -58,7 +58,7 @@ export type PrivateAddress =
  * or not, as the policy's successor.
  */
 export async function privateAddress(runtime: VaultRuntime, keys: Keys, live: LiveInput, options: RotateOptions): Promise<PrivateAddress> {
-  const policy = privacyPolicy(await scanVault(runtime.vault, keys), live.eventId);
+  const policy = privacyPolicy(await scanVault(runtime.vault, keys), live.cid);
   if (policy.status === "none") return { outcome: "none", because: policy.because };
   if (policy.status === "reuse") return { outcome: "reused", decision: policy.decision.event };
   const rotation = await rotate(runtime, keys, policy.target, options);

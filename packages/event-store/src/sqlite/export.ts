@@ -39,7 +39,7 @@ export interface ExportOptions {
 export type Exported = Validated;
 
 const FORMAT = "estoc-sqlite";
-const VAULT_VERSION = 3;
+const VAULT_VERSION = 4;
 
 /** How many bytes of chunks are gathered from a source stream before a transaction writes them: the memory an export holds beyond the chunk in hand. */
 const BATCH_BYTES = 8 * CHUNK_BYTES;
@@ -66,9 +66,7 @@ interface Cut {
  * export just built and closed, and its event and object payload is
  * within `maxBytes` when the caller gave one — and closed. A source
  * that fails while its bytes are copied is `IncompleteSnapshot` too,
- * the destination left unready. A conflict recorded against an event is a
- * local diagnostic, not damage: the accepted value is exported and
- * the diagnostic is not.
+ * the destination left unready.
  */
 export async function exportVault(runtime: VaultRuntime, open: OpenDestination, options: ExportOptions): Promise<Exported> {
   await runtime.locked(async (held) => {
@@ -138,9 +136,9 @@ function lay(writer: SqliteDriver, anchor: string, cut: Cut): void {
     createTables(writer, "portable");
     run(writer, "INSERT INTO vault_meta (singleton, format, vault_version, kind, ready, anchor) VALUES (1, ?, ?, 'portable', 0, ?)", FORMAT, VAULT_VERSION, anchor);
     run(writer, "INSERT INTO keystore (singleton, version, seed_jwe) VALUES (1, 3, ?)", new TextEncoder().encode(cut.wrapped.seedJwe));
-    const insert = writer.prepare("INSERT INTO events (event_id, at, author, type, canonical) VALUES (?, ?, ?, CAST(? AS TEXT), ?)");
+    const insert = writer.prepare("INSERT INTO events (cid, at, author, type, canonical) VALUES (?, ?, ?, CAST(? AS TEXT), ?)");
     try {
-      for (const event of cut.events) insert.run(event.eventId, event.at, event.author, new TextEncoder().encode(event.type), canonicalEventBytes(event));
+      for (const event of cut.events) insert.run(event.cid, event.at, event.author, new TextEncoder().encode(event.type), canonicalEventBytes(event));
     } finally {
       insert.finalize();
     }

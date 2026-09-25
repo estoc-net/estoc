@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **phase 1; schema-2 source preservation specified, implementation pending**. SQLite is the sole persistent vault and portable
+Status: **phase 1, implemented** — schema 2, CID-keyed events. SQLite is the sole persistent vault and portable
 backup format.
 
 The capitalized requirement words in this document have their BCP 14 meanings.

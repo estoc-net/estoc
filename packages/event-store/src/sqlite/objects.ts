@@ -1,5 +1,5 @@
 /**
- * The version-3 object store over an open SQLite runtime: the
+ * The version-4 object store over an open SQLite runtime: the
  * `objects` table and the chunks under each CID, 1 MiB each but the
  * last. A put is hashed as it streams into a staging table in the
  * connection's temporary database — a file of its own, never the

@@ -1,6 +1,6 @@
 import { expect } from "vitest";
 
-import type { AuthorId, Event, EventId } from "../../src/index.js";
+import { envelopeOf, eventCidOf, type AuthorId, type Event, type EventCid, type EventEnvelope } from "../../src/index.js";
 
 export { ANCHOR, META, WRAPPED, REWRAPPED } from "../fixtures.js";
 
@@ -26,13 +26,17 @@ export async function all<T>(items: AsyncIterable<T>): Promise<T[]> {
 }
 
 export function ids(events: Event[]): string[] {
-  return events.map((event) => event.eventId);
+  return events.map((event) => event.cid);
+}
+
+/** The event `envelope` is: the five fields, and the CID they hash to. */
+export function eventOf(envelope: EventEnvelope): Event {
+  return { ...envelopeOf(envelope), cid: eventCidOf(envelope) };
 }
 
 /**
  * A canonical UUIDv7 whose embedded timestamp is `t` and whose random
- * bits are `seed`, spelled out: the tests' way of naming an author, or
- * an event whose ID says one time while its `at` says another.
+ * bits are `seed`, spelled out: the tests' way of naming an author.
  */
 export function uuidv7At(t: number, seed: number): string {
   const ts = t.toString(16).padStart(12, "0");
@@ -72,20 +76,20 @@ export function partition<T>(items: T[], sizes: number[]): T[][] {
   return out;
 }
 
-/** An event as another serialization would carry it: members in another order, through JSON text and back. */
+/** An event as another serialization would carry it: members in another order, through JSON text and back, the same CID. */
 export function reordered(event: Event): unknown {
   const data = Object.fromEntries(Object.entries(event.data).reverse());
-  return JSON.parse(JSON.stringify({ data, roots: [...event.roots], type: event.type, author: event.author, at: event.at, eventId: event.eventId }));
+  return JSON.parse(JSON.stringify({ cid: event.cid, data, roots: [...event.roots], type: event.type, author: event.author, at: event.at }));
 }
 
-/** `event` with one field of `data` changed: same `eventId`, other content. */
+/** Another event: `event` with one field of `data` changed, under the CID that envelope hashes to. */
 export function altered(event: Event): Event {
-  return { ...event, data: { ...event.data, altered: true } };
+  return eventOf({ ...envelopeOf(event), data: { ...event.data, altered: true } });
 }
 
-/** `event` under another `eventId`, everything else the same. */
-export function renamed(event: Event, eventId: string): Event {
-  return { ...event, eventId: eventId as EventId };
+/** `event`'s envelope under `cid`, which is some other bytes' CID: what no store accepts. */
+export function mislabelled(event: Event, cid: string): unknown {
+  return { ...event, cid: cid as EventCid };
 }
 
 /**

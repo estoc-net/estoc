@@ -229,7 +229,7 @@ export async function received(party: DirectParty, peer: DirectParty, wire: stri
         plaintextHash: read.plaintextHash,
         localKeyName: didKeyName(at.didId, "key-agreement"),
         msgType: read.intent.type,
-        peerResolutionEventId: resolved.eventId as EventReference<"peer.resolved">,
+        peerResolutionEventCid: resolved.cid as EventReference<"peer.resolved">,
         presentedDid: peer.longFormDid,
         did: peer.did,
         thid: read.intent.thid,
@@ -247,7 +247,7 @@ export async function received(party: DirectParty, peer: DirectParty, wire: stri
       }),
     ]
   );
-  return event!.eventId as EventReference<"message.in">;
+  return event!.cid as EventReference<"message.in">;
 }
 
 export interface MediatedParty extends Party {

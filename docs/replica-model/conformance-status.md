@@ -36,23 +36,23 @@ specification-only revision.
 ## Pending content-addressed events and continuity integration — 2026-09-25
 
 The target now uses vault version 4 / SQLite schema 2 and consumes
-`@estoc/continuity` through the vault. Its package is available, but the storage,
-adapter and application changes below are **not implemented**. The version-3
-seed wrapper, DID/key derivation and deterministic domain-ID transcripts stay unchanged.
-Events now use five-field canonical envelopes and raw CIDs; typed references
-use `*EventCid` fields. Equal envelopes deduplicate
-even within one local batch. The existing UUID implementation does not implement
-this format, and baseline test evidence does not establish CID reference validation.
-Earlier vaults need no migration. Documentation checks do not verify runtime
+`@estoc/continuity` through the vault. Stage 1 below is implemented: the
+event store, the SQLite schema and every consumer of event identity in the
+vault, agent-core, daemon, CLI and app use five-field canonical envelopes,
+raw CIDs and `*EventCid` references, and equal envelopes deduplicate even
+within one local batch. The adapter and application changes of stages 2–5
+are **not implemented**. The version-3 seed wrapper, DID/key derivation and
+deterministic domain-ID transcripts stay unchanged. Earlier vaults need no
+migration and are refused. Documentation checks do not verify runtime
 behavior, and the package's own tests do not establish host conformance.
 
 | Cases | Status after this revision | Remaining work |
 | --- | --- | --- |
-| ES-1, ES-6, ES-9, ES-10, ES-19, ES-21 | `missing` | Five-field CID identity, verification boundaries, exact-CID filters, text-CID order and duplicate local-batch results |
-| ES-7, ES-11, ES-20, ES-22, ES-32 | `partial` | Adapt author preflight, frontiers, rollback/failure handling and portable inspection to CID events |
-| SQ-10–SQ-12, SQ-14, SQ-29, SQ-35, SQ-36 | `partial` | CID event/position keys, verified CID/envelope round trips, exact-byte deduplication and complete root preflight |
-| SQ-16 | `partial` | Add CID equality to scan/delta filter conjunctions without changing the fixed-cut frontier |
-| VE-37, VE-90, VE-95, VE-111, VE-152; CH-41 | `partial` | Replace UUID event references with validated typed CIDs in schemas, producers and consumers |
+| ES-1, ES-6, ES-9, ES-10, ES-19, ES-21 | `verified` | `event-store/test/suite/event-store-suite.ts` (the specification's example CID, CID/bytes mismatch refused before duplicate detection, `(at, cid)` text order against byte order, exact-CID filter conjunction, repeated drafts in one batch), `test/event.test.ts`, `test/sqlite/events.test.ts` (hashing at acceptance and `damaged()`, stored CIDs on ordinary reads) |
+| ES-7, ES-11, ES-20, ES-22, ES-32 | `verified` | `event-store-suite.ts` (fork on an unseen own-author CID, duplicates advance no frontier, rollback recreating a held envelope, hashing failure commits nothing), `test/sqlite/export-cases.ts` and `import-cases.ts` (portable inspection returns the CID-addressed set) |
+| SQ-10–SQ-12, SQ-14, SQ-29, SQ-35, SQ-36 | `verified` | `test/sqlite/events.test.ts` (`events.cid`, `event_positions.cid`, one row per CID for repeated return values), `export-cases.ts`, `import-cases.ts` (union by verified CID, both orders, root preflight), `open.test.ts` (schema 1 and vault 3 refused) |
+| SQ-16 | `verified` | `event-store-suite.ts` (`cid` conjoined with every filter; a CID outside a delta interval matches nothing while an empty delta still advances) |
+| VE-37, VE-90, VE-95, VE-111, VE-152; CH-41 | `verified` | `vault/test/schema.test.ts` (`*EventCid` fields validated as raw CIDs), `vault/test/fold/*.test.ts` (scenes under real envelope CIDs, missing references as unheld CIDs), `agent-core/test/*.test.ts` |
 | VE-52 | `partial` | Verify permanent erase coverage across distinct imported event CIDs without reviving the erased relation |
 | DD-34; VE-39 | `partial` | Shared proof verification and canonical received binding; retain local producer spelling constraints |
 | CH-67, CH-69–CH-79 | `missing` | CID-derived fact/evidence references, admitted confirmation, default first-contact candidates, ordered admission, revision checks, strict dispatch and app views |
@@ -65,7 +65,7 @@ relationship-ended state. Adopting endings needs a separate application-policy,
 event and UI revision; none of the stages below enables them implicitly.
 
 Implement in this order; each stage needs its own integration evidence before
-its status is promoted:
+its status is promoted. Stage 1 is complete; its evidence is the rows above.
 
 | Stage | Deliverable | Completion evidence |
 | --- | --- | --- |

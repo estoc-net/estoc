@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Events by CID.** Every `eventId` an agent-core record or option
+  carried — `Received`, `LiveInput`, `AfterReceipt`, the source and
+  rotation references of intents and notifications — is now `cid`, the
+  event's CID, and the vault it opens is version 4.
+
 - **A rotation's successor goes on the route new addresses go on**
   (behaviour change): the preferred arrangement's usable route where
   there is one, the predecessor's otherwise; it was always the

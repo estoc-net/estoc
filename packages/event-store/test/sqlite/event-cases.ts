@@ -77,7 +77,7 @@ export const eventCases: EventCase[] = [
       assertEqual(await collect(store.scan({ type: "a\u0000" })), [], "nor a longer prefix");
       assertEqual(await collect(store.scan({ author: other.author, type })), [other], "with the author");
       assertEqual((await collect((await store.changes({ type })).events)).length, 2, "the delta by the type");
-      const stored = db.driver.prepare("SELECT CAST(type AS BLOB) AS type FROM events ORDER BY event_id");
+      const stored = db.driver.prepare("SELECT CAST(type AS BLOB) AS type FROM events ORDER BY cid");
       try {
         for (const row of stored.all()) assertBytes(row["type"] as Uint8Array, new TextEncoder().encode(type), "the stored column");
       } finally {
@@ -107,13 +107,13 @@ export const eventCases: EventCase[] = [
         { type: "t", data: { n: 2 } },
       ]);
       const other = await foreign(h, { type: "f", data: {} });
-      const corrupt = db.driver.prepare("UPDATE events SET canonical = ? WHERE event_id = ?");
+      const corrupt = db.driver.prepare("UPDATE events SET canonical = ? WHERE cid = ?");
       try {
-        corrupt.run(new TextEncoder().encode("{}"), broken?.eventId as string);
+        corrupt.run(new TextEncoder().encode("{}"), broken?.cid as string);
       } finally {
         corrupt.finalize();
       }
-      assertEqual((await store.damaged()).map((d) => d.where), [`events/${broken?.eventId as string}`], "the damage is placed");
+      assertEqual((await store.damaged()).map((d) => d.where), [`events/${broken?.cid as string}`], "the damage is placed");
       await refusesEveryWrite(store, other, "once the damage is known");
       assertEqual(lastSeq(db.driver), 2, "last_seq");
       assertEqual(await collect(store.scan()), [sound], "the sound event still reads");

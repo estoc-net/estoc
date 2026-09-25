@@ -1,5 +1,5 @@
 /**
- * The version-3 object store as a map in memory: the reference for the interface's
+ * The version-4 object store as a map in memory: the reference for the interface's
  * semantics, and the store `objectStoreSuite` is first run against. An object is held in
  * internal extents of a chosen size — invisible at the portable layer, and how the suite
  * shows they are. Nothing persists, so the process-durable half of the store's promise

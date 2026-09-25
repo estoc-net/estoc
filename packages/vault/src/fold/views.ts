@@ -137,7 +137,7 @@ function channelView(fold: ViewInputs, channel: Channel, executions: readonly Ex
   for (const execution of inbound) {
     if (execution.kind !== "error" || execution.status.status !== "complete") continue;
     const source = execution.members.find((member) => member.witness.status === "complete")!.source;
-    errors.push({ execution, outbound: fold.outbound.inReplyTo(source.event.eventId) });
+    errors.push({ execution, outbound: fold.outbound.inReplyTo(source.event.cid) });
   }
   return {
     channel,

@@ -9,7 +9,7 @@ import type { VaultMetadata, WrappedSeed } from "../src/index.js";
 
 export const ANCHOR = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 
-export const META: VaultMetadata = { version: 3, anchor: ANCHOR };
+export const META: VaultMetadata = { version: 4, anchor: ANCHOR };
 
 export const WRAPPED: WrappedSeed = {
   version: 3,

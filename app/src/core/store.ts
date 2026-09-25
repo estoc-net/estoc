@@ -226,7 +226,7 @@ export async function downloadBackup(): Promise<void> {
 /** Merge a backup file into the open vault; the daemon goes on over the merged vault. */
 export async function mergeBackup(file: Uint8Array): Promise<Merged> {
   const merged = await running().mergeBackup(file);
-  log(`merged a backup: ${merged.added} new event${merged.added === 1 ? "" : "s"}, ${merged.objects} object${merged.objects === 1 ? "" : "s"}` + (merged.conflicts === 0 ? "" : `, ${merged.conflicts} kept as this vault has them`));
+  log(`merged a backup: ${merged.added} new event${merged.added === 1 ? "" : "s"}, ${merged.objects} object${merged.objects === 1 ? "" : "s"}`);
   return merged;
 }
 
@@ -347,8 +347,8 @@ export async function completeResponse(executionId: ExecutionId, effectType: str
   said(`reply ${effectType}`, await running().completeResponse(executionId, effectType));
 }
 
-export async function completeNotification(rotationEventId: string): Promise<void> {
-  said("rotation notification", await running().completeNotification(rotationEventId as EventReference<"did.rotationSelected">));
+export async function completeNotification(rotationEventCid: string): Promise<void> {
+  said("rotation notification", await running().completeNotification(rotationEventCid as EventReference<"did.rotationSelected">));
 }
 
 /** A fresh DID of ours toward `peerDid`, in place of `localDidId`, and the peer told. */

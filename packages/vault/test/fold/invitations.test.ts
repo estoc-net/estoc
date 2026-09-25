@@ -1,9 +1,9 @@
-import type { Event, EventId } from "@estoc/event-store";
+import type { Event, EventCid } from "@estoc/event-store";
 import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it } from "vitest";
 
 import { VaultEventSet, anonymousMessageId, didKeyName, foldVault, foldVaultChecked, inboundMessageId, type EventReference, type Keys, type MessageHash, type ReadObject, type VaultChecks, type VaultData, type VaultFold, type WireMessageId } from "../../src/index.js";
-import { ENDPOINT, MEDIATION, ROUTE, expectOrderFree, type Scene } from "./helpers.js";
+import { ENDPOINT, MEDIATION, ROUTE, expectOrderFree, type Scene, fakeEventCid } from "./helpers.js";
 import { blocked, consumed, invitation, noObjects, proof, receipt, resolved, rotation, vaults, type Local, type Peer } from "./scene.js";
 
 const fold = (scene: Scene, keys: Keys | null, readObject: ReadObject = noObjects) => foldVaultChecked(scene.set(), keys, readObject);
@@ -21,10 +21,10 @@ function picture(vault: VaultFold) {
       localDid: invitation.localDid,
       consumer: invitation.consumer,
       status: invitation.status,
-      consumptions: invitation.consumptions.map(({ event, status }) => [event.eventId, status]),
-      candidates: invitation.candidates.map(({ source, eligibility }) => [source.event.eventId, eligibility]),
+      consumptions: invitation.consumptions.map(({ event, status }) => [event.cid, status]),
+      candidates: invitation.candidates.map(({ source, eligibility }) => [source.event.cid, eligibility]),
     })),
-    consumptions: [...invitations.consumptions.values()].map(({ event, status }) => [event.eventId, status]),
+    consumptions: [...invitations.consumptions.values()].map(({ event, status }) => [event.cid, status]),
   };
 }
 
@@ -34,7 +34,7 @@ const vaultSet = (events: readonly Event[]) => VaultEventSet.of(events);
 
 const OTHER_HASH = "Amqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA" as MessageHash;
 
-const eligibilities = (vault: VaultFold, disclosure: { eventId: EventId }) => vault.invitations.invitations.get(disclosure.eventId)!.candidates.map(({ source, eligibility }) => [source.event.eventId, eligibility.status]);
+const eligibilities = (vault: VaultFold, disclosure: { cid: EventCid }) => vault.invitations.invitations.get(disclosure.cid)!.candidates.map(({ source, eligibility }) => [source.event.cid, eligibility.status]);
 
 describe("an invitation", () => {
   it("is available with its followers as candidates in first-receipt order, and consumed by the one the record names", async () => {
@@ -49,11 +49,11 @@ describe("an invitation", () => {
     const erased = follower(scene, a0, b2, oobId, 6);
     scene.add("message.erased", { messageId: erased.data.messageId, dropCids: [erased.data.bodyCid], because: "user" });
     let vault = await fold(scene, keys);
-    let inv = vault.invitations.invitations.get(disclosure.eventId)!;
+    let inv = vault.invitations.invitations.get(disclosure.cid)!;
     expect(inv).toMatchObject({ oobId, didId: a0.didId, localDid: a0.did, consumer: null, status: { status: "available" }, consumptions: [] });
     expect(eligibilities(vault, disclosure)).toEqual([
-      [first.eventId, "eligible"],
-      [second.eventId, "eligible"],
+      [first.cid, "eligible"],
+      [second.cid, "eligible"],
     ]);
     expect(vault.invitations.under(oobId)).toEqual([inv]);
     expect(vault.invitations.under("nobody's")).toEqual([]);
@@ -62,12 +62,12 @@ describe("an invitation", () => {
     const record = consumed(scene, disclosure, first);
     const again = consumed(scene, disclosure, follower(scene, a0, b0, oobId, 7));
     vault = await fold(scene, keys);
-    inv = vault.invitations.invitations.get(disclosure.eventId)!;
+    inv = vault.invitations.invitations.get(disclosure.cid)!;
     expect(inv.status).toEqual({ status: "consumed", consumer: b0.did });
     expect(inv.consumer).toBe(b0.did);
-    expect(inv.consumptions.map(({ event, status }) => [event.eventId, status])).toEqual([
-      [record.eventId, { status: "complete", consumer: b0.did }],
-      [again.eventId, { status: "complete", consumer: b0.did }],
+    expect(inv.consumptions.map(({ event, status }) => [event.cid, status])).toEqual([
+      [record.cid, { status: "complete", consumer: b0.did }],
+      [again.cid, { status: "complete", consumer: b0.did }],
     ]);
     expect(eligibilities(vault, disclosure).map(([, status]) => status)).toEqual(["eligible", "eligible", "eligible"]);
     expectSameOverEveryOrder(scene, vault.checks);
@@ -86,19 +86,19 @@ describe("an invitation", () => {
     receipt(scene, { local: a0, peer: b1, resolution: resolved(scene, a0.didId, b1), ordinal: 3, fromPrior: await proof(peerKeys, b0, b1) });
     scene.add("message.erased", { messageId: source.data.messageId, dropCids: [source.data.bodyCid], because: "user" });
     const vault = await fold(scene, keys);
-    const inv = vault.invitations.invitations.get(disclosure.eventId)!;
+    const inv = vault.invitations.invitations.get(disclosure.cid)!;
     expect(inv.status).toEqual({ status: "conflict", because: "the complete records name different consumers" });
     expect(inv.consumer).toBeNull();
     expect(inv.consumptions.map(({ status }) => status)).toEqual([
       { status: "complete", consumer: b0.did },
       { status: "complete", consumer: b1.did },
     ]);
-    expect(eligibilities(vault, disclosure)).toEqual([[other.eventId, "refused"]]);
+    expect(eligibilities(vault, disclosure)).toEqual([[other.cid, "refused"]]);
     expectSameOverEveryOrder(scene, vault.checks);
 
     const events = scene.events.filter((event) => event !== late);
     const settled = foldVault(vaultSet(events), vault.checks);
-    const one = settled.invitations.invitations.get(disclosure.eventId)!;
+    const one = settled.invitations.invitations.get(disclosure.cid)!;
     expect(one.status).toEqual({ status: "consumed", consumer: b0.did });
     expect(one.consumer).toBe(b0.did);
   });
@@ -110,15 +110,15 @@ describe("an invitation", () => {
     const candidate = follower(scene, a0, b0, retired.data.oobId!, 1);
     const unknown = invitation(scene, { didId: "019b7000-0000-7000-8000-00000000ffff" as Local["didId"], did: a1.did, longFormDid: a1.longFormDid });
     let vault = await fold(scene, keys);
-    expect(vault.invitations.invitations.get(retired.eventId)!.status).toEqual({ status: "unavailable", because: "the disclosed DID is retired" });
-    expect(vault.invitations.invitations.get(retired.eventId)!.candidates.map(({ eligibility }) => eligibility)).toEqual([{ status: "refused", because: "the disclosed DID is retired" }]);
-    expect(eligibilities(vault, retired)).toEqual([[candidate.eventId, "refused"]]);
-    expect(vault.invitations.invitations.get(unknown.eventId)).toMatchObject({ localDid: null, status: { status: "unavailable", because: "the disclosed DID has no consistent creation here" } });
+    expect(vault.invitations.invitations.get(retired.cid)!.status).toEqual({ status: "unavailable", because: "the disclosed DID is retired" });
+    expect(vault.invitations.invitations.get(retired.cid)!.candidates.map(({ eligibility }) => eligibility)).toEqual([{ status: "refused", because: "the disclosed DID is retired" }]);
+    expect(eligibilities(vault, retired)).toEqual([[candidate.cid, "refused"]]);
+    expect(vault.invitations.invitations.get(unknown.cid)).toMatchObject({ localDid: null, status: { status: "unavailable", because: "the disclosed DID has no consistent creation here" } });
     expectSameOverEveryOrder(scene, vault.checks);
 
-    scene.add("invitation.consumed", { disclosureEventId: retired.eventId as EventReference<"did.disclosed">, sourceEventId: uuidv7() as EventReference<"message.in"> });
+    scene.add("invitation.consumed", { disclosureEventCid: retired.cid as EventReference<"did.disclosed">, sourceEventCid: fakeEventCid() as EventReference<"message.in"> });
     vault = await fold(scene, keys);
-    expect(vault.invitations.invitations.get(retired.eventId)!.status).toEqual({ status: "pending", because: "the source it names is not here" });
+    expect(vault.invitations.invitations.get(retired.cid)!.status).toEqual({ status: "pending", because: "the source it names is not here" });
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
@@ -128,7 +128,7 @@ describe("an invitation", () => {
     const oobId = disclosure.data.oobId!;
     const source = follower(scene, a0, b0, oobId, 1);
     const vault = await fold(scene, keys);
-    const over = (events: readonly Event[]) => foldVault(vaultSet(events), vault.checks).invitations.invitations.get(disclosure.eventId)!;
+    const over = (events: readonly Event[]) => foldVault(vaultSet(events), vault.checks).invitations.invitations.get(disclosure.cid)!;
     const ended = (because: string) => ({ status: { status: "unavailable", because }, candidates: [{ eligibility: { status: "refused", because } }] });
 
     const retired = scene.add("route.retired", { routeId: ROUTE, because: "moved" });
@@ -158,11 +158,11 @@ describe("an invitation", () => {
     const candidate = follower(scene, a0, b1, elsewhere.data.oobId!, 2);
     const vault = await fold(scene, keys);
     for (const disclosure of [one, two, shadowed, elsewhere]) {
-      expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "conflict", because: "the invitation's ID is disclosed more than once" });
+      expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "conflict", because: "the invitation's ID is disclosed more than once" });
     }
-    expect(vault.invitations.invitations.get(one.eventId)!.consumer).toBe(b0.did);
-    expect(vault.invitations.invitations.has(shadow.eventId)).toBe(false);
-    expect(eligibilities(vault, elsewhere)).toEqual([[candidate.eventId, "eligible"]]);
+    expect(vault.invitations.invitations.get(one.cid)!.consumer).toBe(b0.did);
+    expect(vault.invitations.invitations.has(shadow.cid)).toBe(false);
+    expect(eligibilities(vault, elsewhere)).toEqual([[candidate.cid, "eligible"]]);
     expect(vault.invitations.under(twice).map((invitation) => invitation.disclosure)).toEqual([one, two]);
     expect(vault.invitations.under(shadowed.data.oobId!).map((invitation) => invitation.disclosure)).toEqual([shadowed]);
     expectSameOverEveryOrder(scene, vault.checks);
@@ -179,7 +179,7 @@ describe("a consumption record", () => {
     const good = follower(scene, a0, b0, oobId, 1);
     const wire = uuidv7() as WireMessageId;
     const root = resolved(scene, a0.didId, b1);
-    const anonymous = receipt(scene, { local: a0, peer: b1, resolution: root, ordinal: 2, wire, overrides: { pthid: oobId, messageId: anonymousMessageId(didKeyName(a0.didId, "key-agreement"), wire), peerResolutionEventId: null, did: null, presentedDid: null } });
+    const anonymous = receipt(scene, { local: a0, peer: b1, resolution: root, ordinal: 2, wire, overrides: { pthid: oobId, messageId: anonymousMessageId(didKeyName(a0.didId, "key-agreement"), wire), peerResolutionEventCid: null, did: null, presentedDid: null } });
     const carrying = follower(scene, a0, b1, oobId, 3, { fromPrior: await proof(keys, a1, a0) });
     const elsewhere = follower(scene, a1, b1, oobId, 4);
     const unrelated = follower(scene, a0, b1, uuidv7(), 5);
@@ -188,10 +188,10 @@ describe("a consumption record", () => {
 
     const records = {
       complete: consumed(scene, disclosure, good),
-      noDisclosure: scene.add("invitation.consumed", { disclosureEventId: uuidv7() as EventReference<"did.disclosed">, sourceEventId: good.eventId as EventReference<"message.in"> }),
-      noSource: scene.add("invitation.consumed", { disclosureEventId: disclosure.eventId as EventReference<"did.disclosed">, sourceEventId: uuidv7() as EventReference<"message.in"> }),
-      notADisclosure: scene.add("invitation.consumed", { disclosureEventId: good.eventId as never, sourceEventId: good.eventId as EventReference<"message.in"> }),
-      notASource: scene.add("invitation.consumed", { disclosureEventId: disclosure.eventId as EventReference<"did.disclosed">, sourceEventId: disclosure.eventId as never }),
+      noDisclosure: scene.add("invitation.consumed", { disclosureEventCid: fakeEventCid() as EventReference<"did.disclosed">, sourceEventCid: good.cid as EventReference<"message.in"> }),
+      noSource: scene.add("invitation.consumed", { disclosureEventCid: disclosure.cid as EventReference<"did.disclosed">, sourceEventCid: fakeEventCid() as EventReference<"message.in"> }),
+      notADisclosure: scene.add("invitation.consumed", { disclosureEventCid: good.cid as never, sourceEventCid: good.cid as EventReference<"message.in"> }),
+      notASource: scene.add("invitation.consumed", { disclosureEventCid: disclosure.cid as EventReference<"did.disclosed">, sourceEventCid: disclosure.cid as never }),
       manyUse: consumed(scene, many, good),
       direct: consumed(scene, direct, good),
       anonymous: consumed(scene, disclosure, anonymous),
@@ -202,7 +202,7 @@ describe("a consumption record", () => {
       undocumented: consumed(scene, disclosure, undocumented),
     };
     const vault = await fold(scene, keys);
-    const status = (record: { eventId: EventId }) => vault.invitations.consumptions.get(record.eventId)!.status;
+    const status = (record: { cid: EventCid }) => vault.invitations.consumptions.get(record.cid)!.status;
     expect(status(records.complete)).toEqual({ status: "complete", consumer: b0.did });
     expect(status(records.noDisclosure)).toEqual({ status: "pending", because: "the disclosure it names is not here" });
     expect(status(records.noSource)).toEqual({ status: "pending", because: "the source it names is not here" });
@@ -216,18 +216,18 @@ describe("a consumption record", () => {
     expect(status(records.unrelated)).toEqual({ status: "invalid", because: "the source's pthid is not the invitation's ID" });
     expect(status(records.contradicted)).toMatchObject({ status: "conflict" });
     expect(status(records.undocumented)).toEqual({ status: "pending", because: "the source is no complete witness: the resolution's document is not here" });
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "conflict", because: (status(records.contradicted) as { because: string }).because });
+    expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "conflict", because: (status(records.contradicted) as { because: string }).because });
     expect(eligibilities(vault, disclosure)).toEqual([
-      [good.eventId, "eligible"],
-      [anonymous.eventId, "invalid"],
-      [contradicted.eventId, "invalid"],
-      [undocumented.eventId, "deferred"],
+      [good.cid, "eligible"],
+      [anonymous.cid, "invalid"],
+      [contradicted.cid, "invalid"],
+      [undocumented.cid, "deferred"],
     ]);
     expectSameOverEveryOrder(scene, vault.checks);
 
     const events = scene.events.filter((event) => event !== records.contradicted);
     const settled = foldVault(vaultSet(events), vault.checks);
-    expect(settled.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "consumed", consumer: b0.did });
+    expect(settled.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "consumed", consumer: b0.did });
   });
 
   it("leaves the invitation pending while it waits, and lets no candidate be selected past it", async () => {
@@ -235,16 +235,16 @@ describe("a consumption record", () => {
     const disclosure = invitation(scene, a0);
     const oobId = disclosure.data.oobId!;
     follower(scene, a0, b1, oobId, 1);
-    const waiting = scene.add("invitation.consumed", { disclosureEventId: disclosure.eventId as EventReference<"did.disclosed">, sourceEventId: uuidv7() as EventReference<"message.in"> });
+    const waiting = scene.add("invitation.consumed", { disclosureEventCid: disclosure.cid as EventReference<"did.disclosed">, sourceEventCid: fakeEventCid() as EventReference<"message.in"> });
     const vault = await fold(scene, keys);
-    const inv = vault.invitations.invitations.get(disclosure.eventId)!;
+    const inv = vault.invitations.invitations.get(disclosure.cid)!;
     expect(inv.status).toEqual({ status: "pending", because: "the source it names is not here" });
     expect(inv.candidates.map(({ eligibility }) => eligibility)).toEqual([{ status: "eligible" }]);
 
     const arrived = follower(scene, a0, b0, oobId, 2);
-    const events = scene.events.map((event) => (event === waiting ? { ...waiting, data: { ...waiting.data, sourceEventId: arrived.eventId } } : event));
+    const events = scene.events.map((event) => (event === waiting ? { ...waiting, data: { ...waiting.data, sourceEventCid: arrived.cid } } : event));
     const settled = await foldVaultChecked(vaultSet(events), keys, noObjects);
-    expect(settled.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "consumed", consumer: b0.did });
+    expect(settled.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "consumed", consumer: b0.did });
     expectSameOverEveryOrder(scene, vault.checks);
   });
 });
@@ -263,21 +263,21 @@ describe("the candidates", () => {
     const superseded = follower(scene, a0, b1, oobId, 50);
     const eligible = follower(scene, a0, b3, oobId, 60);
     let vault = await fold(scene, keys);
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "available" });
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.candidates.map(({ eligibility }) => eligibility)).toEqual([
+    expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "available" });
+    expect(vault.invitations.invitations.get(disclosure.cid)!.candidates.map(({ eligibility }) => eligibility)).toEqual([
       { status: "refused", because: "the channel is denied" },
       { status: "refused", because: "the peer has replaced its DID" },
       { status: "refused", because: "the channel is denied" },
       { status: "refused", because: "the peer has replaced its DID" },
       { status: "eligible" },
     ]);
-    expect(eligibilities(vault, disclosure).map(([id]) => id)).toEqual([deniedEarly.eventId, supersededEarly.eventId, denied.eventId, superseded.eventId, eligible.eventId]);
+    expect(eligibilities(vault, disclosure).map(([id]) => id)).toEqual([deniedEarly.cid, supersededEarly.cid, denied.cid, superseded.cid, eligible.cid]);
     expectSameOverEveryOrder(scene, vault.checks);
 
     const unknown = undocumented(b2, 55);
     vault = await fold(scene, keys);
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "pending", because: "the resolution's document is not here" });
-    expect(eligibilities(vault, disclosure)[4]).toEqual([unknown.eventId, "deferred"]);
+    expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "pending", because: "the resolution's document is not here" });
+    expect(eligibilities(vault, disclosure)[4]).toEqual([unknown.cid, "deferred"]);
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
@@ -294,29 +294,29 @@ describe("the candidates", () => {
     const independent = follower(scene, a0, b1, oobId, 40);
     const beside = uuidv7();
     const besideSiblings = follower(scene, a0, b3, oobId, 50, { wire: beside });
-    receipt(scene, { local: a0, peer: b3, resolution: resolved(scene, a0.didId, b3), ordinal: 51, wire: beside, overrides: { intentHash: OTHER_HASH, pthid: uuidv7(), peerResolutionEventId: uuidv7() as VaultData["message.in"]["peerResolutionEventId"] } });
+    receipt(scene, { local: a0, peer: b3, resolution: resolved(scene, a0.didId, b3), ordinal: 51, wire: beside, overrides: { intentHash: OTHER_HASH, pthid: uuidv7(), peerResolutionEventCid: fakeEventCid() as VaultData["message.in"]["peerResolutionEventCid"] } });
     receipt(scene, { local: a0, peer: b3, resolution: resolved(scene, a0.didId, b3), ordinal: 52, wire: beside, fromPrior: "not a JWT", overrides: { intentHash: OTHER_HASH, pthid: oobId } });
     const vault = await fold(scene, keys);
-    expect(vault.inbound.ofSource(agreed.eventId)!.status.status).toBe("conflict");
-    expect(vault.inbound.ofSource(followed.eventId)!.members.map(({ positive, witness }) => [positive, witness.status])).toEqual([
+    expect(vault.inbound.ofSource(agreed.cid)!.status.status).toBe("conflict");
+    expect(vault.inbound.ofSource(followed.cid)!.members.map(({ positive, witness }) => [positive, witness.status])).toEqual([
       [true, "complete"],
       [true, "complete"],
     ]);
-    expect(vault.inbound.ofSource(followed.eventId)!.status.status).toBe("conflict");
-    expect(vault.inbound.ofSource(besideSiblings.eventId)!.status.status).toBe("complete");
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "available" });
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.candidates.map(({ eligibility }) => eligibility)).toEqual([
+    expect(vault.inbound.ofSource(followed.cid)!.status.status).toBe("conflict");
+    expect(vault.inbound.ofSource(besideSiblings.cid)!.status.status).toBe("complete");
+    expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "available" });
+    expect(vault.invitations.invitations.get(disclosure.cid)!.candidates.map(({ eligibility }) => eligibility)).toEqual([
       { status: "invalid", because: "the input is in an intent conflict: 2 intents are authenticated for one input" },
       { status: "invalid", because: "the input is in an intent conflict: 2 intents are authenticated for one input" },
       { status: "invalid", because: "the input is in an intent conflict: 2 intents are authenticated for one input" },
       { status: "eligible" },
       { status: "eligible" },
     ]);
-    expect(eligibilities(vault, disclosure).map(([id]) => id)).toEqual([agreed.eventId, disagreeing.eventId, followed.eventId, independent.eventId, besideSiblings.eventId]);
+    expect(eligibilities(vault, disclosure).map(([id]) => id)).toEqual([agreed.cid, disagreeing.cid, followed.cid, independent.cid, besideSiblings.cid]);
     expectSameOverEveryOrder(scene, vault.checks);
 
     const record = consumed(scene, disclosure, agreed);
-    const recorded = foldVault(vaultSet(scene.events), vault.checks).invitations.invitations.get(disclosure.eventId)!;
+    const recorded = foldVault(vaultSet(scene.events), vault.checks).invitations.invitations.get(disclosure.cid)!;
     expect(recorded.consumptions.map(({ event, status }) => [event, status])).toEqual([[record, { status: "complete", consumer: b0.did }]]);
     expect(recorded.status).toEqual({ status: "consumed", consumer: b0.did });
   });
@@ -335,16 +335,16 @@ describe("the candidates", () => {
     const outside = follower(scene, a1, b1, other.data.oobId!, 5);
     const vault = await fold(scene, keys);
     expect(vault.continuity.conflicts.map(({ kind }) => kind).sort()).toEqual(["competing-local-successors", "competing-peer-successors"]);
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "available" });
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.candidates).toMatchObject([
+    expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "available" });
+    expect(vault.invitations.invitations.get(disclosure.cid)!.candidates).toMatchObject([
       { source: { event: localFork }, eligibility: { status: "refused", because: "the channel is in a continuity conflict" } },
       { source: { event: peerFork }, eligibility: { status: "refused", because: "the channel is in a continuity conflict" } },
     ]);
-    expect(eligibilities(vault, other)).toEqual([[outside.eventId, "eligible"]]);
+    expect(eligibilities(vault, other)).toEqual([[outside.cid, "eligible"]]);
     expectSameOverEveryOrder(scene, vault.checks);
 
     const record = consumed(scene, disclosure, localFork);
-    const recorded = foldVault(vaultSet(scene.events), vault.checks).invitations.invitations.get(disclosure.eventId)!;
+    const recorded = foldVault(vaultSet(scene.events), vault.checks).invitations.invitations.get(disclosure.cid)!;
     expect(recorded.consumptions.map(({ event, status }) => [event, status])).toEqual([[record, { status: "complete", consumer: b0.did }]]);
     expect(recorded.status).toEqual({ status: "consumed", consumer: b0.did });
   });
@@ -355,12 +355,12 @@ describe("the candidates", () => {
     const oobId = disclosure.data.oobId!;
     follower(scene, a0, b0, oobId, 1);
     const unseeded = await fold(scene, null);
-    expect(unseeded.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "pending", because: "the local entity's keys are not yet checked against the seed" });
+    expect(unseeded.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "pending", because: "the local entity's keys are not yet checked against the seed" });
     expect(eligibilities(unseeded, disclosure).map(([, status]) => status)).toEqual(["deferred"]);
 
     follower(scene, a0, b1, oobId, 1);
     const vault = await fold(scene, keys);
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "conflict", because: "a candidate receipt is caught in a receipt-integrity conflict" });
+    expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "conflict", because: "a candidate receipt is caught in a receipt-integrity conflict" });
     expect(eligibilities(vault, disclosure).map(([, status]) => status)).toEqual(["integrity-conflict", "integrity-conflict"]);
     expectSameOverEveryOrder(scene, vault.checks);
   });

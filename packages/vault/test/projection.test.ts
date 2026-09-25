@@ -316,8 +316,8 @@ describe("wirePlaintext", () => {
       executionId: null,
       effectType: null,
       effectKey: null,
-      sourceEventId: null,
-      rotationEventId: null,
+      sourceEventCid: null,
+      rotationEventCid: null,
     };
     const fromEvent = intentOfOutbound(out, stored.document);
     expect(fromEvent).toEqual(intent);

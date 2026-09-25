@@ -22,7 +22,10 @@ import {
   SqliteError,
   SqliteVault,
   canonicalEventBytes,
+  compareEvents,
   createRuntime,
+  envelopeOf,
+  eventCidOf,
   exportVault,
   importVault,
   openInspector,
@@ -30,6 +33,7 @@ import {
   heldRootsOf,
   restoreVault,
   type AuthorId,
+  type EventEnvelope,
   type Cid,
   type Draft,
   type Event,
@@ -60,7 +64,10 @@ const BIG = bytesOf(2 * MIB + 7, 11);
 const BIG_CID = cidOf(BIG);
 const OTHER_ANCHOR = "did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2";
 
-const ids = (events: Event[]): string[] => events.map((e) => e.eventId).sort();
+const ids = (events: Event[]): string[] => events.map((e) => e.cid).sort();
+
+/** The event an envelope is: its five fields under the CID they hash to. */
+const eventOf = (envelope: EventEnvelope): Event => ({ ...envelopeOf(envelope), cid: eventCidOf(envelope) });
 
 /** Exports `vault` to a fresh target and opens the snapshot read-only. */
 async function snapshotOf(h: ImportHarness, vault: VaultRuntime, heldRoots: HeldRoots = rootsOf): Promise<{ target: string; snapshot: PortableDatabase }> {
@@ -97,7 +104,7 @@ const writes = (sql: string): boolean => /^\s*(INSERT|UPDATE|DELETE|CREATE|BEGIN
 
 const message = (subject: string, intent: string, roots: Cid[]): Draft => ({ type: "message", roots, data: { subject, intent } });
 const pack = (subject: string, roots: Cid[]): Draft => ({ type: "package", roots, data: { subject } });
-const release = (of: Event): Draft => ({ type: "release", roots: [], data: { of: of.eventId } });
+const release = (of: Event): Draft => ({ type: "release", roots: [], data: { of: of.cid } });
 
 /**
  * A fold with a rule an import can cross: every event retains every
@@ -117,12 +124,12 @@ const contestable: RetainedRoots = async (vault) => {
   const contested = new Set([...intents].filter(([, seen]) => seen.size > 1).map(([subject]) => subject));
   const released = new Set(events.filter((event) => event.type === "release").map((event) => String(event.data["of"])));
   return events
-    .filter((event) => !(event.type === "package" && released.has(event.eventId) && !contested.has(String(event.data["subject"]))))
-    .flatMap((event) => event.roots.map((root) => ({ eventId: event.eventId, root })));
+    .filter((event) => !(event.type === "package" && released.has(event.cid) && !contested.has(String(event.data["subject"]))))
+    .flatMap((event) => event.roots.map((root) => ({ cid: event.cid, root })));
 };
 const contestableHeld = heldRootsOf(contestable);
 
-const witnessed = (of: Event, witness: Cid): Draft => ({ type: "release", roots: [witness], data: { of: of.eventId, witness } });
+const witnessed = (of: Event, witness: Cid): Draft => ({ type: "release", roots: [witness], data: { of: of.cid, witness } });
 
 /**
  * A fold whose rule reads an object: a `release` releases the roots of
@@ -137,7 +144,7 @@ const evidencedBy =
     for (const event of events) {
       if (event.type === "release" && (await readsBack(vault.objects, event.data["witness"] as Cid))) released.add(String(event.data["of"]));
     }
-    return events.filter((event) => !(event.type === "package" && released.has(event.eventId))).flatMap((event) => event.roots.map((root) => ({ eventId: event.eventId, root })));
+    return events.filter((event) => !(event.type === "package" && released.has(event.cid))).flatMap((event) => event.roots.map((root) => ({ cid: event.cid, root })));
   };
 const evidenced = evidencedBy(async (objects, witness) => (await objects.read(witness, MIB)) !== null);
 const evidencedHeld = heldRootsOf(evidenced);
@@ -239,16 +246,16 @@ export const importCases: ImportCase[] = [
       const { driver } = runtime;
       try {
         const scanned = await all(copy.vault.events.scan());
-        const canonical = [...events, later as Event].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.eventId < b.eventId ? -1 : 1));
+        const canonical = [...events, later as Event].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.cid < b.cid ? -1 : 1));
         assertEqual(
-          scanned.map((e) => [e.eventId, e.author]),
-          canonical.map((e) => [e.eventId, e.author]),
+          scanned.map((e) => [e.cid, e.author]),
+          canonical.map((e) => [e.cid, e.author]),
           "every event, under its historical author"
         );
-        scanned.forEach((e, i) => assertBytes(canonicalEventBytes(e), canonicalEventBytes(canonical[i] as Event), `the canonical bytes of ${e.eventId}`));
+        scanned.forEach((e, i) => assertBytes(canonicalEventBytes(e), canonicalEventBytes(canonical[i] as Event), `the canonical bytes of ${e.cid}`));
         assertEqual(
-          rows(driver, "SELECT accepted_seq, event_id FROM event_positions ORDER BY accepted_seq"),
-          canonical.map((e, i) => ({ accepted_seq: i + 1, event_id: e.eventId })),
+          rows(driver, "SELECT accepted_seq, cid FROM event_positions ORDER BY accepted_seq"),
+          canonical.map((e, i) => ({ accepted_seq: i + 1, cid: e.cid })),
           "positions in canonical order"
         );
         assertEqual(rows(driver, "SELECT replica_id, store_generation, last_seq FROM store_state"), [{ replica_id: runtime.author, store_generation: runtime.generation, last_seq: 4 }], "the control row");
@@ -262,8 +269,8 @@ export const importCases: ImportCase[] = [
         const { token } = await copy.vault.events.changes();
         const [mine] = await copy.vault.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID], { i: 4 })]);
         assertEqual(mine?.author, runtime.author, "a commit is authored as the new replica");
-        assertEqual((await all((await copy.vault.events.changes(undefined, token)).events)).map((e) => e.eventId), [mine?.eventId], "the frontier continues from the restored positions");
-        assertEqual(await copy.ingest([later]), { added: 0, duplicates: 1, conflicts: [], rejected: [] }, "the historical author's event ingests as a duplicate, not a fork");
+        assertEqual((await all((await copy.vault.events.changes(undefined, token)).events)).map((e) => e.cid), [mine?.cid], "the frontier continues from the restored positions");
+        assertEqual(await copy.ingest([later]), { added: 0, duplicates: 1, rejected: [] }, "the historical author's event ingests as a duplicate, not a fork");
         // the values round-trip: the copy exports what the snapshot held, plus its own commit
         const again = await snapshotOf(h, copy, heldRoots);
         try {
@@ -364,7 +371,7 @@ export const importCases: ImportCase[] = [
     },
   },
   {
-    name: "an import adds the events the target lacks and the objects the union holds that it lacks, reports duplicates and conflicts with the target's value kept, and keeps the target's identity, wrapper, positions and local state; the same snapshot again adds nothing and, with nothing to repair, writes nothing; a vault in memory is a target too",
+    name: "an import adds the events the target lacks and the objects the union holds that it lacks, reports duplicates, and keeps the target's identity, wrapper, positions and local state; the same snapshot again adds nothing and, with nothing to repair, writes nothing; a vault in memory is a target too",
     run: async (h) => {
       const c = clock();
       const a = await make(h, h.fresh(), c.now);
@@ -385,42 +392,41 @@ export const importCases: ImportCase[] = [
       await b.keystore.rewrap(REWRAPPED);
       await b.local.options.set("theme", "dark");
       await b.local.cache.put("thumbs", "x", HELLO);
-      // b holds e1's ID with other bytes, and no root for it
-      const altered = { ...e1, roots: [], data: { ...e1.data, altered: true } };
-      assertEqual(await b.ingest([altered]), { added: 1, duplicates: 0, conflicts: [], rejected: [] }, "b's own value under e1's ID");
+      // b holds another event of e1's author: e1's content changed, no root, its own CID
+      const altered = eventOf({ ...e1, roots: [], data: { ...e1.data, altered: true } });
+      assertEqual(await b.ingest([altered]), { added: 1, duplicates: 0, rejected: [] }, "b's own event, beside which e1 is another");
       const { token } = await b.vault.events.changes();
       const { author, generation } = b;
       const before = tables(bDriver);
       const outcome = await importVault(b, snapshot, { retainedRoots: retainedOf });
-      assertEqual(
-        { ...outcome, conflicts: outcome.conflicts.map((conflict) => [conflict.eventId, conflict.kept.data, conflict.rejected.data]) },
-        { added: 1, duplicates: 0, conflicts: [[e1.eventId, { altered: true, i: 0, n: 1 }, e1.data]], objects: 1, repaired: 0 },
-        "what the import reports: the kept value in canonical form"
-      );
+      assertEqual(outcome, { added: 2, duplicates: 0, objects: 2, repaired: 0 }, "what the import reports: both source events, neither held, and the objects they hold");
       assertEqual([b.author, b.generation], [author, generation], "the identity stays");
       assertEqual(await b.keystore.read(), REWRAPPED, "the wrapper stays");
       assertEqual(await b.local.options.get("theme"), "dark", "the options stay");
       assertEqual(await b.local.cache.get("thumbs", "x"), undefined, "the cache is dropped with the accepted state it was built from");
-      assertEqual(ids(await all(b.vault.events.scan())), ids([f1 as Event, altered as Event, e2]), "the union");
-      assertEqual((await all(b.vault.events.scan({ author: e1.author }))).map((e) => e.data), [{ altered: true, i: 0, n: 1 }, e2.data], "the target's value kept under the contested ID");
-      assertEqual(rows(bDriver, "SELECT accepted_seq, event_id FROM event_positions ORDER BY accepted_seq"), [{ accepted_seq: 1, event_id: f1?.eventId }, { accepted_seq: 2, event_id: e1.eventId }, { accepted_seq: 3, event_id: e2.eventId }], "the new event takes the next position");
-      assertEqual((await all((await b.vault.events.changes(undefined, token)).events)).map((e) => e.eventId), [e2.eventId], "the delta since the token is the new event");
-      assertEqual(await all(b.vault.objects.list()), [WORLD_CID, BIG_CID].sort(), "the big object came along; hello, held by no event of the union, did not");
+      assertEqual(ids(await all(b.vault.events.scan())), ids([f1 as Event, altered, e1, e2]), "the union: every distinct envelope, the two with equal fields but other bytes both");
+      assertEqual(
+        (await all(b.vault.events.scan({ author: e1.author }))).map((e) => e.data).sort((x, y) => (JSON.stringify(x) < JSON.stringify(y) ? -1 : 1)),
+        [{ altered: true, i: 0, n: 1 }, e1.data, e2.data].sort((x, y) => (JSON.stringify(x) < JSON.stringify(y) ? -1 : 1)),
+        "the target's own event and both of the source's, under their historical author"
+      );
+      const arrived = [e1, e2].sort(compareEvents);
+      assertEqual(rows(bDriver, "SELECT accepted_seq, cid FROM event_positions ORDER BY accepted_seq"), [{ accepted_seq: 1, cid: f1?.cid }, { accepted_seq: 2, cid: altered.cid }, ...arrived.map((e, i) => ({ accepted_seq: i + 3, cid: e.cid }))], "the new events take the next positions");
+      assertEqual((await all((await b.vault.events.changes(undefined, token)).events)).map((e) => e.cid), arrived.map((e) => e.cid), "the delta since the token is the new events");
+      assertEqual(await all(b.vault.objects.list()), [WORLD_CID, HELLO_CID, BIG_CID].sort(), "both objects came along: e1 holds hello, which b's own event does not");
       assertBytes((await b.vault.objects.read(BIG_CID, BIG.length)) as Uint8Array, BIG, "the big object's bytes");
-      assertEqual((await b.vault.events.conflicting()).map((conflict) => conflict.eventId), [e1.eventId], "the conflict is on record");
-      assertEqual(tables(bDriver), { events: before["events"]! + 1, event_positions: before["event_positions"]! + 1, objects: before["objects"]! + 1, object_chunks: before["object_chunks"]! + 3 }, "the rows one import adds");
-      // again: nothing new; the conflict is reported again and stays one record; the cache is not dropped
+      assertEqual(tables(bDriver), { events: before["events"]! + 2, event_positions: before["event_positions"]! + 2, objects: before["objects"]! + 2, object_chunks: before["object_chunks"]! + 4 }, "the rows one import adds");
+      // again: nothing new; the cache is not dropped
       await b.local.cache.put("thumbs", "y", HELLO);
       const repeated = await importVault(b, snapshot, { retainedRoots: retainedOf });
-      assertEqual({ ...repeated, conflicts: repeated.conflicts.length }, { added: 0, duplicates: 1, conflicts: 1, objects: 0, repaired: 0 }, "the repeat");
-      assertEqual((await b.vault.events.conflicting()).length, 1, "one record still");
+      assertEqual(repeated, { added: 0, duplicates: 2, objects: 0, repaired: 0 }, "the repeat");
       assertBytes((await b.local.cache.get("thumbs", "y")) as Uint8Array, HELLO, "the cache stays when nothing landed");
-      assertEqual(tables(bDriver), { events: before["events"]! + 1, event_positions: before["event_positions"]! + 1, objects: before["objects"]! + 1, object_chunks: before["object_chunks"]! + 3 }, "no row added by the repeat");
+      assertEqual(tables(bDriver), { events: before["events"]! + 2, event_positions: before["event_positions"]! + 2, objects: before["objects"]! + 2, object_chunks: before["object_chunks"]! + 4 }, "no row added by the repeat");
       snapshot.close();
-      // a snapshot with nothing to add and no conflict: no statement writes
+      // a snapshot with nothing to add: no statement writes
       const own = await snapshotOf(h, b);
       const mark = seen.length;
-      assertEqual(await importVault(b, own.snapshot, { retainedRoots: retainedOf }), { added: 0, duplicates: 3, conflicts: [], objects: 0, repaired: 0 }, "the target's own snapshot");
+      assertEqual(await importVault(b, own.snapshot, { retainedRoots: retainedOf }), { added: 0, duplicates: 4, objects: 0, repaired: 0 }, "the target's own snapshot");
       const written = seen.slice(mark).filter(writes);
       assertEqual(written, [], "no statement wrote");
       own.snapshot.close();
@@ -431,10 +437,10 @@ export const importCases: ImportCase[] = [
       await bAgain.close();
       const memory = new MemoryVault({ metadata: META, wrapped: WRAPPED, now: c.now });
       await memory.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID], { in: "memory" })]);
-      assertEqual(await importVault(memory, fromB.snapshot, { retainedRoots: retainedOf }), { added: 3, duplicates: 0, conflicts: [], objects: 2, repaired: 0 }, "the import into memory");
-      assertEqual((await all(memory.vault.events.scan())).length, 4, "the union in memory");
+      assertEqual(await importVault(memory, fromB.snapshot, { retainedRoots: retainedOf }), { added: 4, duplicates: 0, objects: 2, repaired: 0 }, "the import into memory");
+      assertEqual((await all(memory.vault.events.scan())).length, 5, "the union in memory");
       assertBytes((await memory.vault.objects.read(BIG_CID, BIG.length)) as Uint8Array, BIG, "the big object in memory");
-      assertEqual(await importVault(memory, fromB.snapshot, { retainedRoots: retainedOf }), { added: 0, duplicates: 3, conflicts: [], objects: 0, repaired: 0 }, "again, nothing");
+      assertEqual(await importVault(memory, fromB.snapshot, { retainedRoots: retainedOf }), { added: 0, duplicates: 4, objects: 0, repaired: 0 }, "again, nothing");
       fromB.snapshot.close();
     },
   },
@@ -459,19 +465,19 @@ export const importCases: ImportCase[] = [
       const { vault: again, driver } = await reopen(h, target, c.now);
       const before = tables(driver);
       const err = await assertRejects(() => importVault(again, snapshot, { retainedRoots: retainedOf }), "ForkedAuthor", "the import");
-      assertEqual((err as unknown as { events: Event[] }).events.map((e) => e.eventId), [e2?.eventId], "the forked event named");
+      assertEqual((err as unknown as { events: Event[] }).events.map((e) => e.cid), [e2?.cid], "the forked event named");
       assertEqual(tables(driver), before, "nothing written");
       assertEqual(rows(driver, "SELECT count(*) AS n FROM sqlite_temp_master WHERE name = 'staging_chunks'"), [{ n: 0 }], "nothing staged: the staging table was never made");
       await again.close();
       const { vault: reset } = await reopen(h, target, c.now, true);
       try {
         assert(reset.author !== author, "a new replica ID");
-        assertEqual(await importVault(reset, snapshot, { retainedRoots: retainedOf }), { added: 1, duplicates: 1, conflicts: [], objects: 1, repaired: 0 }, "the import after the reset");
+        assertEqual(await importVault(reset, snapshot, { retainedRoots: retainedOf }), { added: 1, duplicates: 1, objects: 1, repaired: 0 }, "the import after the reset");
         assertEqual(
-          (await all(reset.vault.events.scan())).map((e) => [e.eventId, e.author]),
+          (await all(reset.vault.events.scan())).map((e) => [e.cid, e.author]),
           [
-            [e1?.eventId, author],
-            [e2?.eventId, author],
+            [e1?.cid, author],
+            [e2?.cid, author],
           ],
           "both events under the historical author"
         );
@@ -540,7 +546,7 @@ export const importCases: ImportCase[] = [
           exec(target.driver, "DELETE FROM object_chunks WHERE cid = ?", RX_CID);
           exec(target.driver, "DELETE FROM objects WHERE cid = ?", RX_CID);
         }
-        assertEqual(await importVault(target.vault, fromD.snapshot, { retainedRoots: contestable }), { added: 3, duplicates: 0, conflicts: [], objects: 1, repaired: 0 }, `${state}: the import goes through; the released package's root, which the union does not hold, needs no bytes`);
+        assertEqual(await importVault(target.vault, fromD.snapshot, { retainedRoots: contestable }), { added: 3, duplicates: 0, objects: 1, repaired: 0 }, `${state}: the import goes through; the released package's root, which the union does not hold, needs no bytes`);
         assertEqual(await target.vault.vault.objects.has(RY_CID), true, `${state}: the new root came along`);
         assertEqual(await target.vault.vault.objects.has(RZ_CID), false, `${state}: the released root did not`);
         if (state === "damaged") await assertRejects(() => target.vault.vault.objects.read(RX_CID, 48), "DamagedObject", "the damage stays");
@@ -565,7 +571,7 @@ export const importCases: ImportCase[] = [
       );
       const { snapshot } = await snapshotOf(h, vault);
       const imported = async (what: string, into: SqliteVault, outcome: Partial<Imported>): Promise<void> => {
-        assertEqual(await importVault(into, snapshot, { retainedRoots: retainedOf }), { added: 0, duplicates: events.length, conflicts: [], objects: 0, repaired: 0, ...outcome }, what);
+        assertEqual(await importVault(into, snapshot, { retainedRoots: retainedOf }), { added: 0, duplicates: events.length, objects: 0, repaired: 0, ...outcome }, what);
       };
       corruptChunk(driver, HELLO_CID);
       await assertRejects(() => vault.vault.objects.read(HELLO_CID, 5), "DamagedObject", "hello known damaged");
@@ -590,7 +596,7 @@ export const importCases: ImportCase[] = [
       const withWorld = await snapshotOf(h, open.vault, contestableHeld);
       await open.vault.vault.commit([], [release(pkg as Event)]);
       assertEqual(await open.vault.collect(contestableHeld), { removed: [WORLD_CID] }, "the world released and collected");
-      assertEqual(await importVault(open.vault, withWorld.snapshot, { retainedRoots: contestable }), { added: 0, duplicates: 3, conflicts: [], objects: 0, repaired: 0 }, "the snapshot that still has the world adds nothing");
+      assertEqual(await importVault(open.vault, withWorld.snapshot, { retainedRoots: contestable }), { added: 0, duplicates: 3, objects: 0, repaired: 0 }, "the snapshot that still has the world adds nothing");
       assertEqual(await open.vault.vault.objects.has(WORLD_CID), false, "the world is not revived");
       withWorld.snapshot.close();
       await open.vault.close();
@@ -605,10 +611,10 @@ export const importCases: ImportCase[] = [
       await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [witnessed(pkg as Event, HELLO_CID)]);
       assertEqual(await vault.collect(evidencedHeld), { removed: [WORLD_CID] }, "the world released and collected");
       const own = await snapshotOf(h, vault, evidencedHeld);
-      assertEqual(await importVault(vault, own.snapshot, { retainedRoots: evidenced }), { added: 0, duplicates: 2, conflicts: [], objects: 0, repaired: 0 }, "the target's own snapshot, its witness read from the target");
+      assertEqual(await importVault(vault, own.snapshot, { retainedRoots: evidenced }), { added: 0, duplicates: 2, objects: 0, repaired: 0 }, "the target's own snapshot, its witness read from the target");
       await vault.close();
       const elsewhere = new MemoryVault({ metadata: META, wrapped: WRAPPED, now: c.now });
-      assertEqual(await importVault(elsewhere, own.snapshot, { retainedRoots: evidenced }), { added: 2, duplicates: 0, conflicts: [], objects: 1, repaired: 0 }, "into a vault with neither object, the witness read from the source");
+      assertEqual(await importVault(elsewhere, own.snapshot, { retainedRoots: evidenced }), { added: 2, duplicates: 0, objects: 1, repaired: 0 }, "into a vault with neither object, the witness read from the source");
       assertEqual(await elsewhere.vault.objects.has(WORLD_CID), false, "the world is asked of nobody");
       assertBytes((await elsewhere.vault.objects.read(HELLO_CID, 5)) as Uint8Array, HELLO, "the witness came along");
       own.snapshot.close();
@@ -632,7 +638,7 @@ export const importCases: ImportCase[] = [
         const { snapshot } = await snapshotOf(h, origin.vault, heldRootsOf(retainedRoots));
         await origin.vault.close();
         const target = await damagedTarget();
-        assertEqual(await importVault(target.vault, snapshot, { retainedRoots }), { added: 2, duplicates: 0, conflicts: [], objects: 0, repaired: 1 }, "one import, the witness repaired");
+        assertEqual(await importVault(target.vault, snapshot, { retainedRoots }), { added: 2, duplicates: 0, objects: 0, repaired: 1 }, "one import, the witness repaired");
         assertBytes((await target.vault.vault.objects.read(HELLO_CID, 5)) as Uint8Array, HELLO, "the witness reads back");
         assertEqual(await target.vault.vault.objects.has(WORLD_CID), false, "the world is asked of nobody");
         snapshot.close();
@@ -641,7 +647,7 @@ export const importCases: ImportCase[] = [
       // a release whose witness its own vault never held: the snapshot carries the world and no witness
       const origin = await make(h, h.fresh(), c.now);
       const [pkg] = await origin.vault.vault.commit([{ cid: WORLD_CID, source: WORLD }], [pack("W", [WORLD_CID])]);
-      await origin.vault.vault.commit([], [{ type: "release", roots: [], data: { of: (pkg as Event).eventId, witness: HELLO_CID } }]);
+      await origin.vault.vault.commit([], [{ type: "release", roots: [], data: { of: (pkg as Event).cid, witness: HELLO_CID } }]);
       const { snapshot } = await snapshotOf(h, origin.vault, heldRootsOf(evidencedStreaming));
       await origin.vault.close();
       const target = await damagedTarget();
@@ -680,7 +686,7 @@ export const importCases: ImportCase[] = [
       assertEqual((await importing).added, 2, "and lands after");
       await vault.close();
       // another vault's snapshot
-      const other = new SqliteVault(createRuntime(await h.open(h.fresh(), "create"), { metadata: { version: 3, anchor: OTHER_ANCHOR }, wrapped: WRAPPED }), { now: c.now });
+      const other = new SqliteVault(createRuntime(await h.open(h.fresh(), "create"), { metadata: { version: 4, anchor: OTHER_ANCHOR }, wrapped: WRAPPED }), { now: c.now });
       await other.vault.commit([], [draft([], { other: true })]);
       const foreign = await snapshotOf(h, other);
       await other.close();
@@ -714,7 +720,7 @@ export const importCases: ImportCase[] = [
       const pristine = await h.fileBytes(target);
       const { target: exported, events: incoming } = await seededSnapshot(h, c.now);
       const snapshot = await opened(h, exported);
-      const oldUnion = { events: [e1?.eventId], objects: [HELLO_CID] };
+      const oldUnion = { events: [e1?.cid], objects: [HELLO_CID] };
       const newUnion = { events: ids([e1 as Event, ...incoming]), objects: [HELLO_CID, BIG_CID].sort() };
       const state = async (): Promise<{ events: (string | undefined)[]; objects: string[] }> => {
         const { vault: check } = await reopen(h, target, c.now);
@@ -722,7 +728,7 @@ export const importCases: ImportCase[] = [
           assertEqual(await check.vault.events.damaged(), [], "no damage");
           assertEqual(check.stopped, undefined, "the vault runs");
           for (const cid of await all(check.vault.objects.list())) assert((await check.vault.objects.stat(cid)) !== null, `${cid} reads`);
-          return { events: (await all(check.vault.events.scan())).map((e) => e.eventId), objects: await all(check.vault.objects.list()) };
+          return { events: (await all(check.vault.events.scan())).map((e) => e.cid), objects: await all(check.vault.objects.list()) };
         } finally {
           await check.close();
         }
@@ -740,7 +746,7 @@ export const importCases: ImportCase[] = [
         }
         if (outcome !== undefined) {
           statements = n - 1;
-          assertEqual(outcome, { added: 2, duplicates: 0, conflicts: [], objects: 1, repaired: 0 }, "past the last statement the import lands");
+          assertEqual(outcome, { added: 2, duplicates: 0, objects: 1, repaired: 0 }, "past the last statement the import lands");
           assertEqual(await state(), newUnion, "the whole new union");
           break;
         }
@@ -758,7 +764,7 @@ export const importCases: ImportCase[] = [
         const { vault: check } = await reopen(h, fresh, c.now);
         try {
           const events = ids(await all(check.vault.events.scan()));
-          assertEqual(events, landed ? newUnion.events : [e1?.eventId], `landed ${landed}: the union after`);
+          assertEqual(events, landed ? newUnion.events : [e1?.cid], `landed ${landed}: the union after`);
         } finally {
           await check.close();
         }
@@ -792,7 +798,7 @@ export const importCases: ImportCase[] = [
         }
         assertEqual(
           await importVault(target.vault, fromS.snapshot, { retainedRoots: contestable }),
-          { added: 2, duplicates: 0, conflicts: [], objects: 0, repaired: 0 },
+          { added: 2, duplicates: 0, objects: 0, repaired: 0 },
           `${state}: the import goes through: the new package's reference is released, and the root was held before by the target's own event`
         );
         assertEqual(ids(await all(target.vault.vault.events.scan())), ids([own as Event, ps as Event, rs as Event]), `${state}: the union`);
@@ -834,7 +840,7 @@ export const importCases: ImportCase[] = [
       await assertRejects(() => drained(reader), "DamagedObject", "the read finds the damage meanwhile");
       await assertRejects(() => target.vault.vault.objects.has(X_CID), "DamagedObject", "known damaged before anything is published");
       waiting.release();
-      assertEqual(await importing, { added: 1, duplicates: 0, conflicts: [], objects: 1, repaired: 1 }, "planned again: the repair the source has is among the staged");
+      assertEqual(await importing, { added: 1, duplicates: 0, objects: 1, repaired: 1 }, "planned again: the repair the source has is among the staged");
       assertEqual(ids(await all(target.vault.vault.events.scan())), ids([own as Event, both as Event]), "the union");
       assertBytes((await target.vault.vault.objects.read(X_CID, 64)) as Uint8Array, X, "repaired");
       assertBytes((await target.vault.vault.objects.read(Y_CID, 96)) as Uint8Array, Y, "the new object");

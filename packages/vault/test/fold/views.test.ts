@@ -87,7 +87,7 @@ describe("a contact view", () => {
     contact(scene, CONTACT, [{ local: a0, peer: b0 }]);
     scene.add("contact.useDid", { contactId: CONTACT, didId: a0.didId, because: "user" });
     const vault = await fold(scene, keys);
-    expect(vault.continuity.status(decision.eventId)).toEqual({ status: "verified" });
+    expect(vault.continuity.status(decision.cid)).toEqual({ status: "verified" });
     const view = vault.views.contact(CONTACT);
     expect(view.contacts.map((c) => c.contactId)).toEqual([CONTACT]);
     expect(view.channels.map((c) => [c.channel, c.selected])).toEqual([

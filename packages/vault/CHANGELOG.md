@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Event references are CIDs.** Every payload field that named an
+  event by UUID names it by its event CID and is renamed for it:
+  `sourceEventCid`, `rotationEventCid`, `peerResolutionEventCid`,
+  `disclosureEventCid`. A reference is a canonical raw DASL CID; the
+  schema cannot tell it from an object's. `EventId` is `EventCid`, an
+  event's `eventId` is its `cid`, and `Retained` is `{ cid, root }`.
+  `SourceKey` is `(at, cid)`. Vault metadata is version 4.
+
 - **A contradicted input acknowledges nothing.** An outbound's
   `ackWitnesses` leave out every observation of an input whose
   observations carry different intents, however complete each witness

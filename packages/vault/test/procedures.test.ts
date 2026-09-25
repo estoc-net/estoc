@@ -52,7 +52,7 @@ const encoder = new TextEncoder();
 
 /** A vault in memory holding the scene's events and the bytes of every text named. */
 async function vaultOf(scene: Scene, texts: readonly string[] = []): Promise<MemoryVault> {
-  const vault = new MemoryVault({ metadata: { version: 3, anchor: await Keys.anchorOf(await importSeed(SEED)) } });
+  const vault = new MemoryVault({ metadata: { version: 4, anchor: await Keys.anchorOf(await importSeed(SEED)) } });
   for (const text of texts) await vault.stores.objects.putObject(cidOf(text), encoder.encode(text));
   await vault.ingest(scene.events);
   return vault;
@@ -80,7 +80,7 @@ describe("erasing a message", () => {
     expect(await has(vault, attachment)).toBe(false);
     const fold = await scanVault(vault.vault, keys);
     expect(fold.held.has(out.data.bodyCid)).toBe(true);
-    expect(fold.retained.filter((edge) => edge.eventId === other.eventId)).toEqual([{ eventId: other.eventId, root: out.data.bodyCid }]);
+    expect(fold.retained.filter((edge) => edge.cid === other.cid)).toEqual([{ cid: other.cid, root: out.data.bodyCid }]);
 
     const again = await eraseMessage(vault, keys, out.data.messageId);
     expect(again.events).toEqual([]);
@@ -156,9 +156,9 @@ const CONTACT = "019b7100-0000-7000-8000-000000000c01" as ContactId;
 const workSnapshot = (work: PendingWork) => ({
   outbounds: work.outbounds.map((o) => [o.messageId, o.work.kind]),
   responses: work.responses.map((r) => [r.execution.messageId, r.effectType, r.channel]),
-  notifications: work.notifications.map((n) => [n.decision.event.eventId, n.channel, n.source?.event.eventId ?? null]),
-  notificationConflicts: work.notificationConflicts.map((c) => [c.decision.event.eventId, c.notification.messageIds]),
-  proofs: work.proofs.map((c) => c.source.event.eventId),
+  notifications: work.notifications.map((n) => [n.decision.event.cid, n.channel, n.source?.event.cid ?? null]),
+  notificationConflicts: work.notificationConflicts.map((c) => [c.decision.event.cid, c.notification.messageIds]),
+  proofs: work.proofs.map((c) => c.source.event.cid),
   consumptions: work.consumptions.map((d) => d.data),
 });
 
@@ -173,15 +173,15 @@ describe("consuming invitations", () => {
     const second = proofFreeReceipt(scene, a0, b1, 3, { pthid: disclosure.data.oobId });
     proofFreeReceipt(scene, a1, b0, 4, { pthid: other.data.oobId });
     const vault = await fold(scene, keys);
-    expect(vault.invitations.invitations.get(disclosure.eventId)!.candidates.map((c) => [c.source.event.eventId, c.eligibility.status])).toEqual([
-      [denied.eventId, "refused"],
-      [first.eventId, "eligible"],
-      [second.eventId, "eligible"],
+    expect(vault.invitations.invitations.get(disclosure.cid)!.candidates.map((c) => [c.source.event.cid, c.eligibility.status])).toEqual([
+      [denied.cid, "refused"],
+      [first.cid, "eligible"],
+      [second.cid, "eligible"],
     ]);
     const drafts = consumptionDrafts(vault);
     expect(drafts.map((draft) => draft.data)).toEqual([
-      { disclosureEventId: disclosure.eventId, sourceEventId: first.eventId },
-      { disclosureEventId: other.eventId, sourceEventId: scene.events.at(-1)!.eventId },
+      { disclosureEventCid: disclosure.cid, sourceEventCid: first.cid },
+      { disclosureEventCid: other.cid, sourceEventCid: scene.events.at(-1)!.cid },
     ]);
     expectOrderFree(scene.events, (set) => consumptionDrafts(foldVault(set, vault.checks)).map((draft) => draft.data));
 
@@ -190,11 +190,11 @@ describe("consuming invitations", () => {
     expect(events.map((event) => event.data)).toEqual(drafts.map((draft) => draft.data));
     expect(await consumeInvitations(memory, keys)).toEqual([]);
     const after = await scanVault(memory.vault, keys);
-    expect(after.invitations.invitations.get(disclosure.eventId)!.status).toEqual({ status: "consumed", consumer: b0.did });
+    expect(after.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "consumed", consumer: b0.did });
 
     const earlier = receipt(scene, { local: a0, peer: b1, resolution: resolved(scene, a0.didId, b1), ordinal: 1, overrides: { pthid: disclosure.data.oobId } }, { author: AUTHOR2 });
     await memory.ingest(scene.events.slice(-2));
-    expect((await scanVault(memory.vault, keys)).invitations.invitations.get(disclosure.eventId)!.candidates[1]!.source.event.eventId).toBe(earlier.eventId);
+    expect((await scanVault(memory.vault, keys)).invitations.invitations.get(disclosure.cid)!.candidates[1]!.source.event.cid).toBe(earlier.cid);
     expect(consumptionDrafts(await scanVault(memory.vault, keys))).toEqual([]);
   });
 
@@ -204,7 +204,7 @@ describe("consuming invitations", () => {
     proofFreeReceipt(scene, a0, b0, 1, { pthid: disclosure.data.oobId });
     proofFreeReceipt(scene, a0, b1, 2, { pthid: disclosure.data.oobId });
     const unseeded = await fold(scene, null);
-    expect(unseeded.invitations.invitations.get(disclosure.eventId)!.status.status).toBe("pending");
+    expect(unseeded.invitations.invitations.get(disclosure.cid)!.status.status).toBe("pending");
     expect(consumptionDrafts(unseeded)).toEqual([]);
 
     const { scene: other, keys: otherKeys, a0: c0, b0: d0, b1: d1 } = await vaults();
@@ -214,7 +214,7 @@ describe("consuming invitations", () => {
     receipt(other, { local: c0, peer: d0, resolution: root, ordinal: 1, overrides: { pthid: twice.data.oobId } });
     proofFreeReceipt(other, c0, d1, 2, { pthid: twice.data.oobId });
     const conflicted = await fold(other, otherKeys);
-    expect(conflicted.invitations.invitations.get(twice.eventId)!.status.status).toBe("conflict");
+    expect(conflicted.invitations.invitations.get(twice.cid)!.status.status).toBe("conflict");
     expect(consumptionDrafts(conflicted)).toEqual([]);
   });
 });
@@ -238,7 +238,7 @@ describe("unfinished work", () => {
     scene.add("message.erased", { messageId: erasedPing.data.messageId, dropCids: [erasedPing.data.bodyCid], because: "user" });
     const waiting = receipt(scene, { local: a1, peer: b3, resolution: resolved(scene, a1.didId, b3), ordinal: 6, fromPrior: await shortIssuerProof(peerKeys, b2, b3) });
     const vault = await fold(scene, keys);
-    expect(vault.channels.carriers.get(waiting.eventId)!.proof).toEqual({ status: "pending-proof" });
+    expect(vault.channels.carriers.get(waiting.cid)!.proof).toEqual({ status: "pending-proof" });
     const work = unfinishedWork(vault);
     expect(workSnapshot(work)).toEqual({
       outbounds: [
@@ -252,7 +252,7 @@ describe("unfinished work", () => {
         .flatMap((messageId) => (messageId === ping.data.messageId ? [PURE_ACK_EFFECT, PING_RESPONSE_EFFECT] : [PURE_ACK_EFFECT]).map((effectType) => [messageId, effectType, channel(a0, b0)])),
       notifications: [],
       notificationConflicts: [],
-      proofs: [waiting.eventId],
+      proofs: [waiting.cid],
       consumptions: [],
     });
     expect(work.outbounds.find((o) => o.messageId === prepared.data.messageId)!.work).toMatchObject({ kind: "dispatch", package: { event: pkg } });
@@ -270,8 +270,8 @@ describe("unfinished work", () => {
     const namingFirst = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 2, overrides: { pleaseAck: [first.data.wireMessageId] } });
     const namingNothing = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 3, overrides: { pleaseAck: [uuidv7()] } });
     let vault = await fold(scene, keys);
-    expect(vault.outbound.ackTargets(namingFirst.eventId)).toEqual([first.data.wireMessageId]);
-    expect(vault.outbound.ackTargets(namingNothing.eventId)).toEqual([]);
+    expect(vault.outbound.ackTargets(namingFirst.cid)).toEqual([first.data.wireMessageId]);
+    expect(vault.outbound.ackTargets(namingNothing.cid)).toEqual([]);
     expect(workSnapshot(unfinishedWork(vault)).responses).toEqual([[namingFirst.data.messageId, PURE_ACK_EFFECT, channel(a0, b0)]]);
 
     automatic(scene, a0, b0, namingFirst, inputOf(namingFirst, b0, a0), PURE_ACK, { bodyCid: EMPTY_CONTENT_CID, thid: namingFirst.data.wireMessageId, ack: [first.data.wireMessageId] });
@@ -281,7 +281,7 @@ describe("unfinished work", () => {
 
     const fromSuccessor = receipt(scene, { local: a0, peer: b1, resolution: resolved(scene, a0.didId, b1), ordinal: 4, fromPrior: await proof(peerKeys, b0, b1), overrides: { pleaseAck: [first.data.wireMessageId] } });
     vault = await fold(scene, keys);
-    expect(vault.outbound.ackTargets(fromSuccessor.eventId)).toEqual([first.data.wireMessageId]);
+    expect(vault.outbound.ackTargets(fromSuccessor.cid)).toEqual([first.data.wireMessageId]);
     expect(workSnapshot(unfinishedWork(vault)).responses).toEqual([[fromSuccessor.data.messageId, PURE_ACK_EFFECT, channel(a0, b1)]]);
     expectOrderFree(scene.events, (set) => workSnapshot(unfinishedWork(foldVault(set, vault.checks))));
   });
@@ -292,7 +292,7 @@ describe("unfinished work", () => {
     const decision = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source: asking });
     let vault = await fold(scene, keys);
     const execution = () => vault.inbound.ofMessage(asking.data.messageId)!;
-    expect(vault.continuity.status(decision.eventId)).toEqual({ status: "verified" });
+    expect(vault.continuity.status(decision.cid)).toEqual({ status: "verified" });
     expect(responseChannel(vault, execution())).toEqual({ status: "selected", channel: channel(a0, b0) });
 
     scene.add("did.retired", { didId: a0.didId, because: "rotated" });
@@ -302,7 +302,7 @@ describe("unfinished work", () => {
 
     const fork = await rotation(scene, keys, { from: a0, peer: b0, to: a2, source: asking });
     vault = await fold(scene, keys);
-    expect(vault.continuity.status(fork.eventId).status).toBe("conflict");
+    expect(vault.continuity.status(fork.cid).status).toBe("conflict");
     expect(responseChannel(vault, execution())).toEqual({ status: "none", because: "the channel's continuity is in conflict" });
 
     const { scene: other, keys: otherKeys, peerKeys: otherPeerKeys, a0: c0, b0: d0, b1: d1 } = await vaults();
@@ -331,24 +331,24 @@ describe("unfinished work", () => {
     const manual = await rotation(scene, keys, { from: a1, peer: b1, to: a0 });
     proofFreeReceipt(scene, a1, b1, 2);
     let vault = await fold(scene, keys);
-    expect(vault.continuity.status(decision.eventId)).toEqual({ status: "verified" });
-    expect(vault.continuity.status(manual.eventId)).toEqual({ status: "verified" });
+    expect(vault.continuity.status(decision.cid)).toEqual({ status: "verified" });
+    expect(vault.continuity.status(manual.cid)).toEqual({ status: "verified" });
     expect(workSnapshot(unfinishedWork(vault)).notifications).toEqual([
-      [decision.eventId, channel(a1, b0), source.eventId],
-      [manual.eventId, channel(a0, b1), null],
+      [decision.cid, channel(a1, b0), source.cid],
+      [manual.cid, channel(a0, b1), null],
     ]);
 
-    const notification = automatic(scene, a1, b0, source, inputOf(source, b0, a0), ROTATION_NOTIFICATION_EFFECT, { bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], thid: source.data.wireMessageId, rotationEventId: ref(decision) });
+    const notification = automatic(scene, a1, b0, source, inputOf(source, b0, a0), ROTATION_NOTIFICATION_EFFECT, { bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], thid: source.data.wireMessageId, rotationEventCid: ref(decision) });
     vault = await fold(scene, keys);
-    expect(workSnapshot(unfinishedWork(vault)).notifications).toEqual([[manual.eventId, channel(a0, b1), null]]);
+    expect(workSnapshot(unfinishedWork(vault)).notifications).toEqual([[manual.cid, channel(a0, b1), null]]);
     expect(unfinishedWork(vault).outbounds.map((o) => o.messageId)).toEqual([notification.data.messageId]);
 
     await receiptCarryingProof(scene, peerKeys, a0, b0, b1, 3);
-    const manualForm = intent(scene, a1, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventId: ref(decision) });
+    const manualForm = intent(scene, a1, b0, { msgType: EMPTY_MESSAGE_TYPE, bodyCid: EMPTY_CONTENT_CID, pleaseAck: [""], rotationEventCid: ref(decision) });
     vault = await fold(scene, keys);
     const work = workSnapshot(unfinishedWork(vault));
     expect(work.notifications).toEqual([]);
-    expect(work.notificationConflicts).toEqual([[decision.eventId, [notification.data.messageId, manualForm.data.messageId].sort()]]);
+    expect(work.notificationConflicts).toEqual([[decision.cid, [notification.data.messageId, manualForm.data.messageId].sort()]]);
   });
 
   it("lists no notification for a verified decision a control input triggered: a pure ACK, another Empty, a ping response or a problem report", async () => {
@@ -363,7 +363,7 @@ describe("unfinished work", () => {
     for (const [index, peer] of [b0, b1, b2, b3].entries()) decisions.push(await rotation(scene, keys, { from: a0, peer, to: a1, source: controls[index] }));
     const vault = await fold(scene, keys);
     expect(controls.map((source) => kindOf(source.data))).toEqual(["pure-ack", "empty", "ping-response", "error"]);
-    for (const decision of decisions) expect(vault.continuity.status(decision.eventId)).toEqual({ status: "verified" });
+    for (const decision of decisions) expect(vault.continuity.status(decision.cid)).toEqual({ status: "verified" });
     expect(workSnapshot(unfinishedWork(vault))).toMatchObject({ notifications: [], notificationConflicts: [] });
   });
 });
@@ -378,8 +378,8 @@ describe("the decision a rotation reuses", () => {
     const decision = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source });
     const elsewhere = await rotation(scene, keys, { from: a0, peer: b1, to: a2 });
     vault = await fold(scene, keys);
-    expect(decisionFor(vault, a0.did, b0.did)).toEqual({ status: "reuse", decision: vault.channels.decisions.get(decision.eventId) });
-    expect(decisionFor(vault, a0.did, b1.did)).toEqual({ status: "reuse", decision: vault.channels.decisions.get(elsewhere.eventId) });
+    expect(decisionFor(vault, a0.did, b0.did)).toEqual({ status: "reuse", decision: vault.channels.decisions.get(decision.cid) });
+    expect(decisionFor(vault, a0.did, b1.did)).toEqual({ status: "reuse", decision: vault.channels.decisions.get(elsewhere.cid) });
     expect(decisionFor(vault, a1.did, b0.did)).toEqual({ status: "none" });
 
     vault = await fold(scene, null);

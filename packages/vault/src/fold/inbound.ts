@@ -17,7 +17,7 @@
 
 import { storeMessage } from "../document.js";
 import { executionId } from "../ids.js";
-import type { Channel, EventId, ExecutionId, MessageHash, MessageId, MessageIn, WireMessageId } from "../types.js";
+import type { Channel, EventCid, ExecutionId, MessageHash, MessageId, MessageIn, WireMessageId } from "../types.js";
 import { compareReceiptKeys, receiptOrderKey, type ChannelEvidence, type ReceiptKey, type Source } from "./channels.js";
 import type { Continuity, Witness } from "./continuity.js";
 import type { Erasures } from "./held.js";
@@ -101,7 +101,7 @@ export interface InboundFold {
   readonly unplaced: readonly Source[];
   ofMessage(messageId: MessageId): Execution | null;
   /** the execution of the input an observation claims, whether it is a member or a sibling of it */
-  ofSource(sourceEventId: EventId): Execution | null;
+  ofSource(sourceEventCid: EventCid): Execution | null;
 }
 
 export function foldInbound(evidence: ChannelEvidence, continuity: Continuity, erasures: Erasures): InboundFold {
@@ -110,7 +110,7 @@ export function foldInbound(evidence: ChannelEvidence, continuity: Continuity, e
   const siblings = new Map<MessageId, Source[]>();
   for (const source of evidence.sources.values()) {
     const { data } = source.event;
-    if (data.peerResolutionEventId === null) anonymous.push(source);
+    if (data.peerResolutionEventCid === null) anonymous.push(source);
     else {
       const group = source.standing.status === "complete" ? members : siblings;
       const list = group.get(data.messageId);
@@ -133,9 +133,9 @@ export function foldInbound(evidence: ChannelEvidence, continuity: Continuity, e
     anonymous: anonymous.sort(byReceipt),
     unplaced: unplaced.sort(byReceipt),
     ofMessage: (messageId) => byMessage.get(messageId) ?? null,
-    ofSource: (sourceEventId) => {
-      const source = evidence.sources.get(sourceEventId);
-      return source === undefined || source.event.data.peerResolutionEventId === null ? null : (byMessage.get(source.event.data.messageId) ?? null);
+    ofSource: (sourceEventCid) => {
+      const source = evidence.sources.get(sourceEventCid);
+      return source === undefined || source.event.data.peerResolutionEventCid === null ? null : (byMessage.get(source.event.data.messageId) ?? null);
     },
   };
 }
@@ -150,7 +150,7 @@ const byReceipt = (a: Source, b: Source) => compareReceiptKeys(receiptOrderKey(a
 function executionOf(messageId: MessageId, sources: readonly Source[], siblings: readonly Source[], evidence: ChannelEvidence, continuity: Continuity, erasures: Erasures): Execution {
   const channel = sources[0]!.channel!;
   const wireMessageId = sources[0]!.event.data.wireMessageId;
-  const members: Member[] = sources.map((source) => ({ source, positive: evidence.positive(source.event.eventId), witness: continuity.witness(source.event.eventId) }));
+  const members: Member[] = sources.map((source) => ({ source, positive: evidence.positive(source.event.cid), witness: continuity.witness(source.event.cid) }));
   const intents = new Set<MessageHash>();
   for (const member of members) if (member.positive) intents.add(member.source.event.data.intentHash);
   const complete = members.filter((member) => member.witness.status === "complete");

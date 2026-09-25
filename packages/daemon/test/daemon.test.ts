@@ -264,11 +264,11 @@ describe("a daemon's files, one operation at a time", () => {
 
     const results = await Promise.allSettled([daemon.exportBackup(), daemon.mergeBackup(backup.bytes), daemon.exportBackup(), daemon.mergeBackup(noSnapshot), daemon.mergeBackup(backup.bytes), daemon.exportBackup()]);
     expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled", "fulfilled", "rejected", "fulfilled", "fulfilled"]);
-    for (const index of [1, 4]) expect((results[index] as PromiseFulfilledResult<unknown>).value).toMatchObject({ added: 0, conflicts: 0 });
+    for (const index of [1, 4]) expect((results[index] as PromiseFulfilledResult<unknown>).value).toMatchObject({ added: 0 });
     // An export is whole if it validates as a snapshot, which a merge does before it takes anything from one.
     for (const index of [0, 2, 5]) {
       const exported = (results[index] as PromiseFulfilledResult<{ bytes: Uint8Array }>).value;
-      expect(await daemon.mergeBackup(exported.bytes)).toMatchObject({ added: 0, conflicts: 0 });
+      expect(await daemon.mergeBackup(exported.bytes)).toMatchObject({ added: 0 });
     }
 
     // A close lets the operation under way finish and refuses the one still waiting behind it.
@@ -290,8 +290,8 @@ describe("a vault whose history is damaged", () => {
   function damageAnEvent(root: string): void {
     const db = new DatabaseSync(vaultFile(root));
     try {
-      const { event_id: eventId, canonical } = db.prepare("SELECT event_id, canonical FROM events ORDER BY event_id DESC LIMIT 1").get() as { event_id: string; canonical: Uint8Array };
-      db.prepare("UPDATE events SET canonical = ? WHERE event_id = ?").run(canonical.slice(0, -3), eventId);
+      const { cid, canonical } = db.prepare("SELECT cid, canonical FROM events ORDER BY cid DESC LIMIT 1").get() as { cid: string; canonical: Uint8Array };
+      db.prepare("UPDATE events SET canonical = ? WHERE cid = ?").run(canonical.slice(0, -3), cid);
     } finally {
       db.close();
     }
@@ -354,11 +354,11 @@ describe("a vault whose history is damaged", () => {
         },
       },
       damageAnEvent() {
-        const last = held!.prepare("SELECT event_id, canonical FROM events ORDER BY event_id DESC LIMIT 1");
-        const { event_id: eventId, canonical } = last.get() as { event_id: string; canonical: Uint8Array };
+        const last = held!.prepare("SELECT cid, canonical FROM events ORDER BY cid DESC LIMIT 1");
+        const { cid, canonical } = last.get() as { cid: string; canonical: Uint8Array };
         last.finalize();
-        const cut = held!.prepare("UPDATE events SET canonical = ? WHERE event_id = ?");
-        cut.run(canonical.slice(0, -3), eventId);
+        const cut = held!.prepare("UPDATE events SET canonical = ? WHERE cid = ?");
+        cut.run(canonical.slice(0, -3), cid);
         cut.finalize();
       },
     };
@@ -438,7 +438,7 @@ describe("two copies of one runtime, both written to", () => {
     await there.daemon.createContact("Carmen", pairWith("Carmen"));
 
     const merged = await there.daemon.mergeBackup(fromHere.bytes);
-    expect(merged).toMatchObject({ renewed: true, conflicts: 0 });
+    expect(merged).toMatchObject({ renewed: true });
     expect(merged.added).toBeGreaterThan(0);
     expect(there.heard.phases()).not.toContain("unreadable");
     expect(there.heard.snapshot().contacts.map((contact) => contact.petname).sort()).toEqual(["Bob", "Carmen"]);
@@ -516,7 +516,7 @@ describe("two copies of one runtime, both written to", () => {
       } finally {
         release();
       }
-      expect(await merging).toMatchObject({ renewed: true, conflicts: 0 });
+      expect(await merging).toMatchObject({ renewed: true });
       await until("what waited for the backup's address is received", () => messagesOf(heard.snapshot()).some((message) => message.direction === "in" && message.msg?.type === PING_TYPE));
       expect(mediator.recipients.has(invited)).toBe(true);
       expect(heard.lines()?.discarded ?? []).toEqual([]);
@@ -778,12 +778,12 @@ describe("two daemons over a mediator", () => {
 
       // A restored vault never held the envelopes its submitted messages released, and an erasure collects the ones a vault did hold: neither is asked for them again.
       const merged = await again.daemon.mergeBackup(backup.bytes);
-      expect(merged).toMatchObject({ added: 0, conflicts: 0, objects: 0 });
+      expect(merged).toMatchObject({ added: 0, objects: 0 });
       expect(merged.duplicates).toBeGreaterThan(0);
       await until("the agent over the merged vault is live", () => again.heard.events.at(-1)![0] === "lines" && again.heard.lines()!.connections[0]!.live);
       const bobs = await bob.daemon.exportBackup();
       await bob.daemon.eraseMessage(reply.messageId);
-      expect(await bob.daemon.mergeBackup(bobs.bytes)).toMatchObject({ added: 0, conflicts: 0, objects: 0 });
+      expect(await bob.daemon.mergeBackup(bobs.bytes)).toMatchObject({ added: 0, objects: 0 });
 
       await again.daemon.forgetIdentity();
       expect(again.heard.phases().at(-1)).toBe("onboarding");

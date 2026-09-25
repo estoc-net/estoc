@@ -802,7 +802,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
               source.close();
             }
           });
-        const counted = ({ added, duplicates, conflicts, objects, repaired }: Awaited<ReturnType<typeof merge>>, renewed: boolean) => ({ added, duplicates, conflicts: conflicts.length, objects, repaired, renewed });
+        const counted = ({ added, duplicates, objects, repaired }: Awaited<ReturnType<typeof merge>>, renewed: boolean) => ({ added, duplicates, objects, repaired, renewed });
         const running = vault();
         const imported = await merge(running).catch((err: unknown) => {
           if (err instanceof ForkedAuthor) return null;
@@ -932,10 +932,10 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         return effectOutcomeOf(await agent.manual.completeResponse(executionId, effectType));
       }),
 
-    completeNotification: (rotationEventId) =>
+    completeNotification: (rotationEventCid) =>
       act(async (agent, running) => {
         await refuseUnexplained(running);
-        return effectOutcomeOf(await agent.manual.completeNotification(rotationEventId));
+        return effectOutcomeOf(await agent.manual.completeNotification(rotationEventCid));
       }),
 
     rotate: (localDidId, peerDid) =>

@@ -30,7 +30,7 @@
 import { Components } from "../components.js";
 import { channelKey, channelOf, compareChannels, sameChannel } from "../ids.js";
 import type { VaultEvent } from "../schema.js";
-import type { Channel, Did, EventId } from "../types.js";
+import type { Channel, Did, EventCid } from "../types.js";
 import type { ChannelEvidence, Decision, LocalLink, PeerLink } from "./channels.js";
 import type { VaultEventSet } from "./set.js";
 
@@ -45,8 +45,8 @@ export interface ContinuityLink {
   readonly from: Channel;
   readonly to: Channel;
   readonly replaces: Replaced;
-  readonly carriers: readonly EventId[];
-  readonly decisions: readonly EventId[];
+  readonly carriers: readonly EventCid[];
+  readonly decisions: readonly EventCid[];
   /** does the replacement grant authority: some complete support no conflict masks establishes it */
   readonly verified: boolean;
 }
@@ -80,10 +80,10 @@ export interface Continuity {
   readonly links: readonly ContinuityLink[];
   readonly conflicts: readonly Conflict[];
   /** the candidate local links whose predecessor address no one has confirmed yet, by decision */
-  readonly unconfirmed: ReadonlyMap<EventId, LocalLink>;
+  readonly unconfirmed: ReadonlyMap<EventCid, LocalLink>;
   /** a carrier's or a decision's status; a proof-free source is `not-present` */
-  status(eventId: EventId): Status;
-  witness(sourceEventId: EventId): Witness;
+  status(cid: EventCid): Status;
+  witness(sourceEventCid: EventCid): Witness;
   /** is the channel in a conflicted context: no new work, no default head through it */
   conflicted(channel: Channel): boolean;
   /** has the peer replaced its DID anywhere in the channel's local-only context: no new work from the old peer */
@@ -116,7 +116,7 @@ const EVERY_CHANNEL = () => true;
  * candidate still waiting, so nothing it derives can confirm it, and
  * the graph is rebuilt until no candidate is admitted any more.
  */
-function closure(peerLinks: readonly PeerLink[], candidates: readonly LocalLink[], admits: (channel: Channel) => boolean, confirms: (graph: Graph, link: LocalLink) => boolean): { graph: Graph; waiting: Map<EventId, LocalLink> } {
+function closure(peerLinks: readonly PeerLink[], candidates: readonly LocalLink[], admits: (channel: Channel) => boolean, confirms: (graph: Graph, link: LocalLink) => boolean): { graph: Graph; waiting: Map<EventCid, LocalLink> } {
   const admitted: LocalLink[] = [];
   const waiting = new Map(candidates.map((link) => [link.decision, link]));
   let graph = buildGraph(peerLinks, admitted, admits);
@@ -132,7 +132,7 @@ function closure(peerLinks: readonly PeerLink[], candidates: readonly LocalLink[
 }
 
 /** By local DID, the peers whose sources addressed to it pass `admits`. */
-function writersByLocalDid(evidence: ChannelEvidence, admits: (sourceEventId: EventId) => boolean): Map<Did, Set<Did>> {
+function writersByLocalDid(evidence: ChannelEvidence, admits: (sourceEventCid: EventCid) => boolean): Map<Did, Set<Did>> {
   const writers = new Map<Did, Set<Did>>();
   for (const [id, source] of evidence.sources) {
     if (source.channel === null || !admits(id)) continue;
@@ -143,7 +143,7 @@ function writersByLocalDid(evidence: ChannelEvidence, admits: (sourceEventId: Ev
   return writers;
 }
 
-type Edge = { from: Channel; to: Channel; replaces: Replaced; carriers: Set<EventId>; decisions: Set<EventId> };
+type Edge = { from: Channel; to: Channel; replaces: Replaced; carriers: Set<EventCid>; decisions: Set<EventCid> };
 
 class Graph {
   readonly channels = new Map<string, Channel>();
@@ -153,7 +153,7 @@ class Graph {
 
   constructor(private readonly admits: (channel: Channel) => boolean) {}
 
-  add(from: Channel, to: Channel, replaces: Replaced, carriers: Iterable<EventId>, decisions: Iterable<EventId>): void {
+  add(from: Channel, to: Channel, replaces: Replaced, carriers: Iterable<EventCid>, decisions: Iterable<EventCid>): void {
     if (!this.admits(from) || !this.admits(to)) return;
     const fromKey = this.vertex(from);
     const toKey = this.vertex(to);
@@ -281,13 +281,13 @@ class ContinuityFold implements Continuity {
   private readonly writers: ReadonlyMap<Did, ReadonlySet<Did>>;
   private readonly authority: Graph;
   private readonly denials: readonly VaultEvent<"channel.blocked">[];
-  private readonly covered = new Map<EventId, Map<string, Channel>>();
+  private readonly covered = new Map<EventCid, Map<string, Channel>>();
 
   constructor(
     set: VaultEventSet,
     private readonly evidence: ChannelEvidence,
     private readonly graph: Graph,
-    readonly unconfirmed: ReadonlyMap<EventId, LocalLink>
+    readonly unconfirmed: ReadonlyMap<EventCid, LocalLink>
   ) {
     this.local = new Contexts(graph, "local");
     this.peer = new Contexts(graph, "peer");
@@ -313,8 +313,8 @@ class ContinuityFold implements Continuity {
     this.denials = set.of("channel.blocked");
   }
 
-  status(eventId: EventId): Status {
-    const carrier = this.evidence.carriers.get(eventId);
+  status(cid: EventCid): Status {
+    const carrier = this.evidence.carriers.get(cid);
     if (carrier !== undefined) {
       const { proof, source, link } = carrier;
       if (proof.status === "invalid") return { status: "invalid", because: proof.because };
@@ -324,14 +324,14 @@ class ContinuityFold implements Continuity {
       if (link === null) return { status: "pending-history", because: "the carrier's endpoints are not known" };
       return this.linkStatus(link.from, link.to);
     }
-    if (this.evidence.sources.has(eventId)) return { status: "not-present" };
-    const decision = this.evidence.decisions.get(eventId);
+    if (this.evidence.sources.has(cid)) return { status: "not-present" };
+    const decision = this.evidence.decisions.get(cid);
     if (decision === undefined) return { status: "pending-history", because: "no carrier or decision here has this ID" };
     const { status } = decision;
     if (status.status === "invalid") return { status: "invalid", because: status.because };
     if (status.status === "conflict") return { status: "conflict", because: status.because };
     if (status.status === "pending") return { status: "pending-history", because: status.because };
-    if (this.unconfirmed.has(eventId)) return { status: "pending-history", because: "no complete source from the peer or a verified successor is addressed to the predecessor" };
+    if (this.unconfirmed.has(cid)) return { status: "pending-history", because: "no complete source from the peer or a verified successor is addressed to the predecessor" };
     const own = this.localLinkStatus(status.link);
     if (own.status !== "verified" || this.authority.has(status.link.from, status.link.to)) return own;
     return { status: "conflict", because: "the predecessor is confirmed only through conflicted continuity" };
@@ -352,12 +352,12 @@ class ContinuityFold implements Continuity {
     return this.linkStatus(link.from, link.to);
   }
 
-  witness(sourceEventId: EventId): Witness {
-    const source = this.evidence.sources.get(sourceEventId);
+  witness(sourceEventCid: EventCid): Witness {
+    const source = this.evidence.sources.get(sourceEventCid);
     if (source === undefined) return { status: "pending", because: "the source is not here" };
-    if (source.event.data.peerResolutionEventId === null) return { status: "invalid", because: "the source is anonymous, in no pair" };
+    if (source.event.data.peerResolutionEventCid === null) return { status: "invalid", because: "the source is anonymous, in no pair" };
     if (source.standing.status === "conflict") return { status: "conflict", because: source.standing.because };
-    const carrier = this.evidence.carriers.get(sourceEventId);
+    const carrier = this.evidence.carriers.get(sourceEventCid);
     if (carrier?.proof.status === "invalid") return { status: "invalid", because: carrier.proof.because };
     if (source.standing.status === "incomplete") return { status: "pending", because: source.standing.because };
     if (carrier === undefined) return { status: "complete" };
@@ -407,8 +407,8 @@ class ContinuityFold implements Continuity {
       const pair = channelOf(denial.data.localDid, denial.data.peerDid);
       if (sameChannel(pair, channel)) return true;
       if (!denial.data.includeSuccessors) return false;
-      let covered = this.covered.get(denial.eventId);
-      if (covered === undefined) this.covered.set(denial.eventId, (covered = this.graph.reach(pair, "any")));
+      let covered = this.covered.get(denial.cid);
+      if (covered === undefined) this.covered.set(denial.cid, (covered = this.graph.reach(pair, "any")));
       return covered.has(key);
     });
   }

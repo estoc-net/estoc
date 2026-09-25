@@ -13,7 +13,7 @@ import { rawCidOfBytes } from "../document.js";
 import { InvalidDidDocument, InvalidPublicKey } from "../errors.js";
 import { authorizedMethodIds, canonicalDidOf, methodPublicKey, peerResolution } from "../peer-document.js";
 import { agreementKey } from "../public-key.js";
-import type { Cid, EventId, VaultData } from "../types.js";
+import type { Cid, EventCid, VaultData } from "../types.js";
 import type { VaultEventSet } from "./set.js";
 
 /** The verdict on one piece of evidence a fold cannot reach on its own; no entry while what it needs is not here. */
@@ -76,8 +76,8 @@ const sameIds = (a: readonly string[], b: readonly string[]) => a.length === b.l
  * to a key-agreement key alone; the authentication methods sign proofs
  * and never stand in for one. No verdict while the object is not here.
  */
-export async function verifyResolutions(set: VaultEventSet, readObject: ReadObject): Promise<Map<EventId, EvidenceCheck>> {
-  const checks = new Map<EventId, EvidenceCheck>();
+export async function verifyResolutions(set: VaultEventSet, readObject: ReadObject): Promise<Map<EventCid, EvidenceCheck>> {
+  const checks = new Map<EventCid, EvidenceCheck>();
   for (const event of set.of("peer.resolved")) {
     const { data } = event;
     try {
@@ -97,10 +97,10 @@ export async function verifyResolutions(set: VaultEventSet, readObject: ReadObje
       });
       if (!keys.includes(data.peerPublicKey)) throw new InvalidDidDocument(`${data.peerPublicKey} is not a key the document authorizes for key agreement`);
       agreementKey(data.peerPublicKey);
-      checks.set(event.eventId, "verified");
+      checks.set(event.cid, "verified");
     } catch (err) {
       if (!(err instanceof InvalidDidDocument || err instanceof InvalidPublicKey)) throw err;
-      checks.set(event.eventId, "invalid");
+      checks.set(event.cid, "invalid");
     }
   }
   return checks;

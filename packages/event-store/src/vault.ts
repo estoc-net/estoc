@@ -1,5 +1,5 @@
 /**
- * The vault, version 3: what a program gets — its metadata, events to
+ * The vault, version 4: what a program gets — its metadata, events to
  * read, objects to read, and `commit` — and what the runtime underneath
  * keeps to itself: the vault-wide writer lock, the keystore, `ingest`,
  * and collection, whose keep set is computed only under the lock. The
@@ -10,7 +10,7 @@
  */
 
 import { MissingRoot, NotAVault, ObjectTooLarge, UnreferencedObject, UnsupportedOperation } from "./errors.js";
-import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventId, type EventStore, type EventTally, type Ingested, type Rejected } from "./event.js";
+import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventCid, type EventStore, type EventTally, type Ingested, type Rejected } from "./event.js";
 import type { JsonObject } from "./json.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "./keystore.js";
 import { MemoryEventStore } from "./memory-events.js";
@@ -21,7 +21,7 @@ import { chunksOf, rawCidOf, sortCids, type ByteSource, type Collected, type Obj
 export type CommitObject = { cid: Cid; source: ByteSource };
 
 /** The events as application code reads them: no `append`, `appendAll` or `ingest`. */
-export type VaultEvents = Pick<EventStore, "scan" | "changes" | "damaged" | "conflicting">;
+export type VaultEvents = Pick<EventStore, "scan" | "changes" | "damaged">;
 /** The objects as application code reads them: no put and no collection. */
 export type VaultObjects = Omit<ObjectStore, "putRaw" | "putObject" | "collect">;
 
@@ -75,7 +75,7 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
 export type HeldRoots = (vault: Vault) => Promise<Iterable<Cid>> | Iterable<Cid>;
 
 /** One edge of retention: an accepted event, and a root it retains in the vault the fold read. */
-export type Retained = { eventId: EventId; root: Cid };
+export type Retained = { cid: EventCid; root: Cid };
 
 /**
  * The retention the events of a vault hold, edge by edge, folded from
@@ -319,10 +319,6 @@ class View implements Vault {
         check();
         return events.damaged();
       },
-      conflicting: async () => {
-        check();
-        return events.conflicting();
-      },
     };
     this.objects = {
       open: (cid) => this.open(cid),
@@ -467,7 +463,7 @@ async function readAll(events: AsyncIterable<unknown> | Iterable<unknown>): Prom
   const read: Read = { events: [], rejected: [] };
   for await (const value of events) {
     try {
-      read.events.push(canonicalEvent(value));
+      read.events.push(canonicalEvent(value).event);
     } catch (err) {
       read.rejected.push({ value, error: err instanceof Error ? err.message : String(err) });
     }
@@ -581,7 +577,7 @@ export class Runtime implements VaultRuntime {
 // ---- in memory ----------------------------------------------------------
 
 export interface MemoryVaultOptions {
-  /** the vault's identity: version 3 and its anchor DID */
+  /** the vault's identity: version 4 and its anchor DID */
   metadata: VaultMetadata;
   /** the wrapped seed the keystore hands out; a vault given none refuses to read it */
   wrapped?: WrappedSeed;

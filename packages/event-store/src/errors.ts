@@ -1,5 +1,5 @@
 /**
- * What the version-3 event model throws. Each names the rule it stands
+ * What the version-4 event model throws. Each names the rule it stands
  * for; a store above wraps or reports them, never reinterprets.
  */
 
@@ -143,7 +143,7 @@ export class UnsupportedOperation extends Error {
   }
 }
 
-/** What was opened is not a version-3 vault this reader opens: another format or version, missing or malformed metadata, a keystore of another shape. Nothing was written. */
+/** What was opened is not a version-4 vault this reader opens: another format or version, missing or malformed metadata, a keystore of another shape. Nothing was written. */
 export class NotAVault extends Error {
   constructor(message: string) {
     super(message);
@@ -284,8 +284,9 @@ export class DatabaseClosed extends Error {
  * file or not, and only the recovery a reopen runs can tell. The
  * connection does no further work — every call after it fails with the
  * same error — until it is closed, and the runtime over it stops the
- * same way; drafts a commit minted must not be resubmitted blindly, as
- * a retry mints new IDs for events that may already have landed.
+ * same way; the drafts of that commit must not be resubmitted blindly,
+ * as a retry samples another `at` and can make events with other CIDs
+ * beside ones that may already have landed.
  */
 export class UncertainCommit extends Error {
   constructor(readonly cause: unknown) {
@@ -313,7 +314,7 @@ export class SnapshotTooLarge extends Error {
   }
 }
 
-/** A restore's source is not a valid version-3 snapshot; nothing was published. */
+/** A restore's source is not a valid version-4 snapshot; nothing was published. */
 export class InvalidSnapshot extends Error {
   constructor(readonly problems: { where: string; error: string }[]) {
     super(`not a valid snapshot: ${describe(problems)}`);

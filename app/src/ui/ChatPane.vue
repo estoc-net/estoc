@@ -335,7 +335,7 @@ onMounted(() => {
       <component :is="rendererFor(typeOf(m)).component" v-for="m in thread" :key="m.messageId" :message="m" />
       <p
         v-for="input in conversation?.unplaced ?? []"
-        :key="input.sourceEventId"
+        :key="input.sourceEventCid"
         class="hop-note"
         :class="{ error: input.standing === 'conflict' }"
         :title="input.channel === null ? undefined : `${input.channel.peerDid} → ${input.channel.localDid}`"

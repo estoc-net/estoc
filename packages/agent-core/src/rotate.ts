@@ -53,7 +53,7 @@ import {
   type Conflict,
   type Did,
   type DidId,
-  type EventId,
+  type EventCid,
   type EventReference,
   type ExecutionId,
   type Keys,
@@ -78,7 +78,7 @@ import type { AgentTrace } from "./trace.js";
 export interface RotationTarget {
   localDidId: DidId;
   peerDid: string;
-  sourceEventId?: EventReference<"message.in"> | null;
+  sourceEventCid?: EventReference<"message.in"> | null;
 }
 
 export interface RotateOptions {
@@ -114,25 +114,25 @@ export async function rotate(runtime: VaultRuntime, keys: Keys, target: Rotation
     if (peerDid === predecessor.created.did) throw new Unusable("DID", predecessor.didId, ["the peer is the local DID itself"]);
     const channel = channelOf(predecessor.created.did, peerDid);
     const key = channelKey(channel);
-    const sourceEventId = target.sourceEventId ?? null;
-    const denied = channelPolicy(fold, channel, { automatic: sourceEventId !== null });
+    const sourceEventCid = target.sourceEventCid ?? null;
+    const denied = channelPolicy(fold, channel, { automatic: sourceEventCid !== null });
     if (denied !== null) throw new Unusable("channel", key, [denied]);
     const existing = decisionFor(fold, channel.localDid, channel.peerDid);
-    if (existing.status === "reuse") return { channel, decision: existing.decision.event, existed: true, drafted: recorded(fold, existing.decision.event.eventId), executionId: null };
+    if (existing.status === "reuse") return { channel, decision: existing.decision.event, existed: true, drafted: recorded(fold, existing.decision.event.cid), executionId: null };
     if (existing.status !== "none") throw new Unusable("channel", key, [existing.because]);
-    if (sourceEventId !== null) assertSelectingSource(fold, channel, sourceEventId);
+    if (sourceEventCid !== null) assertSelectingSource(fold, channel, sourceEventCid);
     if (!fold.continuity.confirmed(channel.localDid, channel.peerDid)) throw new Unusable("channel", key, ["the peer has not written to exactly this address"]);
 
-    const { drafts, successor } = await successorOf(fold, keys, predecessor, sourceEventId !== null, options);
+    const { drafts, successor } = await successorOf(fold, keys, predecessor, sourceEventCid !== null, options);
     const iat = Math.floor((options.now ?? Date.now)() / 1000);
     const fromPrior = await signFromPrior(keys, { didId: predecessor.didId, longFormDid: predecessor.created.longFormDid }, successor.longFormDid, iat);
-    drafts.push(vaultDraft("did.rotationSelected", { fromDidId: predecessor.didId, peerDid: channel.peerDid, toDidId: successor.didId, sourceEventId, fromPrior }));
+    drafts.push(vaultDraft("did.rotationSelected", { fromDidId: predecessor.didId, peerDid: channel.peerDid, toDidId: successor.didId, sourceEventCid, fromPrior }));
     const refusal = await rotationRefusal(held, runtime, keys, fold, drafts);
     if (refusal !== null) throw new Unusable("DID", successor.didId, [refusal]);
     const events = (await held.commit([], drafts)).map(readVaultEvent);
     const decision = events[events.length - 1] as VaultEvent<"did.rotationSelected">;
     fold = await scanVault(held, keys);
-    const settled = await settleNotification(held, fold, decision.eventId as EventReference<"did.rotationSelected">, options.trace ?? null);
+    const settled = await settleNotification(held, fold, decision.cid as EventReference<"did.rotationSelected">, options.trace ?? null);
     const drafted: Drafted = settled.drafted.outcome === "created" ? { ...settled.drafted, action: new LiveAction(settled.drafted.messageId, "initial") } : settled.drafted;
     return { channel, decision, existed: false, drafted, executionId: settled.executionId };
   });
@@ -147,10 +147,10 @@ export async function rotate(runtime: VaultRuntime, keys: Keys, target: Rotation
  * called again. Either goes under a manual action. Several intents
  * naming the decision are its conflict, which no completion resolves.
  */
-export async function completeNotification(runtime: VaultRuntime, keys: Keys, rotationEventId: EventReference<"did.rotationSelected">, options: RotateOptions): Promise<EffectOutcome> {
+export async function completeNotification(runtime: VaultRuntime, keys: Keys, rotationEventCid: EventReference<"did.rotationSelected">, options: RotateOptions): Promise<EffectOutcome> {
   const decided = await runtime.locked(async (held) => {
     const fold = await scanVault(held, keys);
-    const settled = await settleNotification(held, fold, rotationEventId, options.trace ?? null);
+    const settled = await settleNotification(held, fold, rotationEventCid, options.trace ?? null);
     const { drafted } = settled;
     return { ...settled, drafted: drafted.outcome === "created" || drafted.outcome === "existing" ? { ...drafted, action: new LiveAction(drafted.messageId, "manual") } : drafted };
   });
@@ -158,19 +158,19 @@ export async function completeNotification(runtime: VaultRuntime, keys: Keys, ro
 }
 
 /** What the fold would refuse the recorded decision for is refused here first, so that no decision is committed to be refused. */
-function assertSelectingSource(fold: VaultFold, channel: Channel, sourceEventId: EventReference<"message.in">): void {
-  const source = fold.channels.sources.get(sourceEventId as EventId);
-  if (source === undefined) throw new UnknownEntity("input", sourceEventId);
+function assertSelectingSource(fold: VaultFold, channel: Channel, sourceEventCid: EventReference<"message.in">): void {
+  const source = fold.channels.sources.get(sourceEventCid as EventCid);
+  if (source === undefined) throw new UnknownEntity("input", sourceEventCid);
   const faults: string[] = [];
   if (source.channel === null || !sameChannel(source.channel, channel)) faults.push(`not in channel ${channelKey(channel)}`);
-  const witness = fold.continuity.witness(source.event.eventId);
+  const witness = fold.continuity.witness(source.event.cid);
   if (witness.status !== "complete") faults.push(`no complete witness: ${witness.because}`);
-  const execution = fold.inbound.ofSource(source.event.eventId);
+  const execution = fold.inbound.ofSource(source.event.cid);
   if (execution === null) faults.push("in no input here");
   else if (execution.status.status !== "complete") faults.push(`its input is not established: ${execution.status.because}`);
   const kind = kindOf(source.event.data);
   if (kind !== "application") faults.push(`a control input selects no rotation: it is ${kind}`);
-  if (faults.length > 0) throw new Unusable("input", sourceEventId, faults);
+  if (faults.length > 0) throw new Unusable("input", sourceEventCid, faults);
 }
 
 /**
@@ -212,10 +212,10 @@ async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEnt
  */
 async function rotationRefusal(held: Held, runtime: VaultRuntime, keys: Keys, fold: VaultFold, drafts: readonly VaultDraft[]): Promise<string | null> {
   const at = new Date().toISOString();
-  const candidates: Event[] = drafts.map((draft) => ({ eventId: uuidv7() as EventId, at, author: runtime.author, type: draft.type, roots: draft.roots ?? [], data: draft.data }));
+  const candidates: Event[] = drafts.map((draft) => ({ cid: uuidv7() as EventCid, at, author: runtime.author, type: draft.type, roots: draft.roots ?? [], data: draft.data }));
   const set = VaultEventSet.of([...fold.set.all(), ...candidates]);
   const next = foldVault(set, await checkVault(set, keys, objectReader(held.objects)));
-  const decisionId = candidates[candidates.length - 1]!.eventId;
+  const decisionId = candidates[candidates.length - 1]!.cid;
   const decision = next.channels.decisions.get(decisionId)!;
   if (decision.status.status === "invalid" || decision.status.status === "conflict") return `the decision would be ${decision.status.status}: ${decision.status.because}`;
   const continuity = next.continuity.status(decisionId);
@@ -235,22 +235,22 @@ function conflictedChannels(conflicts: readonly Conflict[]): Map<string, Conflic
 }
 
 /** The state of a recorded decision's notification, for a rotation that reuses the decision: nothing is made or called for it here. */
-function recorded(fold: VaultFold, rotationEventId: EventId): Drafted {
+function recorded(fold: VaultFold, rotationEventCid: EventCid): Drafted {
   const effectType = ROTATION_NOTIFICATION_EFFECT;
-  const notification = fold.outbound.notificationFor(rotationEventId);
+  const notification = fold.outbound.notificationFor(rotationEventCid);
   if (notification.status === "selected") return { effectType, outcome: "existing", messageId: notification.messageId };
   if (notification.status === "conflict") return { effectType, outcome: "none", because: `${notification.messageIds.length} notification intents name the rotation` };
   return { effectType, outcome: "none", because: "the decision was recorded already: its missing notification is made by an explicit completion" };
 }
 
 /** The decision's one notification, reused as recorded or made now over the input that selected the decision, or over none under a fresh message ID. */
-async function settleNotification(held: Held, fold: VaultFold, rotationEventId: EventReference<"did.rotationSelected">, trace: AgentTrace | null): Promise<{ drafted: Drafted; executionId: ExecutionId | null }> {
+async function settleNotification(held: Held, fold: VaultFold, rotationEventCid: EventReference<"did.rotationSelected">, trace: AgentTrace | null): Promise<{ drafted: Drafted; executionId: ExecutionId | null }> {
   const effectType = ROTATION_NOTIFICATION_EFFECT;
-  const decision = fold.channels.decisions.get(rotationEventId as EventId);
-  if (decision === undefined) throw new UnknownEntity("rotation", rotationEventId);
-  const notification = fold.outbound.notificationFor(decision.event.eventId);
-  if (notification.status === "conflict") throw new NotificationConflict(rotationEventId, notification.messageIds);
-  const executionId = decision.event.data.sourceEventId === null ? null : (fold.inbound.ofSource(decision.event.data.sourceEventId as EventId)?.id ?? null);
+  const decision = fold.channels.decisions.get(rotationEventCid as EventCid);
+  if (decision === undefined) throw new UnknownEntity("rotation", rotationEventCid);
+  const notification = fold.outbound.notificationFor(decision.event.cid);
+  if (notification.status === "conflict") throw new NotificationConflict(rotationEventCid, notification.messageIds);
+  const executionId = decision.event.data.sourceEventCid === null ? null : (fold.inbound.ofSource(decision.event.data.sourceEventCid as EventCid)?.id ?? null);
   if (notification.status === "selected") return { drafted: { effectType, outcome: "existing", messageId: notification.messageId }, executionId };
   const selected = notificationChannel(fold, decision);
   if (selected.status === "none") return { drafted: { effectType, outcome: "none", because: selected.because }, executionId };
@@ -262,9 +262,9 @@ async function settleNotification(held: Held, fold: VaultFold, rotationEventId: 
   try {
     let objects;
     let draft;
-    if (source === null || execution === null) ({ draft, objects } = manualNotificationDraft(fold, messageId, channel, content, rotationEventId));
+    if (source === null || execution === null) ({ draft, objects } = manualNotificationDraft(fold, messageId, channel, content, rotationEventCid));
     else {
-      const automatic = automaticDraft(fold, { execution, source, effectType, channel, rotationEventId }, content);
+      const automatic = automaticDraft(fold, { execution, source, effectType, channel, rotationEventCid }, content);
       if (automatic.existing !== null) return { drafted: { effectType, outcome: "none", because: "the intent under the input's tuple names another rotation" }, executionId };
       ({ draft, objects } = automatic);
     }

@@ -17,7 +17,7 @@
 
 import type { Retained } from "@estoc/event-store";
 
-import type { Cid, EventId, MessageId } from "../types.js";
+import type { Cid, EventCid, MessageId } from "../types.js";
 import type { VaultEventSet } from "./set.js";
 
 /** The roots each message's erasures released, by message ID. */
@@ -52,15 +52,15 @@ const NONE: Released = new Set();
  */
 export function retainedRoots(set: VaultEventSet, erasures: Erasures = foldErasures(set), released: Released = NONE): Retained[] {
   const retained: Retained[] = [];
-  const retain = (eventId: EventId, root: Cid) => retained.push({ eventId, root });
-  for (const event of set.unapplied()) for (const root of event.roots) retain(event.eventId, root);
+  const retain = (cid: EventCid, root: Cid) => retained.push({ cid, root });
+  for (const event of set.unapplied()) for (const root of event.roots) retain(event.cid, root);
   for (const event of set.applied()) {
     if (event.type === "message.prepared" && released.has(event.data.messageId)) continue;
     if (event.type === "message.out" || event.type === "message.in" || event.type === "message.prepared") {
-      for (const root of event.roots) if (!erased(erasures, event.data.messageId, root)) retain(event.eventId, root);
-    } else for (const root of event.roots) retain(event.eventId, root);
+      for (const root of event.roots) if (!erased(erasures, event.data.messageId, root)) retain(event.cid, root);
+    } else for (const root of event.roots) retain(event.cid, root);
   }
-  return retained.sort((a, b) => cmp(a.eventId, b.eventId) || cmp(a.root, b.root));
+  return retained.sort((a, b) => cmp(a.cid, b.cid) || cmp(a.root, b.root));
 }
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);

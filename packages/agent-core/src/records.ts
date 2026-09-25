@@ -35,7 +35,7 @@ import {
   type DidId,
   type DisclosureUses,
   type EpochSeconds,
-  type EventId,
+  type EventCid,
   type Execution,
   type ExecutionId,
   type ExecutionStatus,
@@ -121,7 +121,7 @@ export interface MessageRecord {
  * waits for, and nothing it carries is shown as the peer's.
  */
 export interface UnplacedInput {
-  sourceEventId: EventId;
+  sourceEventCid: EventCid;
   messageId: MessageId;
   /** the pair its endpoints form; null while the local endpoint is unknown, and under contradicted evidence */
   channel: Channel | null;
@@ -179,7 +179,7 @@ export interface ContactRecord {
 }
 
 export interface InvitationRecord {
-  disclosureEventId: EventId;
+  disclosureEventCid: EventCid;
   oobId: string;
   didId: DidId;
   localDid: Did | null;
@@ -207,22 +207,22 @@ export interface OwedResponse {
 }
 
 export interface OwedNotification {
-  rotationEventId: EventId;
+  rotationEventCid: EventCid;
   channel: Channel;
-  sourceEventId: EventId | null;
+  sourceEventCid: EventCid | null;
   entries: ManualEntry[];
 }
 
 /** No entry: no retry may select among the intents that name one decision, and each of them shows the conflict as its outcome. */
 export interface ConflictingNotification {
-  rotationEventId: EventId;
+  rotationEventCid: EventCid;
   messageIds: MessageId[];
   entries: ManualEntry[];
 }
 
 /** No entry: a proof waits for issuer material only a repair or an import brings. */
 export interface WaitingProof {
-  sourceEventId: EventId;
+  sourceEventCid: EventCid;
   messageId: MessageId;
   channel: Channel | null;
   entries: ManualEntry[];
@@ -356,7 +356,7 @@ function canonicalOrNull(did: Did): Did | null {
 }
 
 function unplacedInputs(sources: readonly Source[]): UnplacedInput[] {
-  return sources.flatMap(({ event, channel, standing }) => (standing.status === "complete" ? [] : [{ sourceEventId: event.eventId, messageId: event.data.messageId, channel, at: event.at, standing: standing.status, because: standing.because }]));
+  return sources.flatMap(({ event, channel, standing }) => (standing.status === "complete" ? [] : [{ sourceEventCid: event.cid, messageId: event.data.messageId, channel, at: event.at, standing: standing.status, because: standing.because }]));
 }
 
 interface Context {
@@ -408,8 +408,8 @@ const INTEGRITY = "one author gave the receipt's ordinal to another observation"
 
 /** An output derived from a receipt in an integrity conflict takes no manual step. */
 function integrityHeld(fold: VaultFold, outbound: Outbound): boolean {
-  if (outbound.intent.status !== "consistent" || outbound.intent.data.sourceEventId === null) return false;
-  const source = fold.channels.sources.get(outbound.intent.data.sourceEventId);
+  if (outbound.intent.status !== "consistent" || outbound.intent.data.sourceEventCid === null) return false;
+  const source = fold.channels.sources.get(outbound.intent.data.sourceEventCid);
   return source !== undefined && fold.channels.receipts.affected.has(source.event.data.messageId);
 }
 
@@ -425,7 +425,7 @@ async function remoteErrors(context: Context): Promise<ReadonlyMap<MessageId, Di
   const executions = [...fold.inbound.executions.values()].filter((execution) => execution.kind === "error" && execution.status.status === "complete");
   for (const execution of executions.sort((a, b) => (a.messageId < b.messageId ? -1 : 1))) {
     const { source } = shown(execution).member;
-    const outbound = fold.outbound.inReplyTo(source.event.eventId);
+    const outbound = fold.outbound.inReplyTo(source.event.cid);
     if (outbound === null) continue;
     const body = await document(context, execution.erased, source.event.data.bodyCid);
     if (body.state !== "available") continue;
@@ -482,7 +482,7 @@ async function inboundRecord(context: Context, execution: Execution, contactIds:
     outcome: null,
     acknowledged: false,
     late: false,
-    verification: fold.continuity.status(member.source.event.eventId),
+    verification: fold.continuity.status(member.source.event.cid),
     manualAction: completes.length > 0 ? "complete" : "none",
     completes,
     diagnostics,
@@ -502,7 +502,7 @@ async function outboundRecord(context: Context, outbound: Outbound, channel: Cha
   const held = integrityHeld(fold, outbound);
   if (held) diagnostics.push({ kind: "receipt-integrity", because: INTEGRITY });
   diagnostics.push(...reports);
-  const rotationEventId = intent?.rotationEventId ?? null;
+  const rotationEventCid = intent?.rotationEventCid ?? null;
   return {
     messageId: outbound.messageId,
     direction: "out",
@@ -517,7 +517,7 @@ async function outboundRecord(context: Context, outbound: Outbound, channel: Cha
     outcome: outbound.outcome,
     acknowledged: outbound.acknowledged,
     late: outbound.late,
-    verification: rotationEventId === null ? { status: "not-present" } : fold.continuity.status(rotationEventId),
+    verification: rotationEventCid === null ? { status: "not-present" } : fold.continuity.status(rotationEventCid),
     manualAction: open && outbound.work.kind !== "none" && !outbound.erased && !held ? "retry" : "none",
     completes: [],
     diagnostics,
@@ -568,8 +568,8 @@ function contactRecord(view: ContactView, channels: ContactChannelRecord[]): Con
 }
 
 function invitationRecords(fold: VaultFold): InvitationRecord[] {
-  return [...fold.invitations.invitations].map(([disclosureEventId, invitation]) => ({
-    disclosureEventId,
+  return [...fold.invitations.invitations].map(([disclosureEventCid, invitation]) => ({
+    disclosureEventCid,
     oobId: invitation.oobId,
     didId: invitation.didId,
     localDid: invitation.localDid,
@@ -592,8 +592,8 @@ function pendingWork(fold: VaultFold, work: ReturnType<typeof unfinishedWork>, r
       channel,
       entries: fold.channels.receipts.affected.has(execution.messageId) ? [] : ["completeResponse"],
     })),
-    missingNotifications: work.notifications.map(({ decision, channel, source }) => ({ rotationEventId: decision.event.eventId, channel, sourceEventId: source?.event.eventId ?? null, entries: ["completeNotification"] })),
-    notificationConflicts: work.notificationConflicts.map(({ decision, notification }) => ({ rotationEventId: decision.event.eventId, messageIds: [...notification.messageIds], entries: [] })),
-    pendingProofs: work.proofs.map(({ source }) => ({ sourceEventId: source.event.eventId, messageId: source.event.data.messageId, channel: source.channel, entries: [] })),
+    missingNotifications: work.notifications.map(({ decision, channel, source }) => ({ rotationEventCid: decision.event.cid, channel, sourceEventCid: source?.event.cid ?? null, entries: ["completeNotification"] })),
+    notificationConflicts: work.notificationConflicts.map(({ decision, notification }) => ({ rotationEventCid: decision.event.cid, messageIds: [...notification.messageIds], entries: [] })),
+    pendingProofs: work.proofs.map(({ source }) => ({ sourceEventCid: source.event.cid, messageId: source.event.data.messageId, channel: source.channel, entries: [] })),
   };
 }

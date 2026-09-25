@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+The version-4 vault: events addressed by content.
+
+- **An event is its envelope's CID.** The envelope has five fields —
+  `at`, `author`, `type`, `roots`, `data` — and the API `Event` carries
+  them with `cid`, the raw DASL CID of their canonical bytes, which is
+  not among those bytes. `EventId` and `eventId` are gone, and with
+  them `mint`, `timestampOf` and the `uuid` generator for events; the
+  author is still a UUIDv7. `validateEnvelope`, `validateEvent` —
+  which requires `cid` to equal the envelope's — `envelopeOf`,
+  `eventCidOf`, `canonicalEnvelope`, `sampleAt` and `isEventCid` are
+  new. A draft has `type`, `data` and optional `roots`, nothing else.
+- **Equal envelopes are one event.** `append` and `appendAll` answer a
+  draft whose envelope is already held, or repeated in the batch, with
+  the event held: one row, one position, the same CID back for each
+  input. `ingest` counts it a duplicate. A CID for other bytes is
+  rejected before any duplicate check, held or not.
+- **No conflicts.** Two envelopes are two events or one; `Conflict`,
+  `Ingested.conflicts`, `Imported.conflicts`, `conflicting()`,
+  `clearConflicts()` and the `local_conflicts` table are removed.
+- **Canonical order is `(at, cid)`**, the CID compared as text, which
+  is not the order of its bytes; the author breaks no tie.
+- **`Filter.cid`**: exact equality, conjoined with the other filters,
+  refused as `InvalidEvent` when not a canonical raw CID.
+- **Verification boundaries.** Acceptance, `damaged()` and portable
+  validation hash every row against its CID; an ordinary scan or delta
+  checks the bytes against the columns and hands back the stored CID
+  without rehashing. A row the survey found damaged is left out of
+  every later read, over a portable snapshot as over a runtime.
+- **SQLite schema 2, vault version 4.** `events.cid` and
+  `event_positions.cid` replace `event_id`; `vault_meta.vault_version`
+  is 4; `user_version` is 2. Schema 1 and vault 3 are refused wherever
+  a database is opened, restored or imported: no migration. The
+  keystore wrapper stays version 3. `Retained` is `{ cid, root }`.
+- `appendAll`'s `publish` callback receives the count of new events, as
+  `ingest`'s does.
+
 ## 0.2.0 — 2026-09-20
 
 The version-3 vault, in place of the version-2 one.

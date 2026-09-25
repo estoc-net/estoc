@@ -30,9 +30,9 @@ export interface OpenCase extends Case {
 
 /** The rows and tables of a ready portable snapshot, in the empty database `db`. */
 export function fillPortable(db: SqliteDriver): void {
-  db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 1");
+  db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 2");
   createTables(db, "portable");
-  db.prepare("INSERT INTO vault_meta VALUES (1, 'estoc-sqlite', 3, 'portable', 1, ?)").run(ANCHOR);
+  db.prepare("INSERT INTO vault_meta VALUES (1, 'estoc-sqlite', 4, 'portable', 1, ?)").run(ANCHOR);
   db.prepare("INSERT INTO keystore VALUES (1, 3, ?)").run(new TextEncoder().encode(WRAPPED.seedJwe));
 }
 
@@ -171,7 +171,7 @@ export const openCases: OpenCase[] = [
   {
     name: "a table made WITHOUT ROWID is not the schema's, in either kind: refused before any write, the target released",
     run: async (h) => {
-      const ddl = "DROP TABLE events; CREATE TABLE events (event_id TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, author TEXT NOT NULL, type TEXT NOT NULL, canonical BLOB NOT NULL) STRICT, WITHOUT ROWID";
+      const ddl = "DROP TABLE events; CREATE TABLE events (cid TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, author TEXT NOT NULL, type TEXT NOT NULL, canonical BLOB NOT NULL) STRICT, WITHOUT ROWID";
       const expected = "table events is WITHOUT ROWID: a vault's tables keep their rowid";
       const target = h.fresh();
       const made = createRuntime(await h.open(target, "create"), { metadata: META, wrapped: WRAPPED });
@@ -194,7 +194,7 @@ export const openCases: OpenCase[] = [
     name: "a column that compares other than byte for byte is not the schema's, in either kind",
     run: async (h) => {
       const nocase = await snapshot(h, (db) =>
-        db.exec("DROP TABLE events; CREATE TABLE events (event_id TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, author TEXT NOT NULL, type TEXT COLLATE NOCASE NOT NULL, canonical BLOB NOT NULL) STRICT")
+        db.exec("DROP TABLE events; CREATE TABLE events (cid TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, author TEXT NOT NULL, type TEXT COLLATE NOCASE NOT NULL, canonical BLOB NOT NULL) STRICT")
       );
       const driver = await h.open(nocase, "readonly");
       const refused = assertThrows(() => openPortable(driver), "NotAVault", "NOCASE");
