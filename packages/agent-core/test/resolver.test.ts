@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import { MemoryVault, canonicalize, envelopeOf, eventCidOf, type AuthorId, type JsonObject } from "@estoc/event-store";
@@ -41,7 +41,7 @@ const failing = (err: unknown) => answering(() => Promise.reject(err));
 const coded = (code: string, message = code) => Object.assign(new Error(message), { code });
 
 describe("did:peer:4", () => {
-  it("a long form resolves from itself, to exactly what the vault retains", async () => {
+  test("a long form resolves from itself, to exactly what the vault retains", async () => {
     const mediator = await newMediator();
     const resolution = await resolved(mediator.did, none);
     const retained = peerResolution(mediator.did);
@@ -53,7 +53,7 @@ describe("did:peer:4", () => {
     expect([...authorizedKeys(resolution, "keyAgreement").keys()]).toEqual([`${mediator.did}#key-2`]);
   });
 
-  it("a short form resolves only through a long form in evidence, to the same document and CID under the short spelling", async () => {
+  test("a short form resolves only through a long form in evidence, to the same document and CID under the short spelling", async () => {
     const mediator = await newMediator();
     const shortForm = longToShort(mediator.did);
     expect(await resolve(shortForm, none)).toMatchObject({ outcome: "definitive", reason: expect.stringContaining("no long form") });
@@ -68,7 +68,7 @@ describe("did:peer:4", () => {
     await p.runtime.close();
   });
 
-  it("a long form whose document is not one, and every other did:peer, is definitive", async () => {
+  test("a long form whose document is not one, and every other did:peer, is definitive", async () => {
     const mediator = await newMediator();
     const tampered = mediator.did.slice(0, -1) + (mediator.did.endsWith("a") ? "b" : "a");
     expect(await resolve(tampered, none)).toMatchObject({ outcome: "definitive" });
@@ -77,7 +77,7 @@ describe("did:peer:4", () => {
     expect(await resolve("did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc", none)).toMatchObject({ outcome: "definitive", reason: expect.stringContaining("numalgo 4") });
   });
 
-  it("an invalid long form in evidence, however early it sorts, never stands in for the valid one beside it", async () => {
+  test("an invalid long form in evidence, however early it sorts, never stands in for the valid one beside it", async () => {
     const { runtime, keys } = await freshVault();
     const mediator = await newMediator(201);
     const good = mediator.did;
@@ -166,7 +166,7 @@ describe("did:web resolution", () => {
     expect(await resolve(BOB, none)).toMatchObject({ outcome: "definitive", reason: expect.stringContaining("no transport") });
   });
 
-  it("the document must call itself by the presented string, byte for byte: host case never folds two DIDs into one", async () => {
+  test("the document must call itself by the presented string, byte for byte: host case never folds two DIDs into one", async () => {
     const bob = await webIdentity(BOB);
     const Bob = await webIdentity("did:web:Bob.Example");
     const { fetch } = webFetch({ [BOB_URL]: () => json(bob.document) });
@@ -196,7 +196,7 @@ describe("did:web resolution", () => {
     expect(await resolve(BOB, none, { fetch: answering(() => json(padded)) })).toMatchObject({ outcome: "definitive", reason: expect.stringContaining("larger than") });
   });
 
-  it("a transport failure is final only by the transport's own code, found down the cause chain; the reason keeps the cause", async () => {
+  test("a transport failure is final only by the transport's own code, found down the cause chain; the reason keeps the cause", async () => {
     const refusal = "bob.example resolves to 10.0.0.7, not a public address";
     expect(await resolve(BOB, none, { fetch: failing(new TypeError("fetch failed", { cause: coded(DEFINITIVE_TRANSPORT_CODES.refused, refusal) })) })).toEqual({ outcome: "definitive", reason: `the transport refused the connection: fetch failed: ${refusal}` });
     expect(await resolve(BOB, none, { fetch: failing(coded("EBLOCKED", refusal)) })).toEqual({ outcome: "definitive", reason: `the transport refused the connection: ${refusal}` });
@@ -221,7 +221,7 @@ describe("did:web resolution", () => {
     expect(await resolve(BOB, none, { fetch: bodyFailing(coded("ECONNRESET")) })).toEqual({ outcome: "unavailable", reason: "the body did not arrive whole: ECONNRESET" });
   });
 
-  it("a body past the bound is definitive once it is past, whatever letting the stream go comes to", async () => {
+  test("a body past the bound is definitive once it is past, whatever letting the stream go comes to", async () => {
     const never = () => new Promise<never>(() => undefined);
     for (const cancel of [() => undefined, () => Promise.reject(new Error("cancel failed")), never]) {
       const oversize = answering(() => new Response(new ReadableStream({ start: (controller) => controller.enqueue(new Uint8Array(65)), cancel }), { status: 200 }));
@@ -229,7 +229,7 @@ describe("did:web resolution", () => {
     }
   });
 
-  it("one deadline covers the whole resolution, and the diagnostic neither holds the outcome nor overturns it", async () => {
+  test("one deadline covers the whole resolution, and the diagnostic neither holds the outcome nor overturns it", async () => {
     const bob = await webIdentity(BOB);
     const never = () => new Promise<never>(() => undefined);
     const timedOut = { outcome: "unavailable", reason: "timed out: not resolved within 20 ms" };
@@ -245,7 +245,7 @@ describe("did:web resolution", () => {
     expect((await resolve(BOB, none, { fetch, trace: stuck, timeoutMs: 20 })).outcome).toBe("resolved");
   });
 
-  it("a document that is not one is definitive, whatever a converter would make of it; a method of an unknown type is kept for where its key is used", async () => {
+  test("a document that is not one is definitive, whatever a converter would make of it; a method of an unknown type is kept for where its key is used", async () => {
     const bob = await webIdentity(BOB);
     const method = (d: JsonObject, i: number) => (d["verificationMethod"] as JsonObject[])[i] as JsonObject;
     const service = (d: JsonObject) => (d["service"] as JsonObject[])[0] as JsonObject;
@@ -324,7 +324,7 @@ describe("did:web resolution", () => {
     expect(didcommDocumentOf(resolution).verificationMethod.map((m) => m.id)).toEqual([`${BOB}#auth`, `${BOB}#agree`]);
   });
 
-  it("an encoded key is bounded before it is decoded: a document within the byte bound is still answered at once", async () => {
+  test("an encoded key is bounded before it is decoded: a document within the byte bound is still answered at once", async () => {
     const bob = await webIdentity(BOB);
     const long = "2".repeat(200_000);
     const short = "2".repeat(1023);
@@ -349,7 +349,7 @@ describe("did:web resolution", () => {
     }
   });
 
-  it("a key the vault reads must be one, in any encoding; a key of another kind is kept unread, and a multibase prefix is matched whole", async () => {
+  test("a key the vault reads must be one, in any encoding; a key of another kind is kept unread, and a multibase prefix is matched whole", async () => {
     const bob = await webIdentity(BOB);
     const agree = (structuredClone(bob.document)["verificationMethod"] as JsonObject[])[1] as JsonObject;
     const x25519 = canonicalPublicKey(agree["publicKeyJwk"] as JsonObject);
@@ -383,7 +383,7 @@ describe("did:web resolution", () => {
     expect(authorizedKeys(resolution, "authentication").get(`${BOB}#secp` as DidUrl)).toBe(canonicalPublicKey(SECP256K1_JWK));
   });
 
-  it("checking a document of many keys, each short, runs under the same deadline as the fetch", async () => {
+  test("checking a document of many keys, each short, runs under the same deadline as the fetch", async () => {
     const bob = await webIdentity(BOB);
     const key = multikey([0x82, 0x24], p521.getPublicKey(p521.utils.randomPrivateKey(), true));
     const document = structuredClone(bob.document);
@@ -394,7 +394,7 @@ describe("did:web resolution", () => {
     expect((await resolve(BOB, none, { fetch: answering(() => json(bob.document)), timeoutMs: 20 })).outcome).toBe("resolved");
   });
 
-  it("a type is looked up as a suite name and nothing else, whatever name it happens to share", async () => {
+  test("a type is looked up as a suite name and nothing else, whatever name it happens to share", async () => {
     const bob = await webIdentity(BOB);
     for (const type of ["constructor", "toString", "__proto__", "hasOwnProperty", "get", "size"]) {
       const document = structuredClone(bob.document);
@@ -409,7 +409,7 @@ describe("did:web resolution", () => {
     }
   });
 
-  it("a method left out of the projection takes every reference to it along, by identity, whatever form its ID takes; a reference into another document, which didcomm does not follow, goes too", async () => {
+  test("a method left out of the projection takes every reference to it along, by identity, whatever form its ID takes; a reference into another document, which didcomm does not follow, goes too", async () => {
     const bob = await webIdentity(BOB);
     const point = "034ee0f670fc96bb75e8b89c068a1665007a41c98513d6a911b6137e2d16f1d300";
     const elsewhere = "did:web:carol.example#agree";
@@ -431,7 +431,7 @@ describe("did:web resolution", () => {
     }
   });
 
-  it("what a published document carries beyond this agent's use is kept, its keys simply not selectable, and the document still seals", async () => {
+  test("what a published document carries beyond this agent's use is kept, its keys simply not selectable, and the document still seals", async () => {
     const bob = await webIdentity(BOB);
     const document = structuredClone(bob.document);
     const auth = (document["verificationMethod"] as JsonObject[])[0] as JsonObject;
@@ -455,7 +455,7 @@ describe("did:web resolution", () => {
     expect(opened.as_value().body).toEqual({ content: "hi" });
   });
 
-  it("a URI is one by RFC 3986, component by component, on the raw string", async () => {
+  test("a URI is one by RFC 3986, component by component, on the raw string", async () => {
     const bob = await webIdentity(BOB);
     const withEndpoint = (uri: string) => {
       const document = structuredClone(bob.document);
@@ -477,7 +477,7 @@ describe("did:web resolution", () => {
     }
   });
 
-  it("a policy refusal is definitive before any fetch; the loopback allowance is honoured", async () => {
+  test("a policy refusal is definitive before any fetch; the loopback allowance is honoured", async () => {
     const bob = await webIdentity("did:web:localhost%3A8080");
     const { fetch, calls } = webFetch({ "http://localhost:8080/.well-known/did.json": () => json(bob.document) });
     expect(await resolve("did:web:localhost%3A8080", none, { fetch })).toMatchObject({ outcome: "definitive", reason: expect.stringContaining("loopback") });
@@ -489,7 +489,7 @@ describe("did:web resolution", () => {
     expect(calls).toEqual(["http://localhost:8080/.well-known/did.json"]);
   });
 
-  it("every network resolution is a diag entry", async () => {
+  test("every network resolution is a diag entry", async () => {
     const { runtime, keys } = await freshVault();
     const trace = await AgentTrace.open(runtime.local);
     const bob = await webIdentity(BOB);

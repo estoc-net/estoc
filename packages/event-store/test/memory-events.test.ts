@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { BadToken, MemoryEventStore, type Event } from "../src/index.js";
 import { eventStoreSuite, type OpenOptions } from "./suite/event-store-suite.js";
@@ -35,7 +35,7 @@ describe("MemoryEventStore", () => {
     expect(Object.isFrozen(ingested?.data["nested"])).toBe(true);
   });
 
-  it("a token names one generation, one position and the event accepted before it; a forged position, a wrong prefix or another store's token is refused", async () => {
+  test("a token names one generation, one position and the event accepted before it; a forged position, a wrong prefix or another store's token is refused", async () => {
     const c = clock("2026-09-06T10:00:00.000Z");
     const store = new MemoryEventStore({ author: authorN(1), now: c.now });
     const one = await store.append({ type: "t", data: {} });
@@ -59,7 +59,7 @@ describe("MemoryEventStore", () => {
     expect(await all((await store.changes(undefined, forge({ seq: 0, last: null }))).events)).toEqual([one]);
   });
 
-  it("ingest reads its input outside the lock and classifies inside it: a write that lands while it reads is seen", async () => {
+  test("ingest reads its input outside the lock and classifies inside it: a write that lands while it reads is seen", async () => {
     const c = clock("2026-09-06T10:00:00.000Z");
     const store = new MemoryEventStore({ author: authorN(1), now: c.now });
     const [a, b] = await new MemoryEventStore({ author: authorN(2), now: c.now }).appendAll([{ type: "t", data: { v: "a" } }, { type: "t", data: { v: "b" } }]);
@@ -82,7 +82,7 @@ describe("MemoryEventStore", () => {
     expect(await all(store.scan())).toEqual([a, b].sort((x, y) => (x!.cid < y!.cid ? -1 : 1)));
   });
 
-  it("scan walks a snapshot: an append during the walk is not yielded, and a later scan has it", async () => {
+  test("scan walks a snapshot: an append during the walk is not yielded, and a later scan has it", async () => {
     const c = clock("2026-09-06T10:00:00.000Z");
     const store = new MemoryEventStore({ now: c.now });
     await store.append({ type: "t", data: { n: 1 } });

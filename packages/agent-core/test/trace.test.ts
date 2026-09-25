@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { AgentTrace, TRACE_OPTION } from "../src/index.js";
 import { freshVault } from "./helpers.js";
@@ -29,7 +29,7 @@ describe("the trace over the runtime's local state", () => {
     await runtime.close();
   });
 
-  it("traceOf follows the onion of one message and leaves the other envelopes of the frame alone", async () => {
+  test("traceOf follows the onion of one message and leaves the other envelopes of the frame alone", async () => {
     const { runtime } = await freshVault();
     const trace = new AgentTrace(runtime.local, { level: "verbose" });
     const frame = await trace.append("wire", "in", { via: "ws" });
@@ -45,7 +45,7 @@ describe("the trace over the runtime's local state", () => {
     await runtime.close();
   });
 
-  it("a request that names the message starts its onion too: what hangs on it comes along, and a request for another message stays out", async () => {
+  test("a request that names the message starts its onion too: what hangs on it comes along, and a request for another message stays out", async () => {
     const { runtime } = await freshVault();
     const trace = new AgentTrace(runtime.local, { level: "verbose" });
     const out = await trace.append("wire", "out", { via: "http", messageId: "M" });

@@ -1,5 +1,5 @@
 import { SignJWT, importJWK } from "jose";
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { encodeLongForm, type DIDDoc } from "@estoc/did-peer";
 import { InvalidDidDocument, anonymousMessageId, canonicalDidOf, didKeyName, inboundMessageId, readPlaintext, scanVault, signFromPrior, vaultDraft, type DidId, type EventCid, type MediationId, type VaultEvent, type VaultEventType, type VaultFold, type WireMessageId } from "@estoc/vault";
@@ -77,7 +77,7 @@ async function rawEventsOf(holder: Fresh, ...types: string[]): Promise<unknown[]
 const ATTACHMENT = { id: "a1", media_type: "text/plain", data: { base64: "aGVsbG8gZmlsZQ==" } };
 
 describe("the receipt", () => {
-  it("a first message from a peer commits its resolution and then the observation naming it by the ID the commit returned, with its content held as objects; the fold places it in its channel; the next message reuses the resolution and takes the next ordinal", async () => {
+  test("a first message from a peer commits its resolution and then the observation naming it by the ID the commit returned, with its content held as objects; the fold places it in its channel; the next message reuses the resolution and takes the next ordinal", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const { receiver, seen } = await receiving(alice, { trace });
@@ -133,7 +133,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob);
   });
 
-  it("the recipient is the key that opened the envelope, whatever the plaintext says of its audience: a message whose `to` names someone else and one with no `to` are recorded in the channel of the key that opened them", async () => {
+  test("the recipient is the key that opened the envelope, whatever the plaintext says of its audience: a message whose `to` names someone else and one with no `to` are recorded in the channel of the key that opened them", async () => {
     const { alice, bob } = await parties();
     const carol = await directParty(3, CAROL_ENDPOINT, CAROL);
     const { receiver, seen } = await receiving(alice);
@@ -158,7 +158,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob, carol);
   });
 
-  it("a message delivered again is another observation of the same input under its own ordinal, live for the first alone, whichever receiver records the others: one execution, no second resolution; the same wire ID with other content is recorded, refused admission and listed as the contradiction it is", async () => {
+  test("a message delivered again is another observation of the same input under its own ordinal, live for the first alone, whichever receiver records the others: one execution, no second resolution; the same wire ID with other content is recorded, refused admission and listed as the contradiction it is", async () => {
     const { alice, bob } = await parties();
     const sealer = await peerSealer(bob);
     const wire = crypto.randomUUID();
@@ -190,7 +190,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob);
   });
 
-  it("an anonymous message is recorded with no resolution, under the ID its local key derives, and the fold lists it as anonymous; one carrying a from_prior is terminal, since nothing authenticates whom the proof is about", async () => {
+  test("an anonymous message is recorded with no resolution, under the ID its local key derives, and the fold lists it as anonymous; one carrying a from_prior is terminal, since nothing authenticates whom the proof is about", async () => {
     const { alice, bob } = await parties();
     const { receiver, seen } = await receiving(alice);
     const wire = crypto.randomUUID();
@@ -208,7 +208,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob);
   });
 
-  it("a carried proof is kept as the string it came as, one that verifies and one that is no JWT alike: the fold judges it, the receipt does not", async () => {
+  test("a carried proof is kept as the string it came as, one that verifies and one that is no JWT alike: the fold judges it, the receipt does not", async () => {
     const { alice, bob } = await parties();
     const { receiver } = await receiving(alice);
     const routeId = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
@@ -232,7 +232,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob);
   });
 
-  it("a proof whose hash-valid issuer the vault could never retain a document for is received, recorded and judged by the fold like any other, and stops neither the scan nor the next message", async () => {
+  test("a proof whose hash-valid issuer the vault could never retain a document for is received, recorded and judged by the fold like any other, and stops neither the scan nor the next message", async () => {
     const { alice, bob } = await parties();
     const { receiver } = await receiving(alice);
     const routeId = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
@@ -270,7 +270,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob);
   });
 
-  it("the receipt admits the observation before the lock is released, judged among every other in first-receipt order: a message from the address the peer has since left is recorded and ignored, and deliveries recorded at once each have their admission decided before the next is recorded", async () => {
+  test("the receipt admits the observation before the lock is released, judged among every other in first-receipt order: a message from the address the peer has since left is recorded and ignored, and deliveries recorded at once each have their admission decided before the next is recorded", async () => {
     const { alice, bob } = await parties();
     const { receiver } = await receiving(alice);
     const routeId = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
@@ -298,7 +298,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob);
   });
 
-  it("a plaintext the vault does not record is terminal with nothing committed: a return_route header, a body that is not an object, content past what a message may carry, and a delivery ID the record cannot carry", async () => {
+  test("a plaintext the vault does not record is terminal with nothing committed: a return_route header, a body that is not an object, content past what a message may carry, and a delivery ID the record cannot carry", async () => {
     const { alice, bob } = await parties();
     const plain = await authenticated(alice, bob);
     const withPlaintext = (patch: Record<string, unknown>): Authenticated => ({ ...plain, plaintext: { ...plain.plaintext, ...patch } as IMessage });
@@ -314,7 +314,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob);
   });
 
-  it("the receipt checks the recipient again under the lock: one still recovering defers the record with a watch that says something else once it can receive, and a route retired since the gate refuses it", async () => {
+  test("the receipt checks the recipient again under the lock: one still recovering defers the record with a watch that says something else once it can receive, and a route retired since the gate refuses it", async () => {
     const { alice, bob } = await parties();
     const plain = await authenticated(alice, bob);
     const copy = await freshVault(1, "copy");
@@ -335,7 +335,7 @@ describe("the receipt", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("over a pickup, the observation records where it arrived and is acknowledged once recorded: a record the disk refuses leaves the delivery queued, and the retry records it once, reusing the resolution the refused attempt committed", async () => {
+  test("over a pickup, the observation records where it arrived and is acknowledged once recorded: a record the disk refuses leaves the delivery queued, and the retry records it once, reusing the resolution the refused attempt committed", async () => {
     const mediator = await newMediator();
     const p = await mediatedParty(mediator, 1, DID);
     await reloaded(p);

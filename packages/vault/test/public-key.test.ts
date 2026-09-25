@@ -1,5 +1,5 @@
 import { base58, base64urlnopad } from "@scure/base";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { InvalidPublicKey, agreementKey, canonicalPublicKey, decodePublicKey, parsePublicKey, type PublicKey } from "../src/index.js";
 
@@ -76,7 +76,7 @@ describe("canonicalPublicKey", () => {
   });
 
   for (const curve of CURVES) {
-    it(`${curve.crv}: a point is its compressed form, from a JWK or from either multibase encoding`, () => {
+    test(`${curve.crv}: a point is its compressed form, from a JWK or from either multibase encoding`, () => {
       for (const point of [curve.g, curve.g3]) {
         const canonical = multibase(curve.code, compressed(point));
         expect(canonicalPublicKey({ kty: "EC", crv: curve.crv, x: b64(hex(point.x)), y: b64(hex(point.y)) })).toBe(canonical);

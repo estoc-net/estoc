@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, test } from "vitest";
 
 import { openNodeSqlite } from "../../src/node.js";
 import {
@@ -109,7 +109,7 @@ eventStoreSuite("SqliteEventStore on a file", eventStoreOpener({ fresh, open }))
 
 describe("the event cases on node:sqlite files", () => {
   for (const c of eventCases) {
-    it(c.name, async () => {
+    test(c.name, async () => {
       const note = await c.run({ fresh, open: async (target, mode) => open(target, mode) });
       if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
     });
@@ -158,7 +158,7 @@ describe("SqliteEventStore", () => {
     db.close();
   });
 
-  it("a token is this generation and the position accepted last; it survives a reopen, and a position past the last is refused", async () => {
+  test("a token is this generation and the position accepted last; it survives a reopen, and a position past the last is refused", async () => {
     const c = clock(T0);
     const file = fresh();
     const made = create(file, { author: authorN(1), now: c.now });
@@ -181,7 +181,7 @@ describe("SqliteEventStore", () => {
     again.db.close();
   });
 
-  it("what a reopen finds is what was accepted: the events under their CIDs, their positions, and the same author", async () => {
+  test("what a reopen finds is what was accepted: the events under their CIDs, their positions, and the same author", async () => {
     const c = clock(T0);
     const file = fresh();
     const made = create(file, { author: authorN(1), now: c.now });
@@ -203,7 +203,7 @@ describe("SqliteEventStore", () => {
     again.db.close();
   });
 
-  it("a fork found while classifying leaves nothing behind: no event, no position", async () => {
+  test("a fork found while classifying leaves nothing behind: no event, no position", async () => {
     const c = clock(T0);
     const { db, store } = create(":memory:", { author: authorN(1), now: c.now });
     await store.append({ type: "t", data: { n: 1 } });
@@ -217,7 +217,7 @@ describe("SqliteEventStore", () => {
     db.close();
   });
 
-  it("publish runs inside the batch's transaction with the count of new events: what it writes lands with them, and a throw from it rolls everything back", async () => {
+  test("publish runs inside the batch's transaction with the count of new events: what it writes lands with them, and a throw from it rolls everything back", async () => {
     const c = clock(T0);
     const { db, store } = create(":memory:", { author: authorN(1), now: c.now });
     db.driver.exec("CREATE TABLE local_marks (mark TEXT PRIMARY KEY) STRICT");
@@ -250,7 +250,7 @@ describe("SqliteEventStore", () => {
     db.close();
   });
 
-  it("a row that no longer decodes to the event its columns name is damage: reported with its place and bytes, left out of every scan and delta, and the rest still read", async () => {
+  test("a row that no longer decodes to the event its columns name is damage: reported with its place and bytes, left out of every scan and delta, and the rest still read", async () => {
     const c = clock(T0);
     const { db, store } = create(":memory:", { author: authorN(1), now: c.now });
     const events = await store.appendAll(Array.from({ length: 8 }, (_, i) => ({ type: "t", data: { n: i } })));
@@ -287,7 +287,7 @@ describe("SqliteEventStore", () => {
     db.close();
   });
 
-  it("an ordinary read checks the bytes against the columns without hashing them; the survey hashes, and what it finds is then left out of every read", async () => {
+  test("an ordinary read checks the bytes against the columns without hashing them; the survey hashes, and what it finds is then left out of every read", async () => {
     const c = clock(T0);
     const file = fresh();
     const made = create(file, { author: authorN(1), now: c.now });
@@ -312,7 +312,7 @@ describe("SqliteEventStore", () => {
     third.db.close();
   });
 
-  it("a row whose CID column holds a NUL is damage named by its rowid, the column being no name", async () => {
+  test("a row whose CID column holds a NUL is damage named by its rowid, the column being no name", async () => {
     const { db, store } = create(":memory:");
     const event = await store.append({ type: "t", data: {} });
     db.driver.exec("PRAGMA foreign_keys = OFF");
@@ -324,7 +324,7 @@ describe("SqliteEventStore", () => {
     db.close();
   });
 
-  it("an inspector's store scans, follows changes and lists damage, and refuses every write before reading a source", async () => {
+  test("an inspector's store scans, follows changes and lists damage, and refuses every write before reading a source", async () => {
     const c = clock(T0);
     const file = fresh();
     const made = create(file, { author: authorN(1), now: c.now });
@@ -384,7 +384,7 @@ describe("SqliteEventStore", () => {
     db.close();
   });
 
-  it("a process that dies inside its transaction leaves the whole batch or none; one that committed leaves it whole", async () => {
+  test("a process that dies inside its transaction leaves the whole batch or none; one that committed leaves it whole", async () => {
     const c = clock(T0);
     const file = fresh();
     const made = create(file, { author: authorN(1), now: c.now });

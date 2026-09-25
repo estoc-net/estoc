@@ -1,5 +1,5 @@
 import { v7 as uuidv7 } from "uuid";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import {
   EMPTY_MESSAGE_TYPE,
@@ -130,7 +130,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("an output a transport refused is shown prepared with a retry, which carries it; a cancelled one is terminal with nothing left to do", async () => {
+  test("an output a transport refused is shown prepared with a retry, which carries it; a cancelled one is terminal with nothing left to do", async () => {
     const { alice, bob } = await parties();
     let answer = refused;
     const { wire, dispatcher, manual, channel } = await hosting(alice, () => answer());
@@ -154,7 +154,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("a claimed name stays beside the exact channel it came by and goes with its body; a profile counts as shared only once a transport accepted it there", async () => {
+  test("a claimed name stays beside the exact channel it came by and goes with its body; a profile counts as shared only once a transport accepted it there", async () => {
     const { alice, bob } = await parties();
     let answer = refused;
     const { manual, receive, channel } = await hosting(alice, () => answer());
@@ -184,7 +184,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("a profile a transport accepted stays the channel's submitted one once its content is erased, while another message of the same content keeps its body", async () => {
+  test("a profile a transport accepted stays the channel's submitted one once its content is erased, while another message of the same content keeps its body", async () => {
     const { alice, bob } = await parties();
     const { dispatcher, manual, channel } = await hosting(alice);
     const pair = { localDid: alice.did, peerDid: bob.did };
@@ -203,7 +203,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("an observation whose sender evidence is not here is shown unplaced in its pair with what it waits for, and as the one input once the evidence arrives", async () => {
+  test("an observation whose sender evidence is not here is shown unplaced in its pair with what it waits for, and as the one input once the evidence arrives", async () => {
     const { alice, bob } = await parties();
     const { receive } = await hosting(alice);
     const pair = { localDid: alice.did, peerDid: bob.did };
@@ -227,7 +227,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("an output whose intents disagree stays in the pair they all name, with no content and no retry; when they name different pairs it is listed beside the channels with each", async () => {
+  test("an output whose intents disagree stays in the pair they all name, with no content and no retry; when they name different pairs it is listed beside the channels with each", async () => {
     const { alice, bob } = await parties();
     const charlie = await directParty(3, "https://charlie.example/didcomm", CHARLIE);
     const pair = { localDid: alice.did, peerDid: bob.did };
@@ -252,7 +252,7 @@ describe("records", () => {
     await closeAll(alice, bob, charlie);
   });
 
-  it("a reply a registered handler's operation still owes an input is listed like the vault's own, and gone once its completion gives it", async () => {
+  test("a reply a registered handler's operation still owes an input is listed like the vault's own, and gone once its completion gives it", async () => {
     const REQUEST = "https://example.org/echo/1.0/request";
     const ECHO = "https://example.org/echo/1.0/response";
     const echo: Handler = {
@@ -280,7 +280,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("an erased input still lists a registered handler's reply, which its headers may decide, until the completion gives it; an erased Ping lists no built-in reply", async () => {
+  test("an erased input still lists a registered handler's reply, which its headers may decide, until the completion gives it; an erased Ping lists no built-in reply", async () => {
     const NOTICE = "https://example.org/notice/1.0/notice";
     const NOTED = "https://example.org/notice/1.0/noted";
     let asked = 0;
@@ -309,7 +309,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("a problem report is a diagnostic of the output its thread names only from that output's peer, and goes with the report's body", async () => {
+  test("a problem report is a diagnostic of the output its thread names only from that output's peer, and goes with the report's body", async () => {
     const { alice, bob } = await parties();
     const charlie = await directParty(3, "https://charlie.example/didcomm", CHARLIE);
     const { dispatcher, manual, receive, channel } = await hosting(alice);
@@ -338,7 +338,7 @@ describe("records", () => {
     expect(reportedProblem({ comment: 7 })).toBe("unknown");
   });
 
-  it("a receipt-integrity conflict is a diagnostic of the inputs it touches and admits neither: no manual action, no reply owed", async () => {
+  test("a receipt-integrity conflict is a diagnostic of the inputs it touches and admits neither: no manual action, no reply owed", async () => {
     const { alice, bob } = await parties();
     const pair = { localDid: alice.did, peerDid: bob.did };
     await received(alice, bob, crypto.randomUUID(), { type: PING_TYPE, body: { response_requested: true }, created_time: CREATED });
@@ -352,7 +352,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("a manual rotation is notified under its decision; a second notification of it is a conflict no entry resolves", async () => {
+  test("a manual rotation is notified under its decision; a second notification of it is a conflict no entry resolves", async () => {
     const { alice, bob } = await parties();
     const { wire, manual, receive, channel } = await hosting(alice);
     await receive(bob, { id: crypto.randomUUID(), body: { content: "hi" } });
@@ -376,7 +376,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  it("a contact shows its selected channels, then the history verified continuity reaches, with where a send goes; deleting and blocking through the manual entries changes what is shown and nothing a message says", async () => {
+  test("a contact shows its selected channels, then the history verified continuity reaches, with where a send goes; deleting and blocking through the manual entries changes what is shown and nothing a message says", async () => {
     const { alice, bob } = await parties();
     const { manual, receive } = await hosting(alice);
     const pair = { localDid: alice.did, peerDid: bob.did };

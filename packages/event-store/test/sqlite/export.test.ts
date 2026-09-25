@@ -9,7 +9,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, test } from "vitest";
 
 import { openNodeSqlite } from "../../src/node.js";
 import {
@@ -78,7 +78,7 @@ describe("the export cases on node:sqlite files", () => {
     memoryUsed: heldOnNode,
   };
   for (const c of exportCases) {
-    it(
+    test(
       c.name,
       async () => {
         const note = await c.run(harness);
@@ -153,7 +153,7 @@ describe("exportVault on a path", () => {
     await vault.close();
   });
 
-  it("a snapshot torn under its schema is refused: by the open where SQLite cannot read it, else by validation", async () => {
+  test("a snapshot torn under its schema is refused: by the open where SQLite cannot read it, else by validation", async () => {
     const vault = new SqliteVault(createRuntime(open(fresh(), "create"), { metadata: META, wrapped: WRAPPED }));
     await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     const target = fresh();

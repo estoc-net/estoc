@@ -2,7 +2,7 @@ import type { Event } from "@estoc/event-store";
 import { base64urlnopad } from "@scure/base";
 import { SignJWT, importJWK } from "jose";
 import { v7 as uuidv7 } from "uuid";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import {
   AUTHENTICATION_METHOD,
@@ -187,7 +187,7 @@ describe("a channel", () => {
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
-  it("a decision is confirmed by its own source, which does not depend on the decision", async () => {
+  test("a decision is confirmed by its own source, which does not depend on the decision", async () => {
     const { scene, keys, a0, a1, b0 } = await vaults();
     const source = proofFreeReceipt(scene, a0, b0, 1);
     const sourced = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source });
@@ -308,7 +308,7 @@ describe("a join", () => {
 });
 
 describe("conflicts", () => {
-  it("competing peer successors in one local-only context, straight from one pair or across a local link, mask every channel involved and choose no winner", async () => {
+  test("competing peer successors in one local-only context, straight from one pair or across a local link, mask every channel involved and choose no winner", async () => {
     const direct = await vaults();
     const one = await receiptCarryingProof(direct.scene, direct.peerKeys, direct.a0, direct.b0, direct.b1, 1);
     const two = await receiptCarryingProof(direct.scene, direct.peerKeys, direct.a0, direct.b0, direct.b2, 2);
@@ -343,7 +343,7 @@ describe("conflicts", () => {
     expectSameOverEveryOrder(across.scene, vault.checks);
   });
 
-  it("a cycle of replacements grants nothing, and a join that would pair a DID with itself is refused as an identity collision", async () => {
+  test("a cycle of replacements grants nothing, and a join that would pair a DID with itself is refused as an identity collision", async () => {
     const { scene, keys, peerKeys, a0, a1, b0, b1 } = await vaults();
     const forth = await receiptCarryingProof(scene, peerKeys, a0, b0, b1, 1);
     const back = await receiptCarryingProof(scene, peerKeys, a0, b1, b0, 2);
@@ -678,7 +678,7 @@ describe("status and witness", () => {
     expect(restored.continuity.facts).toEqual(byId([observation(proofFree, a0, b0), ...factsOf(pendingHistory, a0, b0, b1), ...factsOf(verified, a0, b0, b1)]));
   });
 
-  it("without the checks beside the fold, every link waits and no channel is replaced", async () => {
+  test("without the checks beside the fold, every link waits and no channel is replaced", async () => {
     const { scene, keys, peerKeys, a0, a1, b0, b1 } = await vaults();
     const source = proofFreeReceipt(scene, a0, b0, 1);
     const decision = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { base64url } from "jose";
 import {
@@ -28,7 +28,7 @@ describe("seed derivation", () => {
     expect(base64url.encode(a.signer.x25519PublicKey())).toBe("9PnyyHRLj01yHn0P804bi6YjXxZ6rPUvYqw30wtiqyo");
   });
 
-  it("different names give unrelated keys; Ed25519 and X25519 halves are independent", async () => {
+  test("different names give unrelated keys; Ed25519 and X25519 halves are independent", async () => {
     const seedKey = await importSeed(FIXED_SEED);
     const [a, b] = await Promise.all([
       deriveIdentity(seedKey, "pair/c1/0198a"),
@@ -42,7 +42,7 @@ describe("seed derivation", () => {
     expect(base64url.decode(jwks.ed25519.d!)).not.toEqual(base64url.decode(jwks.x25519.d!));
   });
 
-  it("signer signs and does ECDH consistently with its published keys", async () => {
+  test("signer signs and does ECDH consistently with its published keys", async () => {
     const identity = await deriveIdentity(await importSeed(FIXED_SEED), "mediation/m1/me");
     const message = new TextEncoder().encode("estoc");
     const sig = await identity.signer.sign(message);
@@ -55,7 +55,7 @@ describe("seed derivation", () => {
     expect(shared).toEqual(x25519.getSharedSecret(theirPriv, identity.signer.x25519PublicKey()));
   });
 
-  it("the imported seed key is non-extractable", async () => {
+  test("the imported seed key is non-extractable", async () => {
     const seedKey = await importSeed(generateSeed());
     expect(seedKey.extractable).toBe(false);
     await expect(crypto.subtle.exportKey("raw", seedKey)).rejects.toThrow();
@@ -75,7 +75,7 @@ describe("seed derivation", () => {
 });
 
 describe("seed keystore", () => {
-  it("create → serialize → parse → unlock round-trips to the same keys", async () => {
+  test("create → serialize → parse → unlock round-trips to the same keys", async () => {
     const { doc, seedKey } = await createSeedKeystore("hunter2", { seed: FIXED_SEED });
     expect(doc).toEqual({ version: 3, seedJwe: expect.any(String) });
     const identity = await deriveIdentity(seedKey, "anchor");
@@ -96,13 +96,13 @@ describe("seed keystore", () => {
     expect((await deriveIdentity(unlocked, "anchor")).did).toBe((await deriveIdentity(seedKey, "anchor")).did);
   });
 
-  it("another seed derives another key under the same name", async () => {
+  test("another seed derives another key under the same name", async () => {
     const { seedKey } = await createSeedKeystore("pw", { seed: FIXED_SEED });
     const other = await importSeed(generateSeed());
     expect((await deriveIdentity(other, "anchor")).did).not.toBe((await deriveIdentity(seedKey, "anchor")).did);
   });
 
-  it("parser validates structure, keeps unknown fields, and refuses other versions and listed keys", async () => {
+  test("parser validates structure, keeps unknown fields, and refuses other versions and listed keys", async () => {
     const { doc } = await createSeedKeystore("pw");
     expect(() => parseSeedKeystore("nope")).toThrow(/valid JSON/);
     expect(() => parseSeedKeystore('"str"')).toThrow(/JSON object/);

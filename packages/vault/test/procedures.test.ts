@@ -1,7 +1,7 @@
 import { MemoryVault, type Held } from "@estoc/event-store";
 import { importSeed } from "@estoc/keystore";
 import { SignJWT, importJWK } from "jose";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { v7 as uuidv7 } from "uuid";
 
 import {
@@ -93,7 +93,7 @@ describe("erasing a message", () => {
     expect((await eraseMessage(vault, keys, uuidv7() as MessageId)).events).toEqual([]);
   });
 
-  it("the closure erases what an event learned later names under the same message, with the first erasure's reason", async () => {
+  test("the closure erases what an event learned later names under the same message, with the first erasure's reason", async () => {
     const { scene, keys, a0, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
     const first = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1 });

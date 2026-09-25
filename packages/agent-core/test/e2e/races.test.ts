@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import { channelKey, type DidId, type MessageId } from "@estoc/vault";
 
@@ -18,7 +18,7 @@ afterEach(stopAll);
 const hello = (content: string) => ({ type: BASIC_MESSAGE, body: { content } });
 
 describe("first messages that race", () => {
-  it("two peers answer one one-use invitation: the first received consumes it, the other is an input all the same, and each peer is given a private successor of its own", { timeout: LONG }, async () => {
+  test("two peers answer one one-use invitation: the first received consumes it, the other is an input all the same, and each peer is given a private successor of its own", { timeout: LONG }, async () => {
     const mediator = await newMediator();
     const alice = await run(mediator, 1, ALICE, { liveDelivery: false });
     const bob = await run(mediator, 2, BOB);
@@ -67,7 +67,7 @@ describe("first messages that race", () => {
     }
   });
 
-  it("each side writes first to the other at once: both end with the one channel of the pair, each message an established input acknowledged to its sender", { timeout: LONG }, async () => {
+  test("each side writes first to the other at once: both end with the one channel of the pair, each message an established input acknowledged to its sender", { timeout: LONG }, async () => {
     const mediator = await newMediator();
     const alice = await run(mediator, 1, ALICE, { liveDelivery: false });
     const bob = await run(mediator, 2, BOB, { liveDelivery: false });

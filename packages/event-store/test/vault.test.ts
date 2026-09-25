@@ -6,7 +6,7 @@
  * its backend is in `vaultSuite`, which the SQLite vault runs too.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { DigestMismatch, MemoryEventStore, MemoryObjectStore, MemoryVault, NotAVault, Runtime, UnsupportedOperation, WriterLock, type Cid, type Draft, type Stores, type VaultMetadata } from "../src/index.js";
 import { META, WRAPPED, all, authorN } from "./suite/helpers.js";
@@ -114,7 +114,7 @@ describe("Runtime", () => {
 });
 
 describe("Runtime guard", () => {
-  it("a runtime halted after an operation ended: the facade refuses through its guard, and the operation's views refuse on their own, asking the guard nothing", async () => {
+  test("a runtime halted after an operation ended: the facade refuses through its guard, and the operation's views refuse on their own, asking the guard nothing", async () => {
     const events = new MemoryEventStore({ author: authorN(1) });
     const objects = new MemoryObjectStore();
     let halted = false;
@@ -159,7 +159,7 @@ describe("Runtime guard", () => {
 });
 
 describe("MemoryVault keystore", () => {
-  it("a vault given no wrapped seed refuses to read one, and one given a bad wrapper refuses to be made", async () => {
+  test("a vault given no wrapped seed refuses to read one, and one given a bad wrapper refuses to be made", async () => {
     await expect(new MemoryVault({ metadata: META }).keystore.read()).rejects.toThrow(NotAVault);
     expect(() => new MemoryVault({ metadata: META, wrapped: { version: 3, seedJwe: "nope" } })).toThrow(NotAVault);
   });

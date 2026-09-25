@@ -1,7 +1,7 @@
 import { canonicalize, type JsonObject } from "@estoc/event-store";
 import { sha256 } from "@noble/hashes/sha2";
 import { base58, base64urlnopad } from "@scure/base";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { InvalidDidDocument, VaultEventSet, authorizedMethodIds, canonicalPublicKey, didKeyName, foldVaultChecked, methodPublicKey, rawCidOfBytes, resolvedDocumentOf, verifyResolutions, type Cid, type Did, type EventCid, type EvidenceCheck, type Keys } from "../../src/index.js";
 import { PEER_ID0, PEER_ID3, noObjects, peerAgreeingOn, resolved, vaults, type Peer } from "./scene.js";
@@ -90,7 +90,7 @@ describe("verifyResolutions", () => {
     expect(checks.get(genuine.cid)).toBe("verified");
   });
 
-  it("a numalgo-4 document read back must be what its long form derives: another key's document under this DID's id is no snapshot of it", async () => {
+  test("a numalgo-4 document read back must be what its long form derives: another key's document under this DID's id is no snapshot of it", async () => {
     const { scene, a0, b0, b2 } = await vaults();
     const forgedDocument = { ...b2.resolution.document, id: b0.longFormDid, alsoKnownAs: [b0.did] };
     const forgedBytes = canonicalize(forgedDocument);
@@ -124,7 +124,7 @@ describe("verifyResolutions", () => {
     await expect(foldVaultChecked(set, null, noObjects)).resolves.toBeDefined();
   });
 
-  it("a snapshot whose presented spelling is not the canonical DID's — another short form, did:web in another case — is not its document's, whatever document it names", async () => {
+  test("a snapshot whose presented spelling is not the canonical DID's — another short form, did:web in another case — is not its document's, whatever document it names", async () => {
     const { scene, peerKeys, a0, b0, b2 } = await vaults();
     const objects = new Map([[b0.resolution.cid, b0.resolution.bytes]]);
     const misspelt = resolved(scene, a0.didId, b0, { presentedDid: b2.did });
@@ -138,7 +138,7 @@ describe("verifyResolutions", () => {
     expect(checks.get(exact.cid)).toBe("verified");
   });
 
-  it("a document read back must be in canonical form: the same did:web document pretty-printed, under its own CID, is no snapshot", async () => {
+  test("a document read back must be in canonical form: the same did:web document pretty-printed, under its own CID, is no snapshot", async () => {
     const { scene, peerKeys, a0 } = await vaults();
     const canonical = await webPeer(peerKeys);
     const pretty = new TextEncoder().encode(JSON.stringify(canonical.resolution.document, null, 2));

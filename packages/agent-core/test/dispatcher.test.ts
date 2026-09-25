@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { scanVault, type DidId, type MessageId } from "@estoc/vault";
 
@@ -93,7 +93,7 @@ describe("Dispatcher", () => {
     await s.close();
   });
 
-  it("a call that was refused is not made again on its own: a retry mints a fresh manual action", async () => {
+  test("a call that was refused is not made again on its own: a retry mints a fresh manual action", async () => {
     const answers: (() => Response)[] = [() => new Response("later", { status: 503 }), accepted];
     const s = await scene({}, () => answers.shift()!());
     const sent = await toLongForm(s, MESSAGE);
@@ -123,7 +123,7 @@ describe("Dispatcher", () => {
     await s.close();
   });
 
-  it("a newer action for the message replaces the one waiting; closing drops every wait and takes no more", async () => {
+  test("a newer action for the message replaces the one waiting; closing drops every wait and takes no more", async () => {
     const s = await scene();
     const sent = await toShortForm(s, MESSAGE);
     await s.dispatcher.run(sent.action);

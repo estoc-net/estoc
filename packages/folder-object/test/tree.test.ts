@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { CID } from "multiformats/cid";
 import { sha256 } from "multiformats/hashes/sha2";
 import * as dagPb from "@ipld/dag-pb";
@@ -77,7 +77,7 @@ describe("hashTree", () => {
     expect(a.root).toBe(b.root);
   });
 
-  it("root is a dag-pb CID, small files keep their raw CIDs", async () => {
+  test("root is a dag-pb CID, small files keep their raw CIDs", async () => {
     const tree = await hashTree(snapshot());
     expect(isDagPbCid(tree.root)).toBe(true);
     for (const cid of tree.files.keys()) {
@@ -85,7 +85,7 @@ describe("hashTree", () => {
     }
   });
 
-  it("a single-block file's CID equals the raw CID of its bytes — unchanged from the dag-json branch", async () => {
+  test("a single-block file's CID equals the raw CID of its bytes — unchanged from the dag-json branch", async () => {
     const tree = await hashTree(snapshot());
     const profileCid = await fileCid(utf8('{"name":"merely"}'));
     expect(tree.files.get(profileCid)).toBe("profile.json");
@@ -93,7 +93,7 @@ describe("hashTree", () => {
     expect(tree.nodes.has(profileCid)).toBe(false);
   });
 
-  it("changing one byte changes the root, unrelated files keep their CIDs", async () => {
+  test("changing one byte changes the root, unrelated files keep their CIDs", async () => {
     const files = snapshot();
     const before = await hashTree(files);
     files["posts/2026/first.html"] = utf8("<h1>edited</h1>");
@@ -104,7 +104,7 @@ describe("hashTree", () => {
     expect(after.files.get(profileCid)).toBe("profile.json");
   });
 
-  it("identical bytes at two paths share one CID", async () => {
+  test("identical bytes at two paths share one CID", async () => {
     const files: TreeFiles = { "a.txt": utf8("same"), "b/c.txt": utf8("same") };
     const tree = await hashTree(files);
     expect(tree.files.size).toBe(1);
@@ -136,7 +136,7 @@ describe("hashTree", () => {
     expect(verified.dirs.get("deep/er")).toBe(EMPTY_DIR);
   });
 
-  it("options.dirs: implied and repeated directories are no-ops, a file path is a conflict", async () => {
+  test("options.dirs: implied and repeated directories are no-ops, a file path is a conflict", async () => {
     const files: TreeFiles = { "posts/a.txt": utf8("a") };
     const plain = await hashTree(files);
     const listed = await hashTree(files, { dirs: ["posts", "posts/"] });
@@ -170,7 +170,7 @@ describe("hashTree", () => {
     ).rejects.toThrow(/duplicate path/);
   });
 
-  it("a chunked file roots in dag-pb with its blocks in nodes", async () => {
+  test("a chunked file roots in dag-pb with its blocks in nodes", async () => {
     const files: TreeFiles = { "big.bin": bigFile(2) };
     const tree = await hashTree(files);
     const [cid, path] = [...tree.files.entries()][0] as [string, string];
@@ -389,7 +389,7 @@ describe("HAMT sharding", () => {
       Array.from({ length: 2200 }, (_, i) => [wideName(i), utf8("x")]),
     );
 
-  it("a naturally sharded directory round-trips verify and resolve", async () => {
+  test("a naturally sharded directory round-trips verify and resolve", async () => {
     const files = wideDir();
     const tree = await hashTree(files);
     const rootData = dagPb.decode(
@@ -539,7 +539,7 @@ describe("golden vectors", () => {
     );
   });
 
-  it("raw file CID matches an independently computed sha-256", async () => {
+  test("raw file CID matches an independently computed sha-256", async () => {
     // bafkrei… = CIDv1, raw codec, sha2-256 of the bare bytes
     expect(await fileCid(utf8("<h1>hi</h1>"))).toBe(
       "bafkreihh7o3pxp2m4kkjcpvwfnj76a5hkrtett64bwbe3hr2fncucubpp4",

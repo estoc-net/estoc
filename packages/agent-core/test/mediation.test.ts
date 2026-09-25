@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { longToShort, resolveDIDCommDoc, type Secret } from "@estoc/did-peer";
 import { mediationKeyName, scanVault, type Did, type MediationId } from "@estoc/vault";
@@ -70,7 +70,7 @@ describe("establishing", () => {
     await p.runtime.close();
   });
 
-  it("a failure after the creation leaves a retryable intent, not a half identity", async () => {
+  test("a failure after the creation leaves a retryable intent, not a half identity", async () => {
     const mediator = await newMediator();
     const p = await party(mediator);
     p.offline.reason = "no route to host";
@@ -246,7 +246,7 @@ describe("reconciling recipients", () => {
     await p.runtime.close();
   });
 
-  it("a DID the mediator will not hold is refused, not registered", async () => {
+  test("a DID the mediator will not hold is refused, not registered", async () => {
     const mediator = await newMediator();
     const p = await party(mediator);
     await establish(p.link, p.runtime, p.keys, p.mediationId);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { CID } from "multiformats/cid";
 import { sha256 } from "multiformats/hashes/sha2";
 import { decodeCar, decodeDrisl, drislCid, encodeCar, encodeDrisl, Float, Link, parseCid, rawCid } from "../src/index.js";
@@ -123,7 +123,7 @@ describe("DASL CAR", () => {
     }
   });
 
-  it("encodeCar takes only DASL CIDs", async () => {
+  test("encodeCar takes only DASL CIDs", async () => {
     expect(() => encodeCar(["bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354"], new Map())).toThrow(/0x70/);
     expect(() => encodeCar([], new Map([["nope", utf8("x")]]))).toThrow(/base32/);
   });

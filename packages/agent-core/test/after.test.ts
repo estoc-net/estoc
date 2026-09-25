@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { SignJWT, importJWK } from "jose";
 
@@ -55,7 +55,7 @@ async function eventsOf<T extends VaultEventType>(holder: Fresh, type: T): Promi
 }
 
 describe("after the receipt", () => {
-  it("a peer's ack names an outbound: once the outbound has its package, the witness is recorded as one acknowledgement by the preparation's own pass, the same ack delivered again is not recorded twice, another ack from the peer is, and an unrelated peer naming the ID earns nothing", async () => {
+  test("a peer's ack names an outbound: once the outbound has its package, the witness is recorded as one acknowledgement by the preparation's own pass, the same ack delivered again is not recorded twice, another ack from the peer is, and an unrelated peer naming the ID earns nothing", async () => {
     const { alice, bob } = await parties();
     const carol = await directParty(3, "https://carol.example/didcomm", CAROL);
     await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
@@ -82,7 +82,7 @@ describe("after the receipt", () => {
     await closeAll(alice, bob, carol);
   });
 
-  it("a one-use invitation is consumed by the first eligible receipt under its ID and by no later one; a receipt under no invitation consumes nothing", async () => {
+  test("a one-use invitation is consumed by the first eligible receipt under its ID and by no later one; a receipt under no invitation consumes nothing", async () => {
     const { alice, bob } = await parties();
     const carol = await directParty(3, "https://carol.example/didcomm", CAROL);
     const { disclosed, invitation } = await disclose(null, alice.runtime, alice.keys, DID, { as: "oob", uses: "one" });
@@ -98,7 +98,7 @@ describe("after the receipt", () => {
     await closeAll(alice, bob, carol);
   });
 
-  it("an observation left unadmitted by a crash is admitted by the next pass, an open's included, and one whose proof waited for the issuer's document is admitted once a later receipt brings it, while the receipt that brought it, from the address the proof leaves, is ignored", async () => {
+  test("an observation left unadmitted by a crash is admitted by the next pass, an open's included, and one whose proof waited for the issuer's document is admitted once a later receipt brings it, while the receipt that brought it, from the address the proof leaves, is ignored", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const { receiver } = await receiving(alice);
@@ -137,7 +137,7 @@ describe("after the receipt", () => {
     await closeAll(alice, bob);
   });
 
-  it("the proof the observation carried is judged by the fold: one that verifies is reported as such and traced nowhere, one that does not is reported and left as a diagnostic", async () => {
+  test("the proof the observation carried is judged by the fold: one that verifies is reported as such and traced nowhere, one that does not is reported and left as a diagnostic", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const routeId = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;

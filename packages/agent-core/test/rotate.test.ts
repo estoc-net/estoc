@@ -1,6 +1,6 @@
 import { decodeJwt } from "jose";
 import { v7 as uuidv7 } from "uuid";
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { resolveDIDCommDoc, type DIDDoc } from "@estoc/did-peer";
 import type { JsonObject } from "@estoc/event-store";
@@ -128,7 +128,7 @@ async function openedByBob(bob: DirectParty, alice: DirectParty, messageId: Mess
 }
 
 describe("a local rotation", () => {
-  it("a manual rotation mints the successor and freezes the decision in one commit, notifies the peer once under an initial action carrying the proof, and asked again reuses the decision and mints nothing", async () => {
+  test("a manual rotation mints the successor and freezes the decision in one commit, notifies the peer once under an initial action carrying the proof, and asked again reuses the decision and mints nothing", async () => {
     const { alice, bob } = await parties();
     const { wire, options, receive } = await rotating(alice);
     await receive(bob, { type: BASIC_MESSAGE });
@@ -174,7 +174,7 @@ describe("a local rotation", () => {
     await closeAll(alice, bob);
   });
 
-  it("the successor goes on the route new addresses go on: its predecessor's while no arrangement is preferred, the preferred arrangement's once one is, and a route given outright whichever that is; a successor recorded already keeps its own", async () => {
+  test("the successor goes on the route new addresses go on: its predecessor's while no arrangement is preferred, the preferred arrangement's once one is, and a route given outright whichever that is; a successor recorded already keeps its own", async () => {
     const { alice, bob } = await parties();
     const charlie = await directParty(3, "https://charlie.example/didcomm", CHARLIE);
     const dave = await directParty(4, "https://dave.example/didcomm", DAVE);
@@ -205,7 +205,7 @@ describe("a local rotation", () => {
     await closeAll(alice, bob, charlie, dave);
   });
 
-  it("no rotation from an address the peer never wrote to, in a denied channel, toward oneself, from an unknown entity, over a control input, or where decisions already compete", async () => {
+  test("no rotation from an address the peer never wrote to, in a denied channel, toward oneself, from an unknown entity, over a control input, or where decisions already compete", async () => {
     const { alice, bob } = await parties();
     const { options, receive } = await rotating(alice);
     const target = { localDidId: ALICE, peerDid: bob.did };
@@ -234,7 +234,7 @@ describe("a local rotation", () => {
     await closeAll(fresh.alice, fresh.bob);
   });
 
-  it("an entity recorded earlier is a manual rotation's successor only while the decision folds without conflict, and never the policy's: a rotation back to the predecessor and a policy rotation to a disclosed address are refused before anything is written, and a fresh ID given to the policy is taken", async () => {
+  test("an entity recorded earlier is a manual rotation's successor only while the decision folds without conflict, and never the policy's: a rotation back to the predecessor and a policy rotation to a disclosed address are refused before anything is written, and a fresh ID given to the policy is taken", async () => {
     const { alice, bob } = await parties();
     const { wire, options, receive } = await rotating(alice);
     await receive(bob, { type: BASIC_MESSAGE });
@@ -262,7 +262,7 @@ describe("a local rotation", () => {
     await closeAll(disclosed.alice, disclosed.bob);
   });
 
-  it("a decision is folded with the evidence here before it is written: one whose join would confirm a waiting decision closing a cycle is refused with nothing written, while the same local DIDs rotate back and forth toward unrelated peers, each context keeping its own head", async () => {
+  test("a decision is folded with the evidence here before it is written: one whose join would confirm a waiting decision closing a cycle is refused with nothing written, while the same local DIDs rotate back and forth toward unrelated peers, each context keeping its own head", async () => {
     const { alice, bob } = await parties();
     const { wire, options, receive } = await rotating(alice);
     const bobRoute = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
@@ -302,7 +302,7 @@ describe("a local rotation", () => {
     await closeAll(three.alice, three.bob, charlie);
   });
 
-  it("a decision whose joins would carry an existing peer fork into a channel no conflict reached is refused with nothing written, while a rotation the fork does not touch goes through beside it", async () => {
+  test("a decision whose joins would carry an existing peer fork into a channel no conflict reached is refused with nothing written, while a rotation the fork does not touch goes through beside it", async () => {
     const { alice, bob } = await parties();
     const { wire, options, receive } = await rotating(alice);
     const bobRoute = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
@@ -335,7 +335,7 @@ describe("a local rotation", () => {
     await closeAll(alice, bob, charlie);
   });
 
-  it("the private-address policy: the first live application input at a disclosed address selects a successor over that input and notifies on its thread; a later input reuses the decision; one at the undisclosed successor, a control input or an undisclosed address selects nothing", async () => {
+  test("the private-address policy: the first live application input at a disclosed address selects a successor over that input and notifies on its thread; a later input reuses the decision; one at the undisclosed successor, a control input or an undisclosed address selects nothing", async () => {
     const { alice, bob } = await parties();
     await disclose(null, alice.runtime, alice.keys, ALICE, { as: "direct", uses: "many" });
     const { wire, options, receive, live } = await rotating(alice);
@@ -376,7 +376,7 @@ describe("a local rotation", () => {
     await closeAll(undisclosed.alice, undisclosed.bob);
   });
 
-  it("a decision whose notification the disk refused is listed and completed by hand under a manual action; completed again it calls nothing; several intents naming it are a conflict no completion resolves", async () => {
+  test("a decision whose notification the disk refused is listed and completed by hand under a manual action; completed again it calls nothing; several intents naming it are a conflict no completion resolves", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const { wire, options, receive } = await rotating(alice, { trace });
@@ -406,7 +406,7 @@ describe("a local rotation", () => {
     await closeAll(alice, bob);
   });
 
-  it("a selecting input whose peer has since replaced its DID permits no missing notification to be made, while the decision stands and is reused", async () => {
+  test("a selecting input whose peer has since replaced its DID permits no missing notification to be made, while the decision stands and is reused", async () => {
     const { alice, bob } = await parties();
     await disclose(null, alice.runtime, alice.keys, ALICE, { as: "direct", uses: "many" });
     const { wire, options, receive } = await rotating(alice);

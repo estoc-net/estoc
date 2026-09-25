@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { decodeLongForm, encodeLongForm, longToShort, type DIDDoc } from "@estoc/did-peer";
 import { canonicalize, parseStrict, type JsonObject } from "@estoc/event-store";
@@ -193,7 +193,7 @@ describe("prepare", () => {
     await closeAll(alice, bob);
   });
 
-  it("an unconfirmed successor carries the decision's frozen proof under its long form; once the peer writes to the successor, new packages go proof-free; the pre-rotation address stays as it was", async () => {
+  test("an unconfirmed successor carries the decision's frozen proof under its long form; once the peer writes to the successor, new packages go proof-free; the pre-rotation address stays as it was", async () => {
     const { alice, bob, toBob } = await parties();
     const { next, longFormDid, fromPrior } = await rotated(alice, bob);
     const toBobNext = channelOf(next, bob.did);
@@ -223,7 +223,7 @@ describe("prepare", () => {
     await closeAll(alice, bob);
   });
 
-  it("a rotation to the sender whose predecessor creation has not arrived is history still to come, not no rotation: the package waits, then carries the frozen proof once", async () => {
+  test("a rotation to the sender whose predecessor creation has not arrived is history still to come, not no rotation: the package waits, then carries the frozen proof once", async () => {
     const { alice, bob } = await parties();
     const { next, longFormDid, fromPrior, decision } = await rotated(alice, bob);
     const events: VaultEvent[] = [];
@@ -291,7 +291,7 @@ describe("prepare", () => {
     await closeAll(alice, bob);
   });
 
-  it("a rotation to the sender that is still waiting for its evidence stops the package rather than sending it proof-free", async () => {
+  test("a rotation to the sender that is still waiting for its evidence stops the package rather than sending it proof-free", async () => {
     const { alice, bob } = await parties();
     const routeId = (await fold(alice)).routes.dids.get(ALICE)!.created!.boundRouteId;
     const { minted } = await createDid(alice.runtime, alice.keys, routeId, ALICE_NEXT);
@@ -306,7 +306,7 @@ describe("prepare", () => {
     await closeAll(alice, bob);
   });
 
-  it("a resolution it commits is evidence recovered: an observation whose proof waited for that issuer's document is admitted under the same lock, dispatching nothing, and the package stands", async () => {
+  test("a resolution it commits is evidence recovered: an observation whose proof waited for that issuer's document is admitted under the same lock, dispatching nothing, and the package stands", async () => {
     const { alice, bob } = await parties();
     const { cid, prior } = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR);
     const carried = { cid };

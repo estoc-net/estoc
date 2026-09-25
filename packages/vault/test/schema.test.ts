@@ -1,5 +1,5 @@
 import type { Event, JsonObject } from "@estoc/event-store";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import {
   InvalidPayload,
@@ -293,7 +293,7 @@ describe("identifiers in payloads", () => {
     rejects("message.prepared", { ...(ALL["message.prepared"][0] as Loose), fromPrior: "a.b" }, [ENVELOPE], /compact JWT/);
   });
 
-  it("a channel endpoint is a did:peer:4 short form; a peer address a message names may be the long form too", () => {
+  test("a channel endpoint is a did:peer:4 short form; a peer address a message names may be the long form too", () => {
     accepts("message.out", { ...OUT_DATA, recipientDid: PEER_LONG }, [BODY, PHOTO]);
     rejects("message.out", { ...OUT_DATA, recipientDid: WEB }, [BODY, PHOTO], /recipientDid must be a did:peer:4 short or long form/);
     rejects("message.out", { ...OUT_DATA, recipientDid: "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc" }, [BODY, PHOTO], /did:peer:4/);
@@ -308,12 +308,12 @@ describe("identifiers in payloads", () => {
 });
 
 describe("rules between members", () => {
-  it("mediation.created names the arrangement's own key", () => {
+  test("mediation.created names the arrangement's own key", () => {
     const data = ALL["mediation.created"][0] as Loose;
     rejects("mediation.created", { ...data, me: { keyName: KEY, did: SHORT } }, [], /me\.keyName is the arrangement's own key/);
   });
 
-  it("a DID entity is minted, never derived: a UUIDv5 is refused wherever an entity ID is named", () => {
+  test("a DID entity is minted, never derived: a UUIDv5 is refused wherever an entity ID is named", () => {
     rejects("did.created", { ...(ALL["did.created"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
     rejects("did.disclosed", { ...(ALL["did.disclosed"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
     rejects("did.retired", { ...(ALL["did.retired"][0] as Loose), didId: UUID_V5_DID_ID }, [], /didId must be a canonical UUIDv7/);
@@ -321,7 +321,7 @@ describe("rules between members", () => {
     rejects("peer.resolved", { ...(ALL["peer.resolved"][0] as Loose), localKeyName: `did/${UUID_V5_DID_ID}/key-agreement` }, [DOC], /localKeyName must be a vault key name/);
   });
 
-  it("did.created holds a numalgo-4 short form and its long form", () => {
+  test("did.created holds a numalgo-4 short form and its long form", () => {
     const data = ALL["did.created"][0] as Loose;
     rejects("did.created", { ...data, did: LONG }, [], /short form/);
     rejects("did.created", { ...data, did: "did:web:alice.example", longFormDid: "did:web:alice.example:z1" }, [], /short form/);
@@ -329,7 +329,7 @@ describe("rules between members", () => {
     rejects("did.created", { ...data, longFormDid: "did:peer:4zQmOther:z2NpDocument" }, [], /long form of did/);
   });
 
-  it("route.configured is mediated or direct, never both", () => {
+  test("route.configured is mediated or direct, never both", () => {
     accepts("route.configured", { routeId: ROUTE, kind: "direct", mediationId: null, endpoint: "https://ingress.example/didcomm" });
     accepts("route.configured", { routeId: ROUTE, kind: "direct", mediationId: null, endpoint: "wss://ingress.example/ws" });
     rejects("route.configured", { routeId: ROUTE, kind: "direct", mediationId: null, endpoint: "http://ingress.example" }, [], /HTTPS or WSS/);
@@ -341,7 +341,7 @@ describe("rules between members", () => {
     rejects("route.configured", { routeId: ROUTE, kind: "relay", mediationId: MEDIATION, endpoint: null }, [], /one of "mediated", "direct"/);
   });
 
-  it("did.disclosed carries an oobId exactly for an oob disclosure, and a direct disclosure is for many uses", () => {
+  test("did.disclosed carries an oobId exactly for an oob disclosure, and a direct disclosure is for many uses", () => {
     const data = ALL["did.disclosed"][0] as Loose;
     accepts("did.disclosed", { ...data, as: "direct", uses: "many", oobId: null, goal: null });
     accepts("did.disclosed", { ...data, uses: "one" });
@@ -352,7 +352,7 @@ describe("rules between members", () => {
     rejects("did.disclosed", { ...data, uses: "some" });
   });
 
-  it("a rotation moves to another DID entity, a merge names two contacts, a block names two DIDs", () => {
+  test("a rotation moves to another DID entity, a merge names two contacts, a block names two DIDs", () => {
     const rotation = ALL["did.rotationSelected"][0] as Loose;
     rejects("did.rotationSelected", { ...rotation, toDidId: DID_ID }, [], /fromDidId and toDidId differ/);
     accepts("did.rotationSelected", { ...rotation, sourceEventCid: SOURCE_IN });
@@ -365,7 +365,7 @@ describe("rules between members", () => {
     rejects("contact.flag", { contactId: CONTACT, flag: "", value: true });
   });
 
-  it("contact.channelsSet is a duplicate-free selection of distinct pairs in canonical order, possibly empty", () => {
+  test("contact.channelsSet is a duplicate-free selection of distinct pairs in canonical order, possibly empty", () => {
     const ab = { localDid: LOCAL, peerDid: PEER };
     const ba = { localDid: PEER, peerDid: LOCAL };
     accepts("contact.channelsSet", { contactId: CONTACT, channels: [] });
@@ -378,13 +378,13 @@ describe("rules between members", () => {
     rejects("contact.channelsSet", { contactId: CONTACT, channels: ab }, [], /channels must be an array/);
   });
 
-  it("delivery.failed ends an unsubmitted message by expiry or cancellation and nothing else", () => {
+  test("delivery.failed ends an unsubmitted message by expiry or cancellation and nothing else", () => {
     accepts("delivery.failed", { messageId: OUT, code: "cancelled" });
     rejects("delivery.failed", { messageId: OUT, code: "rejected" }, [], /one of "expired", "cancelled"/);
     rejects("delivery.failed", { messageId: OUT, code: "expired", packageId: PACKAGE }, [], /packageId is not a member/);
   });
 
-  it("message.prepared names the sender entity's own key-agreement key", () => {
+  test("message.prepared names the sender entity's own key-agreement key", () => {
     const prepared = ALL["message.prepared"][0] as Loose;
     accepts("message.prepared", { ...prepared, senderDidId: DID_ID2, localKeyName: `did/${DID_ID2}/key-agreement` }, [ENVELOPE]);
     for (const localKeyName of [`did/${DID_ID2}/key-agreement`, `did/${DID_ID}/authentication`, `mediation/${MEDIATION}/me`]) {
@@ -392,7 +392,7 @@ describe("rules between members", () => {
     }
   });
 
-  it("message.erased releases at least one root, each once", () => {
+  test("message.erased releases at least one root, each once", () => {
     rejects("message.erased", { messageId: OUT, dropCids: [], because: "user" }, [], /non-empty/);
     rejects("message.erased", { messageId: OUT, dropCids: [BODY, BODY], because: "user" }, [], /distinct/);
   });
@@ -428,7 +428,7 @@ describe("message.out", () => {
     rejects("message.out", { ...OUT_DATA, senderDidId: UUID_V5_DID_ID }, [BODY, PHOTO], /senderDidId must be a canonical UUIDv7/);
   });
 
-  it("a locally initiated send mints its ID, derives from no observation and acknowledges nothing; a manual notification names only its rotation", () => {
+  test("a locally initiated send mints its ID, derives from no observation and acknowledges nothing; a manual notification names only its rotation", () => {
     rejects("message.out", { ...OUT_DATA, ack: [WIRE] }, [BODY, PHOTO], /has ack \[\]/);
     rejects("message.out", { ...OUT_DATA, messageId: IN }, [BODY, PHOTO], /mints a UUIDv7/);
     rejects("message.out", { ...OUT_DATA, effectType: PURE_ACK }, [BODY, PHOTO], /all null or all present/);
@@ -436,7 +436,7 @@ describe("message.out", () => {
     accepts("message.out", { ...OUT_DATA, rotationEventCid: ROTATION, msgType: "https://didcomm.org/empty/1.0/empty", attachmentCids: [] }, [BODY]);
   });
 
-  it("an automatic effect stores its producing tuple, the key of that tuple, the message ID of that key and the observation it derives from", () => {
+  test("an automatic effect stores its producing tuple, the key of that tuple, the message ID of that key and the observation it derives from", () => {
     expect(effectKey(EXECUTION, PURE_ACK)).toBe(KEY_OF_PURE_ACK);
     expect(automaticMessageId(KEY_OF_PURE_ACK as Parameters<typeof automaticMessageId>[0])).toBe(AUTOMATIC.messageId);
     accepts("message.out", AUTOMATIC, [BODY]);
@@ -481,7 +481,7 @@ describe("message.in", () => {
     rejects("message.in", { ...IN_DATA, wireMessageId: "" }, [BODY, PHOTO]);
   });
 
-  it("an authenticated observation names its resolution and a did:peer:4 sender under the spelling presented", () => {
+  test("an authenticated observation names its resolution and a did:peer:4 sender under the spelling presented", () => {
     accepts("message.in", IN_DATA, [BODY, PHOTO]);
     accepts("message.in", { ...IN_DATA, presentedDid: PEER_LONG }, [BODY, PHOTO]);
     rejects("message.in", { ...IN_DATA, did: PEER_LONG, presentedDid: PEER_LONG }, [BODY, PHOTO], /did must be a did:peer:4 short form/);
@@ -491,7 +491,7 @@ describe("message.in", () => {
     rejects("message.in", { ...IN_DATA, presentedDid: `${PEER}x` }, [BODY, PHOTO], /presentedDid is a spelling of did/);
   });
 
-  it("an anonymous observation has no sender evidence and the ID its local key and wire ID derive", () => {
+  test("an anonymous observation has no sender evidence and the ID its local key and wire ID derive", () => {
     accepts("message.in", anonymous, [BODY, PHOTO]);
     rejects("message.in", { ...anonymous, did: PEER }, [BODY, PHOTO], /null together/);
     rejects("message.in", { ...IN_DATA, presentedDid: null }, [BODY, PHOTO], /null together/);
@@ -502,13 +502,13 @@ describe("message.in", () => {
 });
 
 describe("drafts", () => {
-  it("readVaultDraft checks a draft as its event will be checked, roots left out being none", () => {
+  test("readVaultDraft checks a draft as its event will be checked, roots left out being none", () => {
     expect(readVaultDraft({ type: "contact.deleted", data: { contactId: CONTACT } as unknown as JsonObject })).toEqual({ type: "contact.deleted", roots: [], data: { contactId: CONTACT } });
     expect(() => readVaultDraft({ type: "message.out", data: OUT_DATA as unknown as JsonObject })).toThrow(/roots must be/);
     expect(() => readVaultDraft({ type: "nope", data: {} })).toThrow(InvalidPayload);
   });
 
-  it("vaultDraft fills in the roots the type retains", () => {
+  test("vaultDraft fills in the roots the type retains", () => {
     expect(vaultDraft("message.out", OUT_DATA).roots).toEqual([BODY, PHOTO]);
     expect(vaultDraft("message.in", IN_DATA).roots).toEqual([BODY, PHOTO]);
     expect(vaultDraft("message.prepared", ALL["message.prepared"][0]).roots).toEqual([ENVELOPE]);

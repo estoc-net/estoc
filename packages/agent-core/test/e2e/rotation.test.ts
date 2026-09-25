@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import { EMPTY_MESSAGE_TYPE, ROTATION_NOTIFICATION_EFFECT, channelKey, type Channel, type Did, type DidId, type MessageId, type Outbound, type VaultFold } from "@estoc/vault";
 
@@ -39,7 +39,7 @@ const packageOf = (output: Outbound) => output.package!.event.data;
 const carriesProof = (output: Outbound): boolean => packageOf(output).fromPrior !== null;
 
 describe("rotation between two agents", () => {
-  it("the first message to a disclosed address selects a private successor, announced under a proof the peer verifies and answers; once the peer wrote there the proof is dropped, the old address takes only an explicit send, and the peer's own rotation moves the head again", { timeout: LONG }, async () => {
+  test("the first message to a disclosed address selects a private successor, announced under a proof the peer verifies and answers; once the peer wrote there the proof is dropped, the old address takes only an explicit send, and the peer's own rotation moves the head again", { timeout: LONG }, async () => {
     const mediator = await newMediator();
     const alice = await run(mediator, 1, ALICE);
     const bob = await run(mediator, 2, BOB);
@@ -107,7 +107,7 @@ describe("rotation between two agents", () => {
     expect((await foldOf(bob)).continuity.confirmed(b1, a1)).toBe(true);
   });
 
-  it("two rotations that cross join: each side decides before it hears of the other's, and both end at the one channel between the two successors", { timeout: LONG }, async () => {
+  test("two rotations that cross join: each side decides before it hears of the other's, and both end at the one channel between the two successors", { timeout: LONG }, async () => {
     const mediator = await newMediator();
     const alice = await run(mediator, 1, ALICE);
     const bob = await run(mediator, 2, BOB);

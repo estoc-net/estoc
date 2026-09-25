@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createSeedKeystore } from "@estoc/keystore";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, test } from "vitest";
 
 import { openNodeSqlite } from "../../src/node.js";
 import {
@@ -127,7 +127,7 @@ describe("the open cases on node:sqlite files", () => {
     },
   };
   for (const c of openCases) {
-    it(c.name, async () => {
+    test(c.name, async () => {
       const note = await c.run(harness);
       if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
     });
@@ -217,7 +217,7 @@ describe("openRuntime", () => {
     vault.close();
   });
 
-  it("a failing unlock fails the open the same way", async () => {
+  test("a failing unlock fails the open the same way", async () => {
     const file = fresh();
     create(file).close();
     const driver = open(file, "readwrite");
@@ -470,7 +470,7 @@ describe("the keystore", () => {
     vault.close();
   });
 
-  it("an interrupted rewrap leaves the old wrapper whole", async () => {
+  test("an interrupted rewrap leaves the old wrapper whole", async () => {
     const file = fresh();
     create(file).close();
     await interruptRewrapInAnotherProcess(file, REWRAPPED.seedJwe);
