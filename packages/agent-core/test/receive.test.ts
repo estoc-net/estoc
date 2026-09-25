@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, test, vi } from "vitest";
 
 import { encodeLongForm, longToShort, resolveDIDCommDoc, toDIDCommDIDDoc, type DIDDoc } from "@estoc/did-peer";
 import type { JsonObject, VaultRuntime } from "@estoc/event-store";
@@ -143,7 +143,7 @@ async function mediated(): Promise<{ mediator: Awaited<ReturnType<typeof newMedi
 }
 
 describe("the gate before the vault", () => {
-  it("a delivery to the exact key-agreement method of a DID that may receive opens with that key, its peer sender read from its long form and nothing else; the same delivery again is only told again, and a rotation proof rides through unverified", async () => {
+  test("a delivery to the exact key-agreement method of a DID that may receive opens with that key, its peer sender read from its long form and nothing else; the same delivery again is only told again, and a rotation proof rides through unverified", async () => {
     const { alice, bob } = await parties();
     const { receipt, seen } = recording();
     const trace = await AgentTrace.open(alice.runtime.local);
@@ -178,7 +178,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob);
   });
 
-  it("an anonymous envelope proves no sender and reaches the receipt with none; one whose plaintext still claims a sender is terminal, since nothing authenticates the claim", async () => {
+  test("an anonymous envelope proves no sender and reaches the receipt with none; one whose plaintext still claims a sender is terminal, since nothing authenticates the claim", async () => {
     const { alice, bob } = await parties();
     const { receipt, seen } = recording();
     const receiver = await receiverOver(alice, { receipt });
@@ -192,7 +192,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob);
   });
 
-  it("a DID of another vault, a method this DID does not have, an authentication method and a plaintext are terminal before anything is opened; an envelope naming no key of ours says so without claiming why", async () => {
+  test("a DID of another vault, a method this DID does not have, an authentication method and a plaintext are terminal before anything is opened; an envelope naming no key of ours says so without claiming why", async () => {
     const { alice, bob } = await parties();
     const carol = await directParty(3, CAROL_ENDPOINT, CAROL);
     const { receipt, seen } = recording();
@@ -222,7 +222,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, carol);
   });
 
-  it("a sender that is not a numalgo-4 peer is terminal without any network; a short form whose long form is not in evidence is terminal and told as material unavailable, not as anyone; once the long form is in evidence the short form authenticates", async () => {
+  test("a sender that is not a numalgo-4 peer is terminal without any network; a short form whose long form is not in evidence is terminal and told as material unavailable, not as anyone; once the long form is in evidence the short form authenticates", async () => {
     const { alice, bob } = await parties();
     const { receipt, seen } = recording();
     const receiver = await receiverOver(alice, { receipt });
@@ -243,7 +243,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob);
   });
 
-  it("a retired DID still receives while its route stands and is terminal once the route retired; a sender that is the recipient itself is terminal; the host's limits refuse a delivery before the receipt sees it", async () => {
+  test("a retired DID still receives while its route stands and is terminal once the route retired; a sender that is the recipient itself is terminal; the host's limits refuse a delivery before the receipt sees it", async () => {
     const { alice, bob } = await parties();
     const routeId = (await scanVault(alice.runtime.vault, alice.keys)).routes.dids.get(DID)!.created!.boundRouteId;
     await retireDid(alice.runtime, alice.keys, DID, "rotated");
@@ -273,7 +273,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob);
   });
 
-  it("a DID whose route is not configured yet holds the delivery without acknowledgement and opens nothing, not on redelivery either; once the route arrives it is received from the held bytes and acknowledged", async () => {
+  test("a DID whose route is not configured yet holds the delivery without acknowledgement and opens nothing, not on redelivery either; once the route arrives it is received from the held bytes and acknowledged", async () => {
     const { alice, bob } = await parties();
     const copy = await freshVault(1, "copy");
     await copy.runtime.ingest(await eventsOf(alice.runtime, "did.created"));
@@ -297,7 +297,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("a held delivery whose bytes do not fit waits without them: a redelivery is not opened until the local state changed, and then it is opened from the redelivery", async () => {
+  test("a held delivery whose bytes do not fit waits without them: a redelivery is not opened until the local state changed, and then it is opened from the redelivery", async () => {
     const { alice, bob } = await parties();
     const copy = await freshVault(1, "copy");
     await copy.runtime.ingest(await eventsOf(alice.runtime, "did.created"));
@@ -318,7 +318,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("a recipient method named by a query and a fragment is the exact method its document authorizes: the delivery opens with that key, and a query the document does not have names no method", async () => {
+  test("a recipient method named by a query and a fragment is the exact method its document authorizes: the delivery opens with that key, and a query the document does not have names no method", async () => {
     const { alice, bob } = await parties();
     const keys = await alice.keys.didKeys(QUERIED);
     const document = inputDocumentOf(keys, ALICE_ENDPOINT);
@@ -340,7 +340,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob);
   });
 
-  it("a local change told of while a delivery reads the vault is not lost: the delivery decides over the vault again before it is held", async () => {
+  test("a local change told of while a delivery reads the vault is not lost: the delivery decides over the vault again before it is held", async () => {
     const { alice, bob } = await parties();
     const copy = await copyOf(alice, "did.created");
     const { receipt, seen } = recording();
@@ -373,7 +373,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("only a change of what a delivery waits for retries it: a receipt's deferral watches something of the fold and a change elsewhere leaves the delivery unopened; a receipt that throws keeps nothing, and the delivery is taken when it comes again", async () => {
+  test("only a change of what a delivery waits for retries it: a receipt's deferral watches something of the fold and a change elsewhere leaves the delivery unopened; a receipt that throws keeps nothing, and the delivery is taken when it comes again", async () => {
     const { alice, bob } = await parties();
     const otherRoute = await configureRoute(alice.runtime, alice.keys, { kind: "direct", endpoint: OTHER_ENDPOINT });
     const other = await createDid(alice.runtime, alice.keys, otherRoute.data.routeId, OTHER);
@@ -425,7 +425,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("a change told of while the receipt is deciding sends the delivery through the gate again only when its watch says something else: an unrelated change lets it be held as decided", async () => {
+  test("a change told of while the receipt is deciding sends the delivery through the gate again only when its watch says something else: an unrelated change lets it be held as decided", async () => {
     const { alice, bob } = await parties();
     const copy = await copyOf(alice, "did.created", "route.configured");
     const trace = await AgentTrace.open(copy.runtime.local);
@@ -468,7 +468,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("a waiting delivery whose retry fails — the vault not read, the receipt thrown — is let go with its bytes, and is taken when it comes again without another change", async () => {
+  test("a waiting delivery whose retry fails — the vault not read, the receipt thrown — is let go with its bytes, and is taken when it comes again without another change", async () => {
     for (const failure of ["read", "write"] as const) {
       const { alice, bob } = await parties();
       const copy = await copyOf(alice, "did.created");
@@ -508,7 +508,7 @@ describe("the gate before the vault", () => {
     }
   });
 
-  it("a comparison that cannot read the vault lets the waiting deliveries go rather than opening them: one already held, and one whose receipt is still deciding", async () => {
+  test("a comparison that cannot read the vault lets the waiting deliveries go rather than opening them: one already held, and one whose receipt is still deciding", async () => {
     const { alice, bob } = await parties();
     const copy = await copyOf(alice, "did.created", "route.configured");
     const trace = await AgentTrace.open(copy.runtime.local);
@@ -561,7 +561,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("a delivery whose vault could not be read is not kept and is taken when it comes again", async () => {
+  test("a delivery whose vault could not be read is not kept and is taken when it comes again", async () => {
     const { alice, bob } = await parties();
     const { receipt, seen } = recording();
     const receiver = await receiverOver(alice, { receipt });
@@ -576,7 +576,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob);
   });
 
-  it("a recipient named many times over is one recipient: what the delivery waits on and the reason kept do not grow with the repetition", async () => {
+  test("a recipient named many times over is one recipient: what the delivery waits on and the reason kept do not grow with the repetition", async () => {
     const { alice, bob } = await parties();
     const copy = await copyOf(alice, "did.created");
     const { receipt, seen } = recording();
@@ -595,7 +595,7 @@ describe("the gate before the vault", () => {
     await closeAll(alice, bob, copy);
   });
 
-  it("past as many deliveries as may wait, one that would wait is left where it came from with nothing kept and comes back once it can be taken; bytes held are counted as sent, not as characters", async () => {
+  test("past as many deliveries as may wait, one that would wait is left where it came from with nothing kept and comes back once it can be taken; bytes held are counted as sent, not as characters", async () => {
     const { alice, bob } = await parties();
     const copy = await copyOf(alice, "did.created");
     const { receipt, seen } = recording();
@@ -652,7 +652,7 @@ describe("the sender's proof", () => {
 });
 
 describe("the receiver's lifecycle", () => {
-  it("a runtime receives through one receiver: a second is refused while it is open; after close a delivery already handed to the receipt ends as the receipt says, one awaiting its turn is refused and left where it came from, nothing else is taken, and the runtime may have another receiver", async () => {
+  test("a runtime receives through one receiver: a second is refused while it is open; after close a delivery already handed to the receipt ends as the receipt says, one awaiting its turn is refused and left where it came from, nothing else is taken, and the runtime may have another receiver", async () => {
     const { alice, bob } = await parties();
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
@@ -688,7 +688,7 @@ describe("the receiver's lifecycle", () => {
 });
 
 describe("the gate over pickup", () => {
-  it("a delivery for no key of this vault and one received are acknowledged in the same round; one held for a local prerequisite stays queued", async () => {
+  test("a delivery for no key of this vault and one received are acknowledged in the same round; one held for a local prerequisite stays queued", async () => {
     const { mediator, p, longFormDid, account } = await mediated();
     const bob = await directParty(2, BOB_ENDPOINT, BOB);
     const { receipt, seen } = recording();
@@ -716,7 +716,7 @@ describe("the gate over pickup", () => {
     await closeAll(p, bob, other);
   });
 
-  it("a delivery that ended is only told again when it comes again before the mediator was told: a lost acknowledgement costs no second opening or receipt, and once the mediator is told it is forgotten", async () => {
+  test("a delivery that ended is only told again when it comes again before the mediator was told: a lost acknowledgement costs no second opening or receipt, and once the mediator is told it is forgotten", async () => {
     const { mediator, p, longFormDid, account } = await mediated();
     const bob = await directParty(2, BOB_ENDPOINT, BOB);
     const { receipt, seen } = recording();

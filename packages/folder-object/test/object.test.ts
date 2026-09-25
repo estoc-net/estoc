@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, mkdir, writeFile, symlink, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,7 +36,7 @@ describe("object", () => {
     expect(await hashObject(readObject(await readTree(seaDay)))).toBe(root);
   });
 
-  it("hidden entries never enter the tree, on disk or in a mapping", async () => {
+  test("hidden entries never enter the tree, on disk or in a mapping", async () => {
     const root = await hashObject(readObject(await readTree(seaDay)));
     const mapping = await readTree(seaDay);
     mapping["files/.DS_Store"] = enc("junk");
@@ -75,7 +75,7 @@ describe("object", () => {
     }
   });
 
-  it("a lone index.json with inline content is a complete object", () => {
+  test("a lone index.json with inline content is a complete object", () => {
     const idx = JSON.stringify({ format: "x", id: "01900000-0000-7000-8000-000000000000", content: { mediaType: "t", text: "hi" } });
     expect(readObject({ "index.json": enc(idx) }).tree).toHaveProperty("index.json");
   });
@@ -96,12 +96,12 @@ describe("card + signed object", () => {
     expect((await verifyObjectCard(jws, tampered)).matches).toBe(false);
   });
 
-  it("zip output is deterministic", async () => {
+  test("zip output is deterministic", async () => {
     const object = readObject(await readTree(seaDay));
     expect(Buffer.from(zipTree(object.tree)).equals(Buffer.from(zipTree(object.tree)))).toBe(true);
   });
 
-  it("readAny takes a bare object or a signed one; litter beside object/ is ignored", async () => {
+  test("readAny takes a bare object or a signed one; litter beside object/ is ignored", async () => {
     const object = readObject(await readTree(seaDay));
     expect(readAny(object.tree).card).toBeUndefined();
     const laid = { ...signedTree(object, "x.y.z"), "index.html": enc("<p>rendered</p>") };

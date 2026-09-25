@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import * as dagCbor from "@ipld/dag-cbor";
 import { CID } from "multiformats/cid";
 import { decodeDrisl, encodeDrisl, Float, Link, parseCid, MAX_DEPTH } from "../src/index.js";
@@ -24,19 +24,19 @@ describe("DRISL encode — RFC 8949 Appendix A vectors that DRISL keeps", () => 
     [["a", { b: "c" }], "826161a161626163"],
   ];
   for (const [value, expected] of vectors) {
-    it(`${JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v))} → ${expected}`, () => {
+    it(`encodes ${JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v))} as ${expected} and decodes it back`, () => {
       expect(hex(encodeDrisl(value as never))).toBe(expected);
       const back = decodeDrisl(bytes(expected));
       expect(back).toEqual(value);
     });
   }
 
-  it("floats that RFC 8949 would shorten stay 64-bit (1.5 is fb…, never f93e00)", () => {
+  test("floats that RFC 8949 would shorten stay 64-bit (1.5 is fb…, never f93e00)", () => {
     expect(hex(encodeDrisl(1.5))).toBe("fb3ff8000000000000");
     expect(hex(encodeDrisl(100000.0))).toBe("1a000186a0"); // integral numbers are integers
   });
 
-  it("map keys sort by the bytewise order of their encoding: shorter keys first, then bytes", () => {
+  test("map keys sort by the bytewise order of their encoding: shorter keys first, then bytes", () => {
     expect(hex(encodeDrisl({ aa: 1, b: 2 }))).toBe("a2616202626161" + "01");
     expect(hex(encodeDrisl({ b: 1, a: 2 }))).toBe("a2616102616201");
     // a 24-byte key gets a two-byte head (0x78 0x18) and sorts after every one-byte-head key
@@ -47,7 +47,7 @@ describe("DRISL encode — RFC 8949 Appendix A vectors that DRISL keeps", () => 
     expect(hex(encodeDrisl({ "𐅑": 1, "水": 2 }))).toBe("a263e6b0b40264f090859101");
   });
 
-  it("a CID is tag 42 over 0x00 ‖ the 36 CID bytes", () => {
+  test("a CID is tag 42 over 0x00 ‖ the 36 CID bytes", () => {
     const cid = parseCid(RAW);
     expect(hex(encodeDrisl(new Link(cid)))).toBe("d82a5825" + "00" + hex(cid.bytes));
     const back = decodeDrisl(encodeDrisl({ src: new Link(cid) })) as { src: Link };
@@ -122,7 +122,7 @@ describe("DRISL decode — strict: exactly one byte string per value", () => {
     expect(decodeDrisl(bytes("81".repeat(MAX_DEPTH) + "80"))).toBeTruthy();
   });
 
-  it("integers outside the safe range come back as bigint (±2^53 included), within it as number", () => {
+  test("integers outside the safe range come back as bigint (±2^53 included), within it as number", () => {
     expect(decodeDrisl(bytes("1b0020000000000000"))).toBe(2n ** 53n);
     expect(decodeDrisl(bytes("1b001fffffffffffff"))).toBe(Number.MAX_SAFE_INTEGER);
     expect(decodeDrisl(bytes("3b001fffffffffffff"))).toBe(-(2n ** 53n));
@@ -139,11 +139,10 @@ describe("DRISL agrees with @ipld/dag-cbor (cborg) on the values a manifest is m
     [{ "水": "𐅑", "aa": "", "b": "ü" }, { "水": "𐅑", "aa": "", "b": "ü" }],
   ];
   for (const [ours, theirs] of samples) {
-    it(`byte-identical: ${JSON.stringify(theirs).slice(0, 60)}`, () => {
+    it(`encodes ${JSON.stringify(theirs).slice(0, 60)} to dag-cbor's bytes, and each decodes the other's`, () => {
       const a = encodeDrisl(ours as never);
       const b = dagCbor.encode(theirs);
       expect(hex(a)).toBe(hex(b));
-      // and each decodes the other's bytes
       expect(() => decodeDrisl(b)).not.toThrow();
       expect(() => dagCbor.decode(a)).not.toThrow();
     });
@@ -151,7 +150,7 @@ describe("DRISL agrees with @ipld/dag-cbor (cborg) on the values a manifest is m
 });
 
 describe("DRISL agrees with @atcute/cbor (the AT Protocol's DASL codec)", () => {
-  it("byte-identical manifest, and each decodes the other's bytes", async () => {
+  it("encodes a manifest to @atcute/cbor's bytes, and each decodes the other's", async () => {
     const atcute = await import("@atcute/cbor");
     const atcid = await import("@atcute/cid");
     const ours = encodeDrisl({ resources: { "/index.json": { src: new Link(parseCid(RAW)), size: 272 }, "/files/a.png": { src: new Link(parseCid(RAW)), size: 5 } } });
@@ -166,7 +165,7 @@ describe("DRISL agrees with @atcute/cbor (the AT Protocol's DASL codec)", () => 
 });
 
 describe("DRISL maps have no prototype", () => {
-  it("a __proto__ key is a plain own property, round-trips, and pollutes nothing", () => {
+  test("a __proto__ key is a plain own property, round-trips, and pollutes nothing", () => {
     const doc = decodeDrisl(bytes("a1" + "69" + hex(new TextEncoder().encode("__proto__")) + "a1" + "61" + "61" + "01"));
     expect(Object.getPrototypeOf(doc)).toBeNull();
     expect(Object.keys(doc as object)).toEqual(["__proto__"]);
@@ -176,7 +175,7 @@ describe("DRISL maps have no prototype", () => {
     expect(hex(encodeDrisl(own))).toBe(hex(encodeDrisl(doc)));
   });
 
-  it("constructor and hasOwnProperty are keys like any other", () => {
+  test("constructor and hasOwnProperty are keys like any other", () => {
     const doc = decodeDrisl(encodeDrisl({ constructor: 1, hasOwnProperty: 2 })) as { [key: string]: unknown };
     expect(doc["constructor"]).toBe(1);
     expect(doc["hasOwnProperty"]).toBe(2);
@@ -185,7 +184,7 @@ describe("DRISL maps have no prototype", () => {
 });
 
 describe("DRISL decodes to what reserializes to the same bytes", () => {
-  it("a leading U+FEFF is text, not a byte-order mark: strings keep it, and \"x\" and \"\\uFEFFx\" are two keys", () => {
+  test("a leading U+FEFF is text, not a byte-order mark: strings keep it, and \"x\" and \"\\uFEFFx\" are two keys", () => {
     expect(hex(encodeDrisl("\uFEFF"))).toBe("63efbbbf");
     expect(decodeDrisl(bytes("63efbbbf"))).toBe("\uFEFF");
     expect(decodeDrisl(encodeDrisl("\uFEFFhello"))).toBe("\uFEFFhello");
@@ -197,7 +196,7 @@ describe("DRISL decodes to what reserializes to the same bytes", () => {
     expect(hex(encodeDrisl(decoded as never))).toBe(hex(encoded));
   });
 
-  it("a 64-bit float in the safe-integer range comes back as a Float and reserializes as the float it was; past it, a number", () => {
+  test("a 64-bit float in the safe-integer range comes back as a Float and reserializes as the float it was; past it, a number", () => {
     for (const [encoded, value] of [["fb3ff0000000000000", 1], ["fb0000000000000000", 0], ["fbc000000000000000", -2]] as const) {
       const back = decodeDrisl(bytes(encoded));
       expect(back).toBeInstanceOf(Float);

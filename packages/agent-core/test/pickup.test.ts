@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { Message } from "@estoc/didcomm-node";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
@@ -48,7 +48,7 @@ describe("pickup over the ring", () => {
     await p.runtime.close();
   });
 
-  it("a frame down the socket is the mediator's with its sender protected, and dropped when another sealed it", async () => {
+  test("a frame down the socket is the mediator's with its sender protected, and dropped when another sealed it", async () => {
     const mediator = await newMediator();
     mediator.protectSender = true;
     const p = await party(mediator);

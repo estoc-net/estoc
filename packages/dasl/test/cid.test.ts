@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { CID } from "multiformats/cid";
 import { sha256 } from "multiformats/hashes/sha2";
 import { base32Decode, base32Encode, checkCid, cidFromBytes, cidOf, codecOf, drislCid, isDaslCid, parseCid, rawCid, DRISL_CODE, RAW_CODE } from "../src/index.js";
@@ -8,7 +8,7 @@ const utf8 = (s: string) => new TextEncoder().encode(s);
 describe("base32 lower (RFC 4648, no padding)", () => {
   const vectors: [string, string][] = [["", ""], ["f", "my"], ["fo", "mzxq"], ["foo", "mzxw6"], ["foob", "mzxw6yq"], ["fooba", "mzxw6ytb"], ["foobar", "mzxw6ytboi"]];
   for (const [input, expected] of vectors) {
-    it(`${JSON.stringify(input)} ↔ ${expected}`, () => {
+    it(`encodes ${JSON.stringify(input)} as ${expected} and decodes it back`, () => {
       expect(base32Encode(utf8(input))).toBe(expected);
       expect(new TextDecoder().decode(base32Decode(expected))).toBe(input);
     });
@@ -21,13 +21,13 @@ describe("base32 lower (RFC 4648, no padding)", () => {
 });
 
 describe("DASL CID", () => {
-  it("raw CID is the one multiformats computes, byte for byte", async () => {
+  test("raw CID is the one multiformats computes, byte for byte", async () => {
     const b = utf8("<h1>hi</h1>");
     expect(await rawCid(b)).toBe("bafkreihh7o3pxp2m4kkjcpvwfnj76a5hkrtett64bwbe3hr2fncucubpp4");
     expect(await rawCid(b)).toBe(CID.create(1, 0x55, await sha256.digest(b)).toString());
   });
 
-  it("drisl CID agrees with multiformats, byte for byte", async () => {
+  test("drisl CID agrees with multiformats, byte for byte", async () => {
     const b = utf8("a0");
     const ours = await cidOf(DRISL_CODE, b);
     const theirs = CID.create(1, 0x71, await sha256.digest(b));
@@ -53,7 +53,7 @@ describe("DASL CID", () => {
     expect(codecOf("nope")).toBeNull();
   });
 
-  it("checkCid proves bytes against a CID under its own codec", async () => {
+  test("checkCid proves bytes against a CID under its own codec", async () => {
     const b = utf8("hello");
     await expect(checkCid(await rawCid(b), b)).resolves.toBeTruthy();
     await expect(checkCid(await rawCid(b), utf8("hellp"))).rejects.toThrow(/do not hash/);
@@ -72,21 +72,21 @@ describe("raw CIDs the vault names objects by", () => {
   const fromHex = (h: string) => new Uint8Array(h.match(/../g)!.map((x) => parseInt(x, 16)));
   const ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
-  it("the empty raw object has its known CID", async () => {
+  test("the empty raw object has its known CID", async () => {
     const cid = await cidOf(RAW_CODE, new Uint8Array());
     expect(hex(cid.bytes)).toBe("01551220e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     expect(cid.text).toBe("bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku");
     expect(parseCid(cid.text).text).toBe(cid.text);
   });
 
-  it("UTF-8 \"hello\" has its known CID, in both forms", async () => {
+  test("UTF-8 \"hello\" has its known CID, in both forms", async () => {
     const cid = await cidOf(RAW_CODE, utf8("hello"));
     expect(hex(cid.bytes)).toBe("015512202cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
     expect(cid.text).toBe("bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq");
     expect(cidFromBytes(fromHex(hex(cid.bytes))).text).toBe(cid.text);
   });
 
-  it("CIDv0, uppercase, non-canonical base32, dag-pb, non-SHA-256 and a wrong digest length are refused", async () => {
+  test("CIDv0, uppercase, non-canonical base32, dag-pb, non-SHA-256 and a wrong digest length are refused", async () => {
     const raw = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq";
     const digest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
     // CIDv0 (base58btc, dag-pb, sha-256)

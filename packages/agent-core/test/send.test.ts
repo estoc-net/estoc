@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test } from "vitest";
 
 import {
   EMPTY_MESSAGE_TYPE,
@@ -126,7 +126,7 @@ describe("send to a channel", () => {
     await closeAll(alice, bob, carol);
   });
 
-  it("the same message ID with the same target and content is returned, not repeated; another intent or target under it is refused", async () => {
+  test("the same message ID with the same target and content is returned, not repeated; another intent or target under it is refused", async () => {
     const { alice, bob, carol, toBob, toCarol } = await parties();
     const sent = await send(alice.runtime, alice.keys, { channel: toBob }, HELLO, { messageId: MESSAGE });
     const again = await send(alice.runtime, alice.keys, { channel: { localDid: alice.longFormDid, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
@@ -157,7 +157,7 @@ describe("send to a channel", () => {
     await closeAll(alice, bob, carol);
   });
 
-  it("a channel a verified replacement moved on from takes a send only as an explicit pre-rotation choice; the successor takes it by default, and the old intent stays where it was", async () => {
+  test("a channel a verified replacement moved on from takes a send only as an explicit pre-rotation choice; the successor takes it by default, and the old intent stays where it was", async () => {
     const { alice, bob, carol, toBob } = await parties();
     const before = await send(alice.runtime, alice.keys, { channel: toBob }, HELLO, { messageId: MESSAGE });
     const { next } = await rotated(alice, bob);

@@ -5,7 +5,7 @@ import { p256, p384, p521 } from "@noble/curves/nist";
 import { base64urlnopad } from "@scure/base";
 import { SignJWT, importJWK } from "jose";
 import { v7 as uuidv7 } from "uuid";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import {
   AUTHENTICATION_METHOD,
@@ -227,7 +227,7 @@ describe("foldCarriers", () => {
     expectSameOverEveryOrder(scene.events, checks, proofs);
   });
 
-  it("a short-form issuer waits for a verified retained resolution of that DID, under either presented spelling, and needs its document", async () => {
+  test("a short-form issuer waits for a verified retained resolution of that DID, under either presented spelling, and needs its document", async () => {
     const { scene, keys, peerKeys, a0, a1, b0, b1 } = await vaults();
     const root = resolved(scene, a0.didId, b1);
     const jwt = await resign(peerKeys, b0.didId, { alg: "EdDSA", typ: "JWT", kid: `${b0.did}${AUTHENTICATION_METHOD}` }, { iss: b0.did, sub: b1.longFormDid, iat: IAT });
@@ -293,7 +293,7 @@ describe("foldCarriers", () => {
     expect(evidence.positive(ourShortPredecessor.cid)).toBe(false);
   });
 
-  it("an issuer the vault would refuse to retain a document for is that proof's business alone: the profile's verdict stands, verified or not, and the fold goes on", async () => {
+  test("an issuer the vault would refuse to retain a document for is that proof's business alone: the profile's verdict stands, verified or not, and the fold goes on", async () => {
     const { scene, keys, peerKeys, a0, b0, b1 } = await vaults();
     const root = resolved(scene, a0.didId, b1);
     const input = inputDocumentOf(await peerKeys.didKeys(b0.didId), ENDPOINT);
@@ -315,7 +315,7 @@ describe("foldCarriers", () => {
     expectSameOverEveryOrder(scene.events, checks, proofs);
   });
 
-  it("a link stands on one complete verified carrier while a sibling of the same message is incomplete or invalid, and lends that sibling nothing", async () => {
+  test("a link stands on one complete verified carrier while a sibling of the same message is incomplete or invalid, and lends that sibling nothing", async () => {
     const { scene, keys, peerKeys, a0, b0, b1 } = await vaults();
     const root = resolved(scene, a0.didId, b1);
     const jwt = await proof(peerKeys, b0, b1);

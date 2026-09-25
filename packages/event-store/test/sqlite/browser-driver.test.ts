@@ -26,7 +26,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { type Browser, chromium } from "playwright-core";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, test } from "vitest";
 
 import { openNodeSqlite } from "../../src/node.js";
 import { exportVault, importVault, openPortable } from "../../src/index.js";
@@ -178,29 +178,29 @@ describe.skipIf(outcome === undefined)("sqlite-wasm driver (in a Chromium Worker
   }
 
   for (const c of [...driverCases, ...openCases, ...eventCases, ...objectCases, ...vaultCases, ...exportCases, ...importCases, ...poolCases]) {
-    it(c.name, () => report(results.get(c.name)));
+    test(c.name, () => report(results.get(c.name)));
   }
   for (const name of PAGE_CASES) {
-    it(name, () => report(results.get(name)));
+    test(name, () => report(results.get(name)));
   }
 
   describe("the conformance suites over the pool", () => {
     for (const suite of SUITES) {
-      it(`${suite}: collected`, () => {
+      it(`collects results of the ${suite} suite from the browser`, () => {
         expect(suites.filter((result) => result.name.startsWith(suite)).length).toBeGreaterThan(0);
       });
     }
     for (const result of suites) {
-      it(result.name, () => report(result));
+      test(result.name, () => report(result));
     }
   });
 
   describe("a portable snapshot crossing platforms", () => {
-    it("the snapshot node:sqlite exported inspects in Chromium as it does here", () => {
+    test("the snapshot node:sqlite exported inspects in Chromium as it does here", () => {
       expect(outcome?.exchanged.inspected).toEqual(outcome?.sample);
     });
 
-    it("the snapshot Chromium exported, continued from the one it was sent, inspects here as it did there, and imports into the sample vault", async () => {
+    test("the snapshot Chromium exported, continued from the one it was sent, inspects here as it did there, and imports into the sample vault", async () => {
       if (outcome === undefined) return;
       const { exchanged, sample, dir, sampleVault } = outcome;
       expect(exchanged.continued.events).toHaveLength(sample.events.length + 1);

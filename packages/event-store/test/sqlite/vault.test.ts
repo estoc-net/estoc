@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { openNodeSqlite } from "../../src/node.js";
 import { SqliteVault, createRuntime, openRuntime, type OpenMode, type SqliteDriver } from "../../src/index.js";
@@ -42,7 +42,7 @@ vaultSuite("SqliteVault on a file", vaultOpener({ fresh, open }));
 
 describe("the vault cases on node:sqlite files", () => {
   for (const c of vaultCases) {
-    it(c.name, async () => {
+    test(c.name, async () => {
       const note = await c.run({ fresh, open: async (target, mode) => open(target, mode) });
       if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
     });
@@ -98,7 +98,7 @@ describe("a commit across a crash", () => {
     }
   }
 
-  it("killed right after any statement of the commit, the process leaves the batch whole or not at all; never killed, it leaves it whole", async () => {
+  test("killed right after any statement of the commit, the process leaves the batch whole or not at all; never killed, it leaves it whole", async () => {
     const bundle = path.join(dir, "commit-child.mjs");
     await build({
       entryPoints: [fileURLToPath(new URL("./commit-child.ts", import.meta.url))],

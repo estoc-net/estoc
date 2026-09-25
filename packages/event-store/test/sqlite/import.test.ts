@@ -7,7 +7,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, test } from "vitest";
 
 import { openNodeSqlite } from "../../src/node.js";
 import { SqliteVault, createRuntime, exportVault, openPortable, openRuntime, restoreVault, type OpenMode, type SqliteDriver } from "../../src/index.js";
@@ -38,7 +38,7 @@ describe("the import cases on node:sqlite files", () => {
     importFile: (target, bytes) => writeFile(target, bytes),
   };
   for (const c of importCases) {
-    it(c.name, async () => {
+    test(c.name, async () => {
       const note = await c.run(harness);
       if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
     });

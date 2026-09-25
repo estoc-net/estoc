@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, test } from "vitest";
 
 import { openNodeSqlite } from "@estoc/event-store/node";
 import { AnchorMismatch, NotAVault, ReadOnlyVault, SnapshotTooLarge, exportVault, type OpenMode } from "@estoc/event-store";
@@ -106,7 +106,7 @@ describe("a snapshot inspected", () => {
     await reopened.runtime.close();
   });
 
-  it("a snapshot's file bound is enforced before anything is read", async () => {
+  test("a snapshot's file bound is enforced before anything is read", async () => {
     const made = await freshVault(1, "Alice");
     const snapshot = fresh();
     await exportVault(made.runtime, (mode) => open(snapshot, mode), { heldRoots: vaultHeldRoots(made.keys) });
@@ -116,7 +116,7 @@ describe("a snapshot inspected", () => {
 });
 
 describe("in memory", () => {
-  it("a private database works the same, for tests", async () => {
+  it("makes and folds a vault on a private in-memory database", async () => {
     const made = await freshVault(3, "Carol", memoryDriver());
     expect(made.fold.label).toBe("Carol");
     await made.runtime.close();

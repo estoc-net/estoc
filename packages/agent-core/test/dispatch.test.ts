@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, test, vi } from "vitest";
 
 import type { DIDDoc } from "@estoc/did-peer";
 import { parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store";
@@ -101,7 +101,7 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
-  it("a refusal or a lost line spends the action and writes nothing; each manual retry carries the same bytes, until the acceptance", async () => {
+  test("a refusal or a lost line spends the action and writes nothing; each manual retry carries the same bytes, until the acceptance", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const sent = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
@@ -168,7 +168,7 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
-  it("a prerequisite still to come leaves the action live and the wire untouched; the same action carries the message once it is there", async () => {
+  test("a prerequisite still to come leaves the action live and the wire untouched; the same action carries the message once it is there", async () => {
     const { alice, bob } = await parties();
     const wire = posting(accepted);
     const sent = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.did } }, HELLO, { messageId: MESSAGE });
@@ -188,7 +188,7 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
-  it("one action is one call: two dispatches under it make one", async () => {
+  test("one action is one call: two dispatches under it make one", async () => {
     const { alice, bob } = await parties();
     const wire = posting(accepted);
     const sent = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
@@ -198,7 +198,7 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
-  it("an acceptance the disk would not record is owed: recorded before the message is worked on again, without another call", async () => {
+  test("an acceptance the disk would not record is owed: recorded before the message is worked on again, without another call", async () => {
     const { alice, bob } = await parties();
     const wire = posting(accepted);
     const sent = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
@@ -216,7 +216,7 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
-  it("an acceptance still owed is recorded before a prepare looks at the expiry: the message is submitted, not expired, and one that cannot be recorded stops the prepare", async () => {
+  test("an acceptance still owed is recorded before a prepare looks at the expiry: the message is submitted, not expired, and one that cannot be recorded stops the prepare", async () => {
     const { alice, bob } = await parties();
     const wire = posting(accepted);
     const timed: Content = { ...HELLO, createdTime: 1_000, expiresTime: 2_000 };
@@ -239,7 +239,7 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
-  it("an expiry that has come terminates the message before the call, before or after preparation", async () => {
+  test("an expiry that has come terminates the message before the call, before or after preparation", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const wire = posting(accepted);
@@ -265,7 +265,7 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
-  it("an expiry that has come terminates the message whatever else holds it up — a blocked channel, a resolution not here — and leaves a submitted or terminated message as it is", async () => {
+  test("an expiry that has come terminates the message whatever else holds it up — a blocked channel, a resolution not here — and leaves a submitted or terminated message as it is", async () => {
     const { alice, bob } = await parties();
     const carol = await directParty(3, "https://carol.example/didcomm", CAROL);
     const wire = posting(accepted);
@@ -314,7 +314,7 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob, carol);
   });
 
-  it("a deadline that passes while the lock is waited for costs the action nothing: nothing is called, and the same action calls once the lock is free", async () => {
+  test("a deadline that passes while the lock is waited for costs the action nothing: nothing is called, and the same action calls once the lock is free", async () => {
     const { alice, bob } = await parties();
     const wire = posting(accepted);
     const sent = await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
@@ -370,7 +370,7 @@ describe("dispatch to a direct endpoint", () => {
 });
 
 describe("dispatch through a mediator", () => {
-  it("a recipient behind a mediator gets the envelope inside a forward sealed to the mediator alone, under the package's ID, and it arrives intact", async () => {
+  test("a recipient behind a mediator gets the envelope inside a forward sealed to the mediator alone, under the package's ID, and it arrives intact", async () => {
     const mediator = await newMediator();
     const bob = await mediatedParty(mediator, 2, BOB);
     await reconcile(bob.link, bob.runtime, bob.keys, bob.mediationId);
@@ -396,7 +396,7 @@ describe("dispatch through a mediator", () => {
     await closeAll(alice, bob);
   });
 
-  it("a mediated sender the peer has not written to is made to be held by its mediator first; one the mediator does not hold, or cannot be asked, waits; a confirmed sender needs no mediator", async () => {
+  test("a mediated sender the peer has not written to is made to be held by its mediator first; one the mediator does not hold, or cannot be asked, waits; a confirmed sender needs no mediator", async () => {
     const mediator = await newMediator();
     const alice = await mediatedParty(mediator, 1, ALICE);
     const carol = await mediatedParty(mediator, 3, CAROL);
@@ -436,7 +436,7 @@ describe("dispatch through a mediator", () => {
     await closeAll(alice, carol, bob);
   });
 
-  it("a mediator that pages its recipients without end holds up neither the message nor its cancellation: the attempt is refused after the page that made no progress, the action stays live, and the cancel goes through", async () => {
+  test("a mediator that pages its recipients without end holds up neither the message nor its cancellation: the attempt is refused after the page that made no progress, the action stays live, and the cancel goes through", async () => {
     const mediator = await newMediator();
     const alice = await mediatedParty(mediator, 1, ALICE);
     const bob = await directParty(2, BOB_ENDPOINT, BOB);

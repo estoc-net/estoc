@@ -1,5 +1,5 @@
 import { canonicalize } from "@estoc/event-store";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { v5 as uuidv5 } from "uuid";
 
 import {
@@ -99,7 +99,7 @@ describe("inboundMessageId and executionId", () => {
     expect(executionId(PEER, LOCAL, ACK_WIRE)).not.toBe(uuidv5(canonicalize(["v4", { did: PEER, localDid: LOCAL }, ACK_WIRE]), estocNamespace("message-execution")));
   });
 
-  it("an anonymous observation is scoped by the local key, and never equals an authenticated one", () => {
+  test("an anonymous observation is scoped by the local key, and never equals an authenticated one", () => {
     const k1 = "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement" as KeyName;
     const k2 = "did/019b6a10-12c0-7410-89ab-38e54b097c21/key-agreement" as KeyName;
     expect(anonymousMessageId(k1, ACK_WIRE)).toBe(uuidv5(canonicalize(["v1", "anonymous", k1, ACK_WIRE]), estocNamespace("inbound-message")));
@@ -119,13 +119,13 @@ describe("inboundMessageId and executionId", () => {
 });
 
 describe("effectKey and automaticMessageId", () => {
-  it("the pure ACK of the delivery fixture", () => {
+  it("give the delivery fixture's pure ACK its published key and message ID", () => {
     const key = effectKey(ACK_EXECUTION, PURE_ACK);
     expect(key).toBe("Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20");
     expect(automaticMessageId(key)).toBe("3543ac01-4ac6-5c14-b160-4f8f4e2e6811");
   });
 
-  it("both members of the tuple change the key, and the key alone determines the message ID", () => {
+  test("both members of the tuple change the key, and the key alone determines the message ID", () => {
     const keys = [effectKey(ACK_EXECUTION, PURE_ACK), effectKey("a03249b8-5e3e-5d10-a2e7-46844b38f5ae" as ExecutionId, PURE_ACK), effectKey(ACK_EXECUTION, PING_RESPONSE)];
     expect(new Set(keys).size).toBe(keys.length);
     expect(automaticMessageId(keys[0] as EffectKey)).toBe(automaticMessageId(effectKey(ACK_EXECUTION, PURE_ACK)));

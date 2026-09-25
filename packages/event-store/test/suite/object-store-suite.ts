@@ -1,6 +1,6 @@
 import { base32Encode } from "@estoc/dasl";
 import { sha256 } from "@noble/hashes/sha2";
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import {
   DamagedObject,
@@ -134,7 +134,7 @@ export const BAD_CIDS: [string, string][] = [
 export function objectStoreSuite(name: string, open: OpenObjectStore): void {
   describe(`${name}: objectStoreSuite`, () => {
     describe("identity, verification and streaming", () => {
-      it("the empty object has the CID of the vector, size 0, and round-trips", async () => {
+      test("the empty object has the CID of the vector, size 0, and round-trips", async () => {
         const { store } = await open();
         const info = await store.putRaw(new Uint8Array(0));
         expect(info).toEqual({ cid: EMPTY_CID, codec: "raw", size: 0 });
@@ -147,7 +147,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await all(store.list())).toEqual([EMPTY_CID]);
       });
 
-      it('"hello" has the CID of the vector, by putRaw and by putObject alike', async () => {
+      test('"hello" has the CID of the vector, by putRaw and by putObject alike', async () => {
         const { store } = await open();
         expect(await store.putRaw(HELLO)).toEqual({ cid: HELLO_CID, codec: "raw", size: 5 });
         const { store: other } = await open();
@@ -155,7 +155,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expectBytes(await other.read(HELLO_CID, 5), HELLO);
       });
 
-      it("one shot, every chunking, an async iterable and a ReadableStream give one CID and the exact bytes back", async () => {
+      test("one shot, every chunking, an async iterable and a ReadableStream give one CID and the exact bytes back", async () => {
         const bytes = bytesOf(100_003, 1);
         const want = cidOf(bytes);
         const { store: whole } = await open();
@@ -174,7 +174,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         }
       });
 
-      it("every CID a reader or writer is handed is checked first; what is not a canonical raw DASL CID is InvalidCid, whatever the method", async () => {
+      test("every CID a reader or writer is handed is checked first; what is not a canonical raw DASL CID is InvalidCid, whatever the method", async () => {
         const { store } = await open();
         await store.putRaw(HELLO);
         for (const [why, bad] of BAD_CIDS) {
@@ -189,7 +189,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await all(store.list())).toEqual([HELLO_CID]); // nothing accepted, nothing unlinked
       });
 
-      it("bytes that do not hash to the CID given — one byte changed, one missing, one extra — are refused with no object exposed", async () => {
+      test("bytes that do not hash to the CID given — one byte changed, one missing, one extra — are refused with no object exposed", async () => {
         const bytes = bytesOf(5_000, 2);
         const want = cidOf(bytes);
         const changed = bytes.slice();
@@ -210,7 +210,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         }
       });
 
-      it("a source that throws midway leaves nothing behind", async () => {
+      test("a source that throws midway leaves nothing behind", async () => {
         const { store } = await open();
         const bytes = bytesOf(1_000, 3);
         async function* failing(): AsyncIterable<Uint8Array> {
@@ -222,7 +222,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await all(store.list())).toEqual([]);
       });
 
-      it("the backend's extent size changes neither the CID nor the bytes that come back", async () => {
+      test("the backend's extent size changes neither the CID nor the bytes that come back", async () => {
         const bytes = bytesOf(70_001, 4);
         const want = cidOf(bytes);
         const infos = [];
@@ -237,7 +237,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(new Set(infos.map((info) => info.cid)).size).toBe(1);
       });
 
-      it("a large object streams in, streams out — in however many chunks the store chooses — verifies, and a bounded read refuses before allocating", async () => {
+      test("a large object streams in, streams out — in however many chunks the store chooses — verifies, and a bounded read refuses before allocating", async () => {
         const size = 8 * 1024 * 1024 + 1;
         const chunk = 64 * 1024;
         // The source is generated as it is pulled; nothing here holds the whole object.
@@ -264,7 +264,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect((await store.read(want, size))?.length).toBe(size);
       });
 
-      it("an object over the store's accepted-size bound is ObjectTooLarge, nothing is accepted, and the source is not read past the bound", async () => {
+      test("an object over the store's accepted-size bound is ObjectTooLarge, nothing is accepted, and the source is not read past the bound", async () => {
         const { store } = await open({ maxObjectBytes: 1_000 });
         let pulled = 0;
         async function* endless(): AsyncIterable<Uint8Array> {
@@ -280,7 +280,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         await expect(store.putObject(cidOf(bytesOf(1_001, 9)), bytesOf(1_001, 9))).rejects.toThrow(ObjectTooLarge);
       });
 
-      it("putObject of a CID already held is idempotent — one object, its bytes untouched — and a wrong source under it is still refused", async () => {
+      test("putObject of a CID already held is idempotent — one object, its bytes untouched — and a wrong source under it is still refused", async () => {
         const { store } = await open();
         const bytes = bytesOf(3_000, 5);
         const cid = cidOf(bytes);
@@ -292,7 +292,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expectBytes(await store.read(cid, 3_000), bytes);
       });
 
-      it("read refuses an object larger than maxBytes and a bound that is not a non-negative integer; an absent object is null", async () => {
+      test("read refuses an object larger than maxBytes and a bound that is not a non-negative integer; an absent object is null", async () => {
         const { store } = await open();
         await store.putRaw(HELLO);
         await expect(store.read(HELLO_CID, 4)).rejects.toThrow(ObjectTooLarge);
@@ -307,7 +307,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.open(EMPTY_CID)).toBeNull();
       });
 
-      it("the bytes a read hands out are the caller's: changing them changes nothing held", async () => {
+      test("the bytes a read hands out are the caller's: changing them changes nothing held", async () => {
         const { store } = await open();
         const bytes = bytesOf(100, 7);
         const cid = cidOf(bytes);
@@ -319,7 +319,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expectBytes(await store.read(cid, 100), bytes);
       });
 
-      it("what is held is the store's own memory — a source's buffer rewritten after put, a generator reusing one buffer, a streamed chunk rewritten by its reader change nothing", async () => {
+      test("what is held is the store's own memory — a source's buffer rewritten after put, a generator reusing one buffer, a streamed chunk rewritten by its reader change nothing", async () => {
         const bytes = bytesOf(24, 8);
         const cid = cidOf(bytes);
         // One shot, as a view into a larger buffer the caller keeps and rewrites.
@@ -352,7 +352,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await all(b.list())).toEqual([cid]);
       });
 
-      it("list: every accepted object once, in binary-CID byte order, which is not string order", async () => {
+      test("list: every accepted object once, in binary-CID byte order, which is not string order", async () => {
         const { store } = await open();
         const cids: Cid[] = [];
         for (let i = 0; i < 40; i++) cids.push((await store.putRaw(bytesOf(10, 100 + i))).cid);
@@ -387,7 +387,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         await expect(all(store.list())).rejects.toThrow(DamagedObject);
       }
 
-      it("collect deletes exactly the unkept, at once and whatever their age; the keep set is exact, a duplicate no different; removed is unique, in binary-CID byte order", async () => {
+      test("collect deletes exactly the unkept, at once and whatever their age; the keep set is exact, a duplicate no different; removed is unique, in binary-CID byte order", async () => {
         const { store } = await open();
         const kept = (await store.putRaw(bytesOf(10, 11))).cid;
         const orphans: Cid[] = [];
@@ -405,7 +405,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expectBytes(await store.read(kept, 10), bytesOf(10, 11));
       });
 
-      it("with no keep set at all, everything goes; a store with nothing collects nothing", async () => {
+      test("with no keep set at all, everything goes; a store with nothing collects nothing", async () => {
         const { store } = await open();
         expect(await store.collect([])).toEqual({ removed: [] });
         const cids = [];
@@ -415,7 +415,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.collect([])).toEqual({ removed: [] });
       });
 
-      it("an invalid CID in keep fails the pass before it begins: nothing is touched", async () => {
+      test("an invalid CID in keep fails the pass before it begins: nothing is touched", async () => {
         const { store } = await open();
         const cid = (await store.putRaw(HELLO)).cid;
         await expect(store.collect([cid, "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi" as Cid])).rejects.toThrow(InvalidCid);
@@ -423,7 +423,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.has(cid)).toBe(true);
       });
 
-      it("a CID written inside an object's bytes retains nothing; only the keep set does", async () => {
+      test("a CID written inside an object's bytes retains nothing; only the keep set does", async () => {
         const { store } = await open();
         const leaf = (await store.putRaw(bytesOf(50, 14))).cid;
         const root = (await store.putRaw(new TextEncoder().encode(JSON.stringify({ attachment: leaf })))).cid;
@@ -432,7 +432,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.has(leaf)).toBe(false);
       });
 
-      it("a stream open when its object is collected completes with the whole object or fails explicitly, never a truncation; the object is absent either way", async () => {
+      test("a stream open when its object is collected completes with the whole object or fails explicitly, never a truncation; the object is absent either way", async () => {
         const { store } = await open({ extentBytes: 4 });
         const bytes = bytesOf(10, 15);
         const cid = (await store.putRaw(bytes)).cid;
@@ -457,7 +457,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         if (!failed) expectBytes(join(parts), bytes); // or completed: then with every byte
       });
 
-      it("an object a read finds not to hash to its CID fails that read and is known damaged from then on: has, stat, open, read and list all fail, other objects are untouched", async () => {
+      test("an object a read finds not to hash to its CID fails that read and is known damaged from then on: has, stat, open, read and list all fail, other objects are untouched", async () => {
         const { store, corrupt } = await open({ extentBytes: 4 });
         if (corrupt === undefined) return; // a backend that cannot be damaged from outside has nothing to show here
         const bytes = bytesOf(10, 22);
@@ -478,7 +478,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         await expectDamaged(fresh, cid);
       });
 
-      it("collection with a known damaged object: kept, it stays and stays damaged; unkept, it goes, is in removed, and reports absence after", async () => {
+      test("collection with a known damaged object: kept, it stays and stays damaged; unkept, it goes, is in removed, and reports absence after", async () => {
         const { store, corrupt } = await open({ extentBytes: 4 });
         if (corrupt === undefined) return;
         const bytes = bytesOf(10, 24);
@@ -496,7 +496,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await all(store.list())).toEqual([sound]);
       });
 
-      it("verified replacement of a known damaged object restores normal results, by putObject and by putRaw alike; wrong bytes are DigestMismatch and leave the damage as it was", async () => {
+      test("verified replacement of a known damaged object restores normal results, by putObject and by putRaw alike; wrong bytes are DigestMismatch and leave the damage as it was", async () => {
         const { store, corrupt } = await open({ extentBytes: 4 });
         if (corrupt === undefined) return;
         const bytes = bytesOf(10, 26);

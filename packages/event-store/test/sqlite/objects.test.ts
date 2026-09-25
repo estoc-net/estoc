@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, test } from "vitest";
 
 import { openNodeSqlite } from "../../src/node.js";
 import {
@@ -109,7 +109,7 @@ objectStoreSuite("SqliteObjectStore on a file", objectStoreOpener({ fresh, open 
 
 describe("the object cases on node:sqlite files", () => {
   for (const c of objectCases) {
-    it(
+    test(
       c.name,
       async () => {
         const note = await c.run({ fresh, open: async (target, mode) => open(target, mode), remove: (target) => rm(target, { force: true }), memoryUsed: heldOnNode });
@@ -121,7 +121,7 @@ describe("the object cases on node:sqlite files", () => {
 });
 
 describe("SqliteObjectStore", () => {
-  it("the chunk size is the format's mebibyte; a bound that is not a non-negative integer is refused", () => {
+  test("the chunk size is the format's mebibyte; a bound that is not a non-negative integer is refused", () => {
     expect(CHUNK_BYTES).toBe(1 << 20);
     const db = createRuntime(open(":memory:", "create"), { metadata: META, wrapped: WRAPPED });
     expect(() => new SqliteObjectStore(db, { maxObjectBytes: -1 })).toThrow(RangeError);
@@ -198,7 +198,7 @@ describe("SqliteObjectStore", () => {
     db.close();
   });
 
-  it("a preparation dropped unpublished leaves the store as it was; a second staging of one CID replaces the first", async () => {
+  test("a preparation dropped unpublished leaves the store as it was; a second staging of one CID replaces the first", async () => {
     const { db, store } = create(":memory:");
     const bytes = bytesOf(10, 4);
     const cid = cidOf(bytes);
@@ -214,7 +214,7 @@ describe("SqliteObjectStore", () => {
     db.close();
   });
 
-  it("a stream open on an object a repair replaces fails at its next chunk, explicitly, and is not damage; a stream opened after reads the new bytes", async () => {
+  test("a stream open on an object a repair replaces fails at its next chunk, explicitly, and is not damage; a stream opened after reads the new bytes", async () => {
     const { db, store } = create(":memory:");
     const bytes = bytesOf(CHUNK_BYTES + 5, 5);
     const cid = (await store.putRaw(bytes)).cid;
@@ -233,7 +233,7 @@ describe("SqliteObjectStore", () => {
     db.close();
   });
 
-  it("a stream that finds the digest wrong on the object it opened on marks it damaged; one on an object collected meanwhile does not", async () => {
+  test("a stream that finds the digest wrong on the object it opened on marks it damaged; one on an object collected meanwhile does not", async () => {
     const { db, store } = create(":memory:");
     const bytes = bytesOf(CHUNK_BYTES + 5, 6);
     const cid = (await store.putRaw(bytes)).cid;
@@ -273,7 +273,7 @@ describe("SqliteObjectStore", () => {
     db.close();
   });
 
-  it("what a reopen finds is what was accepted; damage is found again by the read that meets it, and a repair lays the object out anew", async () => {
+  test("what a reopen finds is what was accepted; damage is found again by the read that meets it, and a repair lays the object out anew", async () => {
     const file = fresh();
     const made = create(file);
     const bytes = bytesOf(CHUNK_BYTES + 5, 8);
@@ -294,7 +294,7 @@ describe("SqliteObjectStore", () => {
     again.db.close();
   });
 
-  it("a key that is no CID is damage named by its rowid: list fails on it, collect removes it without naming it, and a read of a proper CID is untouched", async () => {
+  test("a key that is no CID is damage named by its rowid: list fails on it, collect removes it without naming it, and a read of a proper CID is untouched", async () => {
     const { db, store } = create(":memory:");
     const cid = (await store.putRaw(bytesOf(10, 9))).cid;
     exec(db.driver, "INSERT INTO objects (cid, size) VALUES ('not-a-cid', 0)");
@@ -311,7 +311,7 @@ describe("SqliteObjectStore", () => {
     db.close();
   });
 
-  it("collect is one transaction: a keep set is checked before it, and a failure inside it deletes nothing", async () => {
+  test("collect is one transaction: a keep set is checked before it, and a failure inside it deletes nothing", async () => {
     const { db, store } = create(":memory:");
     const cids = sortCids(await Promise.all([1, 2, 3].map(async (seed) => (await store.putRaw(bytesOf(10, 30 + seed))).cid)));
     db.driver.exec(`CREATE TRIGGER local_refuse BEFORE DELETE ON objects WHEN OLD.cid = '${cids[2] as string}' BEGIN SELECT RAISE(ABORT, 'refused'); END`);
@@ -345,7 +345,7 @@ describe("SqliteObjectStore", () => {
     db.close();
   });
 
-  it("a process that dies inside its acceptance leaves no object; one that committed leaves it whole", async () => {
+  test("a process that dies inside its acceptance leaves no object; one that committed leaves it whole", async () => {
     const file = fresh();
     const made = create(file);
     const before = (await made.store.putRaw(bytesOf(10, 40))).cid;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { DamagedObject, DEFAULT_EXTENT_BYTES, DEFAULT_MAX_OBJECT_BYTES, DigestMismatch, MemoryObjectStore, chunksOf, compareCids, type Cid, type ObjectStore } from "../src/index.js";
 import { all, expectBytes } from "./suite/helpers.js";
@@ -192,7 +192,7 @@ describe("MemoryObjectStore", () => {
     expect((await drain((await one.open(EMPTY_CID)) as ReadableStream<Uint8Array>)).chunks).toBe(0);
   });
 
-  it("a large object comes out in as many extents as it spans — one, when the extent is larger than the object", async () => {
+  test("a large object comes out in as many extents as it spans — one, when the extent is larger than the object", async () => {
     const size = 8 * 1024 * 1024 + 1;
     const chunk = 64 * 1024;
     async function* large(): AsyncIterable<Uint8Array> {
@@ -227,7 +227,7 @@ describe("MemoryObjectStore", () => {
     expectBytes(await store.read(cid, 12), want);
   });
 
-  it("a Buffer is a Uint8Array whose slice is a view — one put whole, one reused by a generator, one chunk handed out by a stream: none of them shares memory with what is held", async () => {
+  test("a Buffer is a Uint8Array whose slice is a view — one put whole, one reused by a generator, one chunk handed out by a stream: none of them shares memory with what is held", async () => {
     // Put whole, then the caller's Buffer rewritten.
     const one = new MemoryObjectStore();
     const hello = Buffer.from("hello");
@@ -255,7 +255,7 @@ describe("MemoryObjectStore", () => {
     expect(await one.has(HELLO_CID)).toBe(true);
   });
 
-  it("a put over an object known damaged replaces its bytes; over one whose damage nothing has found yet it is idempotent, and the next read finds the damage", async () => {
+  test("a put over an object known damaged replaces its bytes; over one whose damage nothing has found yet it is idempotent, and the next read finds the damage", async () => {
     const store = new MemoryObjectStore({ extentBytes: 2 });
     const bytes = bytesOf(10, 5);
     const cid = (await store.putRaw(bytes)).cid;
@@ -273,7 +273,7 @@ describe("MemoryObjectStore", () => {
     expect(streamed.chunks).toBe(5);
   });
 
-  it("this store verifies lazily — a damaged chunk goes out before the failure; a repair meanwhile is left alone by the old reader's failure", async () => {
+  test("this store verifies lazily — a damaged chunk goes out before the failure; a repair meanwhile is left alone by the old reader's failure", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const bytes = bytesOf(10, 7);
     const cid = (await store.putRaw(bytes)).cid;
@@ -296,7 +296,7 @@ describe("MemoryObjectStore", () => {
     expectBytes(await store.read(cid, 10), bytes);
   });
 
-  it("a stream open on an object that is collected meanwhile completes with the bytes it opened on", async () => {
+  test("a stream open on an object that is collected meanwhile completes with the bytes it opened on", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const bytes = bytesOf(10, 8);
     const cid = (await store.putRaw(bytes)).cid;
@@ -306,7 +306,7 @@ describe("MemoryObjectStore", () => {
     expect(await store.has(cid)).toBe(false);
   });
 
-  it("damage: flips a byte of a held object in place; refuses an absent object and one with no bytes", async () => {
+  test("damage: flips a byte of a held object in place; refuses an absent object and one with no bytes", async () => {
     const store = new MemoryObjectStore();
     await store.putRaw(new Uint8Array(0));
     expect(() => store.damage(EMPTY_CID)).toThrow("no bytes");
@@ -319,7 +319,7 @@ describe("MemoryObjectStore", () => {
     expect(await store.has(EMPTY_CID)).toBe(true);
   });
 
-  it("a read that finds damage marks that object only; a put of the same CID afterwards repairs it", async () => {
+  test("a read that finds damage marks that object only; a put of the same CID afterwards repairs it", async () => {
     const store = new MemoryObjectStore();
     const bytes = bytesOf(30, 3);
     const cid = (await store.putRaw(bytes)).cid;
@@ -333,7 +333,7 @@ describe("MemoryObjectStore", () => {
     expect(await all(store.list())).toEqual([cid, other].sort());
   });
 
-  it("prepare: what is put through a preparation is verified now, seen by no read until publish, and dropped with it", async () => {
+  test("prepare: what is put through a preparation is verified now, seen by no read until publish, and dropped with it", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const kept = bytesOf(10, 9);
     const keptCid = (await store.putRaw(kept)).cid;
@@ -366,7 +366,7 @@ describe("MemoryObjectStore", () => {
     expect(await all(store.list())).toEqual([freshCid, keptCid].sort(compareCids));
   });
 
-  it("an object a preparation declares reused is checked again as it publishes: known damaged by then, the publication throws and nothing prepared lands; prepared as well, the repair goes through", async () => {
+  test("an object a preparation declares reused is checked again as it publishes: known damaged by then, the publication throws and nothing prepared lands; prepared as well, the repair goes through", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const kept = bytesOf(10, 12);
     const keptCid = (await store.putRaw(kept)).cid;
@@ -389,7 +389,7 @@ describe("MemoryObjectStore", () => {
     expect(await store.has(freshCid)).toBe(true);
   });
 
-  it("a preparation's `has` on a known damaged object not repaired in it fails as the store's does; two preparations each publish their own", async () => {
+  test("a preparation's `has` on a known damaged object not repaired in it fails as the store's does; two preparations each publish their own", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const damaged = bytesOf(10, 9);
     const damagedCid = (await store.putRaw(damaged)).cid;

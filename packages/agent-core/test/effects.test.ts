@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { SignJWT, importJWK } from "jose";
 
@@ -138,7 +138,7 @@ async function openedByBob(bob: DirectParty, alice: DirectParty, messageId: Mess
 }
 
 describe("the automatic effects of a live input", () => {
-  it("a Ping asking for a receipt and a reply earns two independent intents under their tuples, each dispatched once under an initial action; delivered again it earns nothing new, and an open lists nothing", async () => {
+  test("a Ping asking for a receipt and a reply earns two independent intents under their tuples, each dispatched once under an initial action; delivered again it earns nothing new, and an open lists nothing", async () => {
     const { alice, bob } = await parties();
     const { wire, live } = await reacting(alice);
     const wireId = crypto.randomUUID() as WireMessageId;
@@ -187,7 +187,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("an observation contradicting the intent its input has admitted is refused admission and listed as the discrepancy it is: the input stays established by the first, earns what the first earned and no more, and the receipt already handed over stays the message it was, handed over", async () => {
+  test("an observation contradicting the intent its input has admitted is refused admission and listed as the discrepancy it is: the input stays established by the first, earns what the first earned and no more, and the receipt already handed over stays the message it was, handed over", async () => {
     const { alice, bob } = await parties();
     const { wire, options, receive, live, executionOf } = await reacting(alice);
     const answered = crypto.randomUUID() as WireMessageId;
@@ -213,7 +213,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("the live observation must itself be the witness its input speaks through: one whose proof is refused, or waits for its issuer's document, earns nothing even once a duplicate delivered after it is admitted, and what the input earns is then completed by hand", async () => {
+  test("the live observation must itself be the witness its input speaks through: one whose proof is refused, or waits for its issuer's document, earns nothing even once a duplicate delivered after it is admitted, and what the input earns is then completed by hand", async () => {
     const { alice, bob } = await parties();
     const wire = posting(accepted);
     const options: EffectOptions = { dispatch: (action) => dispatch(alice.runtime, alice.keys, action, { didcomm, fetch: wire.fetch }) };
@@ -250,7 +250,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("each operation follows its own policy: a Ping asking for no reply gets its receipt alone, one asking for no receipt its reply alone, chat only what it asks, a pure acknowledgement nothing, an expired Ping no reply, and a request naming nothing here no receipt", async () => {
+  test("each operation follows its own policy: a Ping asking for no reply gets its receipt alone, one asking for no receipt its reply alone, chat only what it asks, a pure acknowledgement nothing, an expired Ping no reply, and a request naming nothing here no receipt", async () => {
     const { alice, bob } = await parties();
     const { live } = await reacting(alice, { now: () => (CREATED + 100) * 1000 });
 
@@ -277,7 +277,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("receipts are local policy: with them off a request is declined and the reply still goes; a registered handler covers a type before the built-in", async () => {
+  test("receipts are local policy: with them off a request is declined and the reply still goes; a registered handler covers a type before the built-in", async () => {
     const { alice, bob } = await parties();
     const declining: Handler = { types: [BASIC_MESSAGE], effectTypes: ["https://example.org/chat#reply"], respond: async () => [{ effectType: "https://example.org/chat#reply", content: null, because: "chat is read, not answered" }] };
     const { live } = await reacting(alice, { acknowledge: false, handlers: [declining] });
@@ -294,7 +294,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("an input that is not live is listed and completed by hand: each completion makes its one intent under the same tuple with a manual action, an erased body forbids a new reply but not the receipt, and a second completion reuses the intent and calls nothing", async () => {
+  test("an input that is not live is listed and completed by hand: each completion makes its one intent under the same tuple with a manual action, an erased body forbids a new reply but not the receipt, and a second completion reuses the intent and calls nothing", async () => {
     const { alice, bob } = await parties();
     const { wire, options, receive, executionOf } = await reacting(alice);
     const wireId = crypto.randomUUID() as WireMessageId;
@@ -321,7 +321,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("one operation's record refused by the disk leaves the other's intent standing and dispatched, is traced, and is made later by hand", async () => {
+  test("one operation's record refused by the disk leaves the other's intent standing and dispatched, is traced, and is made later by hand", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const { wire, options, live } = await reacting(alice, { trace });
@@ -339,7 +339,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("a registered handler's operation is this runtime's work end to end: its intent is prepared and called under the initial action, listed by a dispatcher told of it, retried by hand as the same package, and no work of a scan not told of it", async () => {
+  test("a registered handler's operation is this runtime's work end to end: its intent is prepared and called under the initial action, listed by a dispatcher told of it, retried by hand as the same package, and no work of a scan not told of it", async () => {
     const { alice, bob } = await parties();
     const { wire, effectTypes, live } = await reacting(alice, { handlers: [echo] }, refusingFirst());
     const wireId = crypto.randomUUID() as WireMessageId;
@@ -361,7 +361,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("an intent already under the tuple is reused before the body is read or the handler asked: a prepared reply goes out by hand as the same package when its handler would now decide otherwise, and when the disk refuses the Ping's body", async () => {
+  test("an intent already under the tuple is reused before the body is read or the handler asked: a prepared reply goes out by hand as the same package when its handler would now decide otherwise, and when the disk refuses the Ping's body", async () => {
     const { alice, bob } = await parties();
     const { wire, options, live } = await reacting(alice, {}, refusingFirst());
     const reacted = await live(bob, ping(crypto.randomUUID(), { please_ack: undefined }));
@@ -380,7 +380,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("each operation is its own boundary: the disk refusing the Ping's body costs the reply alone and the receipt goes; the disk refusing to record an acceptance once costs the receipt's call step alone, the reply goes, and the acceptance is recorded by the next action without a second call", async () => {
+  test("each operation is its own boundary: the disk refusing the Ping's body costs the reply alone and the receipt goes; the disk refusing to record an acceptance once costs the receipt's call step alone, the reply goes, and the acceptance is recorded by the next action without a second call", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const { wire, options, receive, live } = await reacting(alice, { trace });
@@ -411,7 +411,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("an operation declared twice is one operation: one intent, one initial action, one call, and after a refusal only a manual retry calls again", async () => {
+  test("an operation declared twice is one operation: one intent, one initial action, one call, and after a refusal only a manual retry calls again", async () => {
     const { alice, bob } = await parties();
     const twice: Handler = { ...echo, effectTypes: [ECHO_EFFECT, ECHO_EFFECT] };
     const { wire, options, live } = await reacting(alice, { handlers: [twice] }, refusingFirst());
@@ -425,7 +425,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("a response that makes no intent refuses its own operation alone, in either order: the invalid content is traced under its operation and the valid one is recorded and called", async () => {
+  test("a response that makes no intent refuses its own operation alone, in either order: the invalid content is traced under its operation and the valid one is recorded and called", async () => {
     const { alice, bob } = await parties();
     const trace = await AgentTrace.open(alice.runtime.local);
     const RATE = "https://example.org/meter/1.0#rate";
@@ -453,7 +453,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("the reply goes by the carrier's channel while its local DID sends, even with a successor selected; once that DID is retired, by the unique verified successor keeping the peer, carrying the rotation's proof; a competing successor leaves no channel", async () => {
+  test("the reply goes by the carrier's channel while its local DID sends, even with a successor selected; once that DID is retired, by the unique verified successor keeping the peer, carrying the rotation's proof; a competing successor leaves no channel", async () => {
     const { alice, bob } = await parties();
     const { options, receive, executionOf } = await reacting(alice);
     const executionId = await executionOf(await receive(bob, ping(crypto.randomUUID())));
@@ -480,7 +480,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  it("no effect for a denied channel, for the input of a peer that has replaced its DID, or for an anonymous observation", async () => {
+  test("no effect for a denied channel, for the input of a peer that has replaced its DID, or for an anonymous observation", async () => {
     const { alice, bob } = await parties();
     const { receiver, options, receive, live, executionOf } = await reacting(alice);
     const routeId = (await foldOf(bob)).routes.dids.get(BOB)!.created!.boundRouteId;

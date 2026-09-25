@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import { canonicalize, parseStrict, type CommitObject } from "@estoc/event-store";
 import { PURE_ACK_EFFECT, ROTATION_NOTIFICATION_EFFECT, type DidId, type EventReference, type MessageId } from "@estoc/vault";
@@ -30,7 +30,7 @@ async function pair(): Promise<{ mediator: FakeMediator; alice: Running; bob: Ru
 }
 
 describe("a process that dies", () => {
-  it("after an input was recorded and before its mediator heard so: the delivery comes again as no live input, the reply it committed is listed and sent only by a retry", { timeout: LONG }, async () => {
+  test("after an input was recorded and before its mediator heard so: the delivery comes again as no live input, the reply it committed is listed and sent only by a retry", { timeout: LONG }, async () => {
     const { mediator, alice, bob } = await pair();
     dieAt(alice, "unacknowledged");
     await bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, { ...hello("hello"), pleaseAck: [""] }, { messageId: HELLO });
@@ -54,7 +54,7 @@ describe("a process that dies", () => {
     expect((await foldOf(bob)).outbound.outbounds.get(HELLO)).toMatchObject({ acknowledged: true });
   });
 
-  it("after a package was recorded and before any call was made for it: the action that was to send it is gone with the process, nothing is sent on open, and a retry sends that very package", { timeout: LONG }, async () => {
+  test("after a package was recorded and before any call was made for it: the action that was to send it is gone with the process, nothing is sent on open, and a retry sends that very package", { timeout: LONG }, async () => {
     const mediator = await newMediator();
     const alice = await run(mediator, 1, ALICE, { liveDelivery: false });
     const bob = await run(mediator, 2, BOB, { liveDelivery: false });
@@ -77,7 +77,7 @@ describe("a process that dies", () => {
     expect(await bob.agent.outbounds()).toEqual([]);
   });
 
-  it("inside the call that was to carry a package, which the mediator never took: nothing is sent on open, and a retry sends that package", { timeout: LONG }, async () => {
+  test("inside the call that was to carry a package, which the mediator never took: nothing is sent on open, and a retry sends that package", { timeout: LONG }, async () => {
     const { mediator, alice, bob } = await pair();
     dieAt(bob, "unsent");
     await expect(bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, hello("hello"), { messageId: HELLO })).resolves.toMatchObject({ dispatched: { outcome: "uncertain" }, action: { spent: true } });
@@ -95,7 +95,7 @@ describe("a process that dies", () => {
     expect(await bob.agent.outbounds()).toEqual([]);
   });
 
-  it("after the mediator took a package and before that was recorded: the outbound stays open, and the retry the user makes is observed by the peer as the same input again", { timeout: LONG }, async () => {
+  test("after the mediator took a package and before that was recorded: the outbound stays open, and the retry the user makes is observed by the peer as the same input again", { timeout: LONG }, async () => {
     const { alice, bob } = await pair();
     dieAt(bob, "unrecorded");
     await bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, hello("hello"), { messageId: HELLO });
@@ -112,7 +112,7 @@ describe("a process that dies", () => {
     expect(ofAlice.inbound.executions.size).toBe(1);
   });
 
-  it("after a rotation was decided and before its notification was recorded: the notification is listed as owed, and completing it announces the successor", { timeout: LONG }, async () => {
+  test("after a rotation was decided and before its notification was recorded: the notification is listed as owed, and completing it announces the successor", { timeout: LONG }, async () => {
     const { mediator, alice, bob } = await pair();
     await bob.agent.send({ channel: channelOf(bob.party.did, alice.party.did), recipientDid: alice.party.longFormDid }, hello("hello"), { messageId: HELLO });
     await until("alice has the message", () => alice.inbounds.length === 1);

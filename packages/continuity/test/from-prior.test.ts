@@ -439,7 +439,7 @@ describe("create", () => {
     expect(signed).toBe(0);
   });
 
-  it("works with a non-exportable key held by the host", async () => {
+  it("signs through a host-held key it cannot export, and the proof verifies", async () => {
     const pem = b0.privateKey.export({ format: "pem", type: "pkcs8" });
     const held = createPrivateKey(pem);
     const signer: Signer = { methodId: b0.kid, sign: async (input) => new Uint8Array(nodeSign(null, input, held)) };

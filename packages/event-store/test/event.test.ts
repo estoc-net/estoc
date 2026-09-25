@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { drislCid, rawCid } from "@estoc/dasl";
 import {
@@ -70,7 +70,7 @@ describe("identity", () => {
     expect(isEventCid(base.author)).toBe(false);
   });
 
-  it("an event's CID is the raw DASL CID of its five-field canonical bytes: the specification's example, and nothing else in it", async () => {
+  test("an event's CID is the raw DASL CID of its five-field canonical bytes: the specification's example, and nothing else in it", async () => {
     expect(eventCidOf(EXAMPLE)).toBe(EXAMPLE_CID);
     expect(await rawCid(canonicalEventBytes(EXAMPLE))).toBe(EXAMPLE_CID);
     expect(canonicalEventText(EXAMPLE)).toBe('{"at":"2026-09-25T00:00:00.000Z","author":"019b0000-0000-7000-8000-000000000001","data":{"text":"hello"},"roots":[],"type":"example.note"}');
@@ -230,7 +230,7 @@ describe("envelope validation", () => {
     }
   });
 
-  it("an API event has the five fields and cid, exactly, and the cid is the envelope's own", () => {
+  test("an API event has the five fields and cid, exactly, and the cid is the envelope's own", () => {
     const other = eventCidOf({ ...envelope, data: { ...envelope.data, name: "Alicia" } });
     const cases: [string, unknown, RegExp][] = [
       ["no cid", envelope, /missing cid/],
@@ -278,7 +278,7 @@ describe("envelope validation", () => {
     expect(text(canonicalEventBytes(checked))).toBe(JSON.stringify({ at: envelope.at, author: envelope.author, data: { x: "ok" }, roots: [RAW_HELLO], type: "t" }));
   });
 
-  it("roots are the elements the array holds by index, whatever its iterator yields", () => {
+  test("roots are the elements the array holds by index, whatever its iterator yields", () => {
     const silent = (elements: unknown[]): unknown[] => Object.defineProperty(elements.slice(), Symbol.iterator, { value: function* () {} });
     expect(validateEnvelope({ ...envelope, roots: silent([RAW_HELLO]) }).roots).toEqual([RAW_HELLO]);
     expect(validateDraft({ type: "t", roots: silent([RAW_HELLO]), data: {} }).roots).toEqual([RAW_HELLO]);
@@ -332,7 +332,7 @@ describe("envelope validation", () => {
     }
   });
 
-  it("a draft it accepts makes an envelope validateEnvelope accepts, to the last level of nesting", () => {
+  test("a draft it accepts makes an envelope validateEnvelope accepts, to the last level of nesting", () => {
     const wrapped = (levels: number) => {
       let data: JsonObject = {};
       for (let i = 0; i < levels; i++) data = { x: data };
@@ -354,7 +354,7 @@ describe("envelope validation", () => {
 });
 
 describe("canonical bytes and order", () => {
-  it("content equality is byte equality of the RFC 8785 form of the five fields, whatever the member order", () => {
+  test("content equality is byte equality of the RFC 8785 form of the five fields, whatever the member order", () => {
     const reordered: EventEnvelope = {
       data: { name: "Alice", contactId: envelope.data.contactId as string },
       roots: [],

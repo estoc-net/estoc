@@ -11,7 +11,7 @@
  * bad sector would.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import {
   DamagedObject,
@@ -172,7 +172,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect((await all(v.events.scan())).map((e) => e.cid)).toEqual(events.map((e) => e.cid).sort());
     });
 
-    it("with no objects, a reused root that is present passes; an absent root is MissingRoot and appends nothing", async () => {
+    test("with no objects, a reused root that is present passes; an absent root is MissingRoot and appends nothing", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -182,7 +182,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect((await all(v.events.scan())).length).toBe(2);
     });
 
-    it("an object that fails verification publishes nothing: no event, and not the objects accepted before it", async () => {
+    test("an object that fails verification publishes nothing: no event, and not the objects accepted before it", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await expect(
@@ -201,7 +201,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await vault.collect(rootsOf)).toEqual({ removed: [] });
     });
 
-    it("a root still absent after the supplied objects are accepted publishes nothing, the accepted objects included", async () => {
+    test("a root still absent after the supplied objects are accepted publishes nothing, the accepted objects included", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await expect(v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID, WORLD_CID])])).rejects.toThrow(MissingRoot);
@@ -209,7 +209,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await v.objects.has(HELLO_CID)).toBe(false);
     });
 
-    it("a supplied object no draft names as a root is UnreferencedObject: refused before its source is read, and nothing of the batch is accepted", async () => {
+    test("a supplied object no draft names as a root is UnreferencedObject: refused before its source is read, and nothing of the batch is accepted", async () => {
       const { vault } = await open();
       const v = vault.vault;
       let read = 0;
@@ -262,7 +262,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await all(v.events.scan())).toEqual([]);
     });
 
-    it("the batch is all or nothing: an invalid draft anywhere in it commits none", async () => {
+    test("the batch is all or nothing: an invalid draft anywhere in it commits none", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await expect(v.commit([], [draft(), draft(), { type: "x", roots: ["nope" as Cid], data: {} }])).rejects.toThrow(InvalidEvent);
@@ -279,13 +279,13 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(new Set(events.map((e) => e.at)).size).toBe(1);
     });
 
-    it("an empty commit writes nothing and returns []", async () => {
+    test("an empty commit writes nothing and returns []", async () => {
       const { vault } = await open();
       expect(await vault.vault.commit([], [])).toEqual([]);
       expect(await all(vault.vault.events.scan())).toEqual([]);
     });
 
-    it("an object already held is accepted again idempotently, and the empty object is an object", async () => {
+    test("an object already held is accepted again idempotently, and the empty object is an object", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -300,7 +300,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expectBytes(await v.objects.read(EMPTY_CID, 0), new Uint8Array(0));
     });
 
-    it("a root known damaged fails the commit explicitly and appends nothing; a commit that supplies its verified bytes repairs it and lands", async () => {
+    test("a root known damaged fails the commit explicitly and appends nothing; a commit that supplies its verified bytes repairs it and lands", async () => {
       const { vault, corrupt } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -316,7 +316,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect((await all(v.events.scan())).length).toBe(2);
     });
 
-    it("a commit that fails after repairing a damaged object leaves the damage as it was", async () => {
+    test("a commit that fails after repairing a damaged object leaves the damage as it was", async () => {
       const { vault, corrupt } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -327,7 +327,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect((await all(v.events.scan())).length).toBe(1);
     });
 
-    it("a commit's objects are seen by no read until its events land: not while a source is paused, and never when the commit fails", async () => {
+    test("a commit's objects are seen by no read until its events land: not while a source is paused, and never when the commit fails", async () => {
       const { vault, corrupt } = await open();
       const v = vault.vault;
       await v.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]);
@@ -374,7 +374,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await all(v.events.scan())).toHaveLength(2);
     });
 
-    it("a failing commit undoes only itself: damage a reader found meanwhile stays known, and a reused root known damaged still fails", async () => {
+    test("a failing commit undoes only itself: damage a reader found meanwhile stays known, and a reused root known damaged still fails", async () => {
       const { vault, corrupt } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -393,7 +393,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await all(v.events.scan())).toHaveLength(1);
     });
 
-    it("the batch is fixed before a byte is read: an object a source adds to the array, or a descriptor it rewrites, is not accepted", async () => {
+    test("the batch is fixed before a byte is read: an object a source adds to the array, or a descriptor it rewrites, is not accepted", async () => {
       const { vault } = await open();
       const v = vault.vault;
       const objects: { cid: Cid; source: Uint8Array | AsyncIterable<Uint8Array> }[] = [];
@@ -427,7 +427,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
   });
 
   describe("Vault.objects reads", () => {
-    it("read refuses an object over maxBytes before reading it, returns null for an absent one, and checks the CID first", async () => {
+    test("read refuses an object over maxBytes before reading it, returns null for an absent one, and checks the CID first", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -439,7 +439,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       await expect(v.objects.open("bafybadcid" as Cid)).rejects.toThrow(InvalidCid);
     });
 
-    it("a damaged object fails its read and its stream, and is known damaged from then on: presence fails too, never reads as absence", async () => {
+    test("a damaged object fails its read and its stream, and is known damaged from then on: presence fails too, never reads as absence", async () => {
       const { vault, corrupt } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -451,7 +451,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       await expect(all(v.objects.list())).rejects.toThrow(DamagedObject);
     });
 
-    it("read holds no lock while draining", async () => {
+    test("read holds no lock while draining", async () => {
       const { vault } = await open();
       const v = vault.vault;
       const big = bytesOf(3 * 1024 * 1024, 7);
@@ -465,7 +465,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
   });
 
   describe("collection", () => {
-    it("a paused stream blocks no commit; collection deletes the unkept at once, whatever their age, and the stream then completes whole or fails explicitly", async () => {
+    test("a paused stream blocks no commit; collection deletes the unkept at once, whatever their age, and the stream then completes whole or fails explicitly", async () => {
       const { vault, now } = await open();
       const v = vault.vault;
       await v.commit(
@@ -493,7 +493,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await v.objects.has(EMPTY_CID)).toBe(true);
     });
 
-    it("a held root known damaged survives collection with its damage; unheld, it is removed like any other and reports absence after", async () => {
+    test("a held root known damaged survives collection with its damage; unheld, it is removed like any other and reports absence after", async () => {
       const { vault, corrupt } = await open();
       const v = vault.vault;
       await v.commit(
@@ -515,7 +515,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await all(v.objects.list())).toEqual([HELLO_CID]);
     });
 
-    it("two streams open before collection each get the whole object or an explicit failure; open after gets null", async () => {
+    test("two streams open before collection each get the whole object or an explicit failure; open after gets null", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -527,7 +527,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await v.objects.open(HELLO_CID)).toBeNull();
     });
 
-    it("open and collection racing serialize on the lock: the stream sees the object whole, or null", async () => {
+    test("open and collection racing serialize on the lock: the stream sees the object whole, or null", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -550,7 +550,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       await completeOrFailed((await stream) as ReadableStream<Uint8Array>, HELLO);
     });
 
-    it("a paused stream resumes to completion or fails, whatever passes ran meanwhile; it never truncates", async () => {
+    test("a paused stream resumes to completion or fails, whatever passes ran meanwhile; it never truncates", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: WORLD_CID, source: chunked(WORLD, [2, 2]) }], [draft([WORLD_CID])]);
@@ -574,7 +574,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       if (!failed) expectBytes(join(rest), WORLD);
     });
 
-    it("collection waits for a commit paused while its objects are prepared; the event then retains the object", async () => {
+    test("collection waits for a commit paused while its objects are prepared; the event then retains the object", async () => {
       const { vault } = await open();
       const v = vault.vault;
       const g = gate();
@@ -603,7 +603,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await v.objects.has(WORLD_CID)).toBe(true);
     });
 
-    it("the keep set is computed after the lock is acquired and held through deletion; a commit issued meanwhile starts after the pass", async () => {
+    test("the keep set is computed after the lock is acquired and held through deletion; a commit issued meanwhile starts after the pass", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -636,7 +636,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(order).toEqual(["keep in", "keep out", "commit failed: MissingRoot"]);
     });
 
-    it("collection validates the keep set before touching anything", async () => {
+    test("collection validates the keep set before touching anything", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -646,7 +646,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
   });
 
   describe("the held view (nested calls share the lock)", () => {
-    it("an operation under the lock can commit, open, read and nest without waiting for itself", async () => {
+    test("an operation under the lock can commit, open, read and nest without waiting for itself", async () => {
       const { vault } = await open();
       const result = await vault.locked(async (held) => {
         expect(vault.lock.held).toBe(true);
@@ -668,7 +668,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expectBytes((await drain(result.stream)).bytes, HELLO);
     });
 
-    it("two commits issued through one held view run one at a time, in order: the second waits for the first, and a failure undoes nothing of the one that landed", async () => {
+    test("two commits issued through one held view run one at a time, in order: the second waits for the first, and a failure undoes nothing of the one that landed", async () => {
       const { vault } = await open();
       await vault.locked(async (held) => {
         const g = gate();
@@ -697,7 +697,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       });
     });
 
-    it("a commit issued through the held view while a collection pass computes its keep set lands after the pass: nothing the pass kept is what it deletes", async () => {
+    test("a commit issued through the held view while a collection pass computes its keep set lands after the pass: nothing the pass kept is what it deletes", async () => {
       const { vault } = await open();
       await vault.locked(async (held) => {
         const computed = gate();
@@ -726,7 +726,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       });
     });
 
-    it("an ingest issued through the held view queues with its commits in the order issued, its input read in its turn: neither overtakes the other", async () => {
+    test("an ingest issued through the held view queues with its commits in the order issued, its input read in its turn: neither overtakes the other", async () => {
       const { vault } = await open();
       const other = (await open(authorN(2))).vault;
       const [foreign] = await other.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -761,7 +761,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       });
     });
 
-    it("a mutation the operation issued and did not wait for finishes before the lock is released, even when the operation itself failed: a collection pass still reads its keep set after the failure", async () => {
+    test("a mutation the operation issued and did not wait for finishes before the lock is released, even when the operation itself failed: a collection pass still reads its keep set after the failure", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -796,7 +796,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(vault.lock.held).toBe(false);
     });
 
-    it("a collection pass the operation issued and returned without waiting for computes its keep set after the return: its reads, nested ones included, stay good until it has deleted, and the lock is released after", async () => {
+    test("a collection pass the operation issued and returned without waiting for computes its keep set after the return: its reads, nested ones included, stay good until it has deleted, and the lock is released after", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -829,7 +829,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(vault.lock.held).toBe(false);
     });
 
-    it("a collection pass still queued behind a paused commit when the operation returns gets its view when its turn comes, and reads through it", async () => {
+    test("a collection pass still queued behind a paused commit when the operation returns gets its view when its turn comes, and reads through it", async () => {
       const { vault } = await open();
       const v = vault.vault;
       const issued = gate();
@@ -860,7 +860,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(vault.lock.held).toBe(false);
     });
 
-    it("once the operation has returned, its view accepts no further mutation — so what the release waits on cannot grow — while its reads still land", async () => {
+    test("once the operation has returned, its view accepts no further mutation — so what the release waits on cannot grow — while its reads still land", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -905,7 +905,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       await expect(outer.objects.has(HELLO_CID)).rejects.toThrow(UnsupportedOperation);
     });
 
-    it("a held view kept past its operation refuses every call — mutation, open, nested locked, read — before doing anything: nothing runs without the lock", async () => {
+    test("a held view kept past its operation refuses every call — mutation, open, nested locked, read — before doing anything: nothing runs without the lock", async () => {
       const { vault } = await open();
       await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
       let nested = 0;
@@ -948,7 +948,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await vault.locked((held) => held.commit([], [draft([HELLO_CID])]))).toHaveLength(1);
     });
 
-    it("a keep callback's ingest is refused before its source is asked for anything: a source that counts is untouched, one that throws is never reached", async () => {
+    test("a keep callback's ingest is refused before its source is asked for anything: a source that counts is untouched, one that throws is never reached", async () => {
       const { vault } = await open();
       let pulled = 0;
       const counting = (async function* () {
@@ -975,7 +975,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(pulled).toBe(0);
     });
 
-    it("a keep callback computes from reads: a commit, ingest or collect through its view is refused before touching anything", async () => {
+    test("a keep callback computes from reads: a commit, ingest or collect through its view is refused before touching anything", async () => {
       const { vault } = await open();
       await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
       await vault.locked(async (held) => {
@@ -1004,7 +1004,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       });
     });
 
-    it("a facade operation issued while the lock is held waits for it; a failure inside releases it", async () => {
+    test("a facade operation issued while the lock is held waits for it; a failure inside releases it", async () => {
       const { vault } = await open();
       const v = vault.vault;
       const g = gate();
@@ -1030,7 +1030,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(vault.lock.held).toBe(false);
     });
 
-    it("reads through the facade take no lock: a scan, stat, has and list land while an operation holds it; open does take it", async () => {
+    test("reads through the facade take no lock: a scan, stat, has and list land while an operation holds it; open does take it", async () => {
       const { vault } = await open();
       const v = vault.vault;
       await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -1048,14 +1048,14 @@ export function vaultSuite(name: string, opener: OpenVault): void {
   });
 
   describe("VaultRuntime.keystore", () => {
-    it("read hands out the wrapped seed as given, frozen; a vault given none refuses to read one", async () => {
+    test("read hands out the wrapped seed as given, frozen; a vault given none refuses to read one", async () => {
       const { vault } = await open();
       const wrapped = await vault.keystore.read();
       expect(wrapped).toEqual(WRAPPED);
       expect(Object.isFrozen(wrapped)).toBe(true);
     });
 
-    it("rewrap replaces the wrapper under the lock: it waits for the operation holding it, and read sees the replacement after", async () => {
+    test("rewrap replaces the wrapper under the lock: it waits for the operation holding it, and read sees the replacement after", async () => {
       const { vault } = await open();
       const next = REWRAPPED;
       const g = gate();
@@ -1070,7 +1070,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(await vault.keystore.read()).toEqual(next);
     });
 
-    it("rewrap refuses what is not a version-3 compact JWE before taking the lock, leaving the wrapper as it was", async () => {
+    test("rewrap refuses what is not a version-3 compact JWE before taking the lock, leaving the wrapper as it was", async () => {
       const { vault } = await open();
       for (const bad of [
         { version: 2, seedJwe: WRAPPED.seedJwe },
@@ -1138,7 +1138,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect((await all(vault.vault.events.scan()))[0]?.data).toEqual({ n: 1 });
     });
 
-    it("an input that is not an event is reported as rejected, with why, in the order it was read", async () => {
+    test("an input that is not an event is reported as rejected, with why, in the order it was read", async () => {
       const other = (await open(authorN(2))).vault;
       const [good] = await other.vault.commit([], [draft()]);
       async function* mixed(): AsyncIterable<unknown> {
@@ -1154,7 +1154,7 @@ export function vaultSuite(name: string, opener: OpenVault): void {
       expect(outcome.rejected[1]?.value).toBe(42);
     });
 
-    it("the held view ingests too, for import and restore", async () => {
+    test("the held view ingests too, for import and restore", async () => {
       const other = (await open(authorN(2))).vault;
       const events = await other.vault.commit([], [draft([], { n: 1 }), draft([], { n: 2 })]);
       const { vault } = await open();

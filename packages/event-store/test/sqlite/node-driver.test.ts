@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { openNodeSqlite } from "../../src/node.js";
 import { DatabaseBusy } from "../../src/errors.js";
@@ -46,7 +46,7 @@ for (const [name, harness] of [
 ] as const) {
   describe(`node:sqlite driver ${name}`, () => {
     for (const c of driverCases) {
-      it.skipIf(c.needsPersistence === true && !harness.persistent)(
+      test.skipIf(c.needsPersistence === true && !harness.persistent)(
         c.name,
         async () => {
           const note = await c.run(harness);
@@ -117,7 +117,7 @@ function otherProcess(file: string, role: "hold" | "probe"): Promise<Holder | Re
 }
 
 describe("node:sqlite driver and other processes", () => {
-  it("a second process meets the lock this connection holds, read or write, in either journal mode", async () => {
+  test("a second process meets the lock this connection holds, read or write, in either journal mode", async () => {
     for (const journal of ["wal", "delete"] as const) {
       const file = onFile.fresh();
       const db = openNodeSqlite(file, { mode: "create", journal });
@@ -128,7 +128,7 @@ describe("node:sqlite driver and other processes", () => {
     }
   });
 
-  it("an open this process is refused leaves the owner's lock as it was, in either journal mode", async () => {
+  test("an open this process is refused leaves the owner's lock as it was, in either journal mode", async () => {
     for (const journal of ["wal", "delete"] as const) {
       const file = onFile.fresh();
       const owner = openNodeSqlite(file, { mode: "create", journal });
@@ -146,7 +146,7 @@ describe("node:sqlite driver and other processes", () => {
     }
   });
 
-  it("a read-only connection keeps writers out of the file and lets readers in", async () => {
+  test("a read-only connection keeps writers out of the file and lets readers in", async () => {
     const file = onFile.fresh();
     openNodeSqlite(file, { mode: "create", journal: "delete" }).close();
     const reader = openNodeSqlite(file, { mode: "readonly" });
@@ -159,7 +159,7 @@ describe("node:sqlite driver and other processes", () => {
     expect(await otherProcess(file, "probe")).toEqual({ read: "ok", write: "ok" });
   });
 
-  it("a read-only connection of a WAL file owns it outright: no other connection reads or writes until it closes", async () => {
+  test("a read-only connection of a WAL file owns it outright: no other connection reads or writes until it closes", async () => {
     const file = onFile.fresh();
     const db = openNodeSqlite(file, { mode: "create" });
     db.exec("CREATE TABLE t (k INTEGER PRIMARY KEY) STRICT; INSERT INTO t VALUES (1)");
@@ -179,7 +179,7 @@ describe("node:sqlite driver and other processes", () => {
     again.close();
   });
 
-  it("this process is refused, read-write or read-only, while another holds the file", async () => {
+  test("this process is refused, read-write or read-only, while another holds the file", async () => {
     const file = onFile.fresh();
     openNodeSqlite(file, { mode: "create" }).close();
     const holder = await otherProcess(file, "hold");
@@ -194,7 +194,7 @@ describe("node:sqlite driver and other processes", () => {
 });
 
 describe("node:sqlite driver on disk", () => {
-  it("a create leaves the journal it was asked for, with matching durability; a reopen keeps it", async () => {
+  test("a create leaves the journal it was asked for, with matching durability; a reopen keeps it", async () => {
     const wal = onFile.fresh();
     let db = openNodeSqlite(wal, { mode: "create" });
     expect(db.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
@@ -224,13 +224,13 @@ describe("node:sqlite driver on disk", () => {
     expect(Array.from((await readFile(rollback)).subarray(18, 20)), "still rollback headers").toEqual([1, 1]);
   });
 
-  it("a read-write connection loads no extension either", () => {
+  test("a read-write connection loads no extension either", () => {
     const db = openNodeSqlite(onFile.fresh(), { mode: "create" });
     expect(() => db.exec("SELECT load_extension('nothing')")).toThrow(/not authorized/);
     db.close();
   });
 
-  it("a refused create leaves nothing behind but the existing target", async () => {
+  test("a refused create leaves nothing behind but the existing target", async () => {
     const file = onFile.fresh();
     const db = openNodeSqlite(file, { mode: "create" });
     db.exec("CREATE TABLE t (k INTEGER PRIMARY KEY) STRICT; INSERT INTO t VALUES (1)");

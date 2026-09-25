@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { FromPrior } from "@estoc/didcomm-node";
 import { longToShort, resolveDIDCommDoc, toDIDCommDIDDoc } from "@estoc/did-peer";
@@ -72,7 +72,7 @@ describe("peer.resolved", () => {
     await a.runtime.close();
   });
 
-  it("evidence that arrived without its document is repaired by the same document in hand, and the original pin reads again", async () => {
+  test("evidence that arrived without its document is repaired by the same document in hand, and the original pin reads again", async () => {
     const a = await alice();
     const resolution = await webResolution(await webIdentity(BOB));
     const evidence = { resolution, localKeyName: LOCAL_KEY, peerPublicKey: keyAgreementKey(resolution) };
@@ -104,7 +104,7 @@ describe("peer.resolved", () => {
     await a.runtime.close();
   });
 
-  it("a numalgo-4 peer resolved under its long form and later its short form retains one document and one CID", async () => {
+  test("a numalgo-4 peer resolved under its long form and later its short form retains one document and one CID", async () => {
     const a = await alice();
     const peer = await newMediator(201);
     const long = await resolve(peer.did, () => null);
@@ -150,7 +150,7 @@ describe("the resolver didcomm reads", () => {
     await a.runtime.close();
   });
 
-  it("a sender is read from the current resolution and a from_prior issuer from the pinned one, never from a later revision", async () => {
+  test("a sender is read from the current resolution and a from_prior issuer from the pinned one, never from a later revision", async () => {
     const a = await alice();
     const bob = await webIdentity(BOB, 77);
     const bobRotated = await webIdentity(BOB, 78);

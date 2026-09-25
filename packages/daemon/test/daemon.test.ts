@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { WebSocket } from "ws";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, test } from "vitest";
 
 import type { SqliteDriver } from "@estoc/event-store";
 import { PING_TYPE, type Channel, type DidId } from "@estoc/vault";
@@ -696,7 +696,7 @@ describe("two daemons over a mediator", () => {
     LONG
   );
 
-  it(
+  test(
     "an invitation accepted becomes a contact on one side and a channel to name on the other; a restored vault receives at once and sends only once the restore is explained",
     async () => {
       const mediator = await newMediator();

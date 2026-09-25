@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import { PING_RESPONSE_EFFECT, PING_TYPE, PURE_ACK_EFFECT, kindOf, type DidId, type MessageId } from "@estoc/vault";
 
@@ -16,7 +16,7 @@ const HELLO = "019b0000-0000-7000-8000-000000000102" as MessageId;
 afterEach(stopAll);
 
 describe("first contact over a mediator", () => {
-  it("a Ping to a one-use invitation is consumed, answered and acknowledged once, however often it is delivered; a refused call is made again only by a retry, with the same package", async () => {
+  test("a Ping to a one-use invitation is consumed, answered and acknowledged once, however often it is delivered; a refused call is made again only by a retry, with the same package", async () => {
     const mediator = await newMediator();
     const forwards: IMessage[] = [];
     mediator.intercept = (msg) => {

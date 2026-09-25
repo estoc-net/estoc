@@ -1,5 +1,5 @@
 import { sha256 } from "@noble/hashes/sha2";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import {
   InvalidCid,
@@ -25,7 +25,7 @@ async function collect(source: AsyncIterable<Uint8Array>): Promise<Uint8Array[]>
 }
 
 describe("raw CIDs", () => {
-  it("the vectors — from a digest, and back to the digest", () => {
+  it("encodes known digests as their CIDs and parses a CID back to its codec, digest and bytes", () => {
     expect(rawCidFromDigest(sha256(new Uint8Array(0))).text).toBe(EMPTY_CID);
     expect(rawCidFromDigest(sha256(HELLO)).text).toBe(HELLO_CID);
     const parsed = rawCidOf(HELLO_CID);
@@ -35,7 +35,7 @@ describe("raw CIDs", () => {
     expect(Buffer.from(parsed.bytes).toString("hex")).toBe("015512202cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
   });
 
-  it("rawCidOf refuses every non-raw, non-canonical or malformed identifier, each as InvalidCid; isRawCid agrees", () => {
+  test("rawCidOf refuses every non-raw, non-canonical or malformed identifier, each as InvalidCid; isRawCid agrees", () => {
     for (const [why, bad] of BAD_CIDS) {
       expect(() => rawCidOf(bad), why).toThrow(InvalidCid);
       expect(isRawCid(bad), why).toBe(false);
@@ -47,7 +47,7 @@ describe("raw CIDs", () => {
     expect(() => rawCidFromDigest(new Uint8Array(31))).toThrow(InvalidCid);
   });
 
-  it("compareCids orders by the binary CID, where the base32 alphabet would not; sortCids also deduplicates", () => {
+  test("compareCids orders by the binary CID, where the base32 alphabet would not; sortCids also deduplicates", () => {
     const cids = Array.from({ length: 64 }, (_, i) => rawCidFromDigest(sha256(bytesOf(8, i + 1))).text as Cid);
     const sorted = sortCids([...cids, ...cids]);
     expect(sorted.length).toBe(64);
@@ -87,7 +87,7 @@ describe("chunksOf and hashSource", () => {
     await expect(collect(chunksOf(streamOf(["x" as unknown as Uint8Array])))).rejects.toThrow(TypeError);
   });
 
-  it("stopping early releases the source: a stream is cancelled, an iterator returned", async () => {
+  test("stopping early releases the source: a stream is cancelled, an iterator returned", async () => {
     let cancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       pull: (controller) => controller.enqueue(bytesOf(10, 2)),
@@ -112,7 +112,7 @@ describe("chunksOf and hashSource", () => {
     expect(returned).toBe(true);
   });
 
-  it("hashSource hands every chunk to the sink in order, holds none itself, and names the raw CID at the end", async () => {
+  test("hashSource hands every chunk to the sink in order, holds none itself, and names the raw CID at the end", async () => {
     const bytes = bytesOf(10_000, 4);
     const seen: Uint8Array[] = [];
     const { cid, size } = await hashSource(chunked(bytes, [3_000, 3_000, 3_000, 1_000]), Infinity, (chunk) => seen.push(chunk));
@@ -123,7 +123,7 @@ describe("chunksOf and hashSource", () => {
     expect((await hashSource(new Uint8Array(0), 0, () => undefined)).cid.text).toBe(EMPTY_CID);
   });
 
-  it("hashSource stops at the chunk that crosses maxBytes, having read no further", async () => {
+  test("hashSource stops at the chunk that crosses maxBytes, having read no further", async () => {
     let pulled = 0;
     async function* endless(): AsyncIterable<Uint8Array> {
       for (;;) {

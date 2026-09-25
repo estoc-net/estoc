@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { InvalidJson, MAX_DEPTH, canonicalText, canonicalize, forbiddenIn, parseStrict } from "../src/index.js";
 import { utf8Length } from "../src/jcs.js";
@@ -291,12 +291,12 @@ describe("strict parsing", () => {
     expect(() => parseStrict("[".repeat(MAX_DEPTH) + "]".repeat(MAX_DEPTH))).not.toThrow();
   });
 
-  it("says where", () => {
+  it("reports the offset of the error, and the name of a duplicated member", () => {
     expect(() => parseStrict('{"a":1,"a":2}')).toThrow(/duplicate member "a" at offset 7/);
     expect(() => parseStrict("[1 2]")).toThrow(/at offset 3/);
   });
 
-  it("two serializations with different member order or whitespace canonicalize to one byte string", () => {
+  test("two serializations with different member order or whitespace canonicalize to one byte string", () => {
     const a = utf8.encode(`{"type":"t","data":{"b":2,"a":[1, 2]},${cp(10)}  "roots":[]}`);
     const b = utf8.encode('{ "roots" : [ ] , "data" : { "a" : [ 1 , 2.0 ] , "b" : 2E0 } , "type" : "t" }');
     expect(hex(canonicalize(parseStrict(a)))).toBe(hex(canonicalize(parseStrict(b))));

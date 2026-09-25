@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 import { InvalidIdentifier, didcommServiceUris, scanVault, vaultDraft, type DidId, type RouteId } from "@estoc/vault";
@@ -11,7 +11,7 @@ const ROUTE = "019b0000-0000-7000-8000-00000000000a" as RouteId;
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 
 describe("routes", () => {
-  it("a mediated route needs a usable arrangement; a direct one needs nothing; the same ID says the same or is refused", async () => {
+  test("a mediated route needs a usable arrangement; a direct one needs nothing; the same ID says the same or is refused", async () => {
     const p = await party(await newMediator());
     await expect(configureRoute(p.runtime, p.keys, { kind: "mediated", mediationId: p.mediationId })).rejects.toBeInstanceOf(Unusable);
     const direct = await configureRoute(p.runtime, p.keys, { kind: "direct", endpoint: ENDPOINT }, ROUTE);
@@ -88,7 +88,7 @@ describe("communication DIDs", () => {
 });
 
 describe("disclosure", () => {
-  it("a direct address is disclosed without a mediator; an oob disclosure carries the long form in an invitation", async () => {
+  test("a direct address is disclosed without a mediator; an oob disclosure carries the long form in an invitation", async () => {
     const { runtime, keys } = await freshVault();
     await configureRoute(runtime, keys, { kind: "direct", endpoint: ENDPOINT }, ROUTE);
     const { minted } = await createDid(runtime, keys, ROUTE, DID);
@@ -123,7 +123,7 @@ describe("disclosure", () => {
     await runtime.close();
   });
 
-  it("a mediated address is disclosed only once the mediator holds it, over the arrangement's own link", async () => {
+  test("a mediated address is disclosed only once the mediator holds it, over the arrangement's own link", async () => {
     const mediator = await newMediator();
     const p = await party(mediator);
     await establish(p.link, p.runtime, p.keys, p.mediationId);
