@@ -6,7 +6,7 @@ import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 
 import { deriveContinuity } from "../src/index.js";
-import { bindFromPrior, createFromPrior, FROM_PRIOR_PROFILE, inspectFromPrior, InvalidFromPrior, verifyFromPrior, type IssuerEvidence, type Signer, type VerifiedFromPrior } from "../src/from-prior/index.js";
+import { bindFromPrior, createFromPrior, FROM_PRIOR_PROFILE, inspectFromPrior, InvalidFromPrior, precheckFromPrior, verifyFromPrior, type FromPriorFailure, type IssuerEvidence, type Signer, type VerifiedFromPrior } from "../src/from-prior/index.js";
 
 type Party = { longForm: string; shortForm: string; document: IssuerEvidence; kid: string; privateKey: KeyObject; publicKeyBytes: Uint8Array };
 
@@ -44,6 +44,8 @@ async function ending(issuer: Party, audience: Party | null): Promise<string> {
 
 const segments = (jwt: string) => jwt.split(".") as [string, string, string];
 const encode = (value: unknown) => base64urlnopad.encode(new TextEncoder().encode(JSON.stringify(value)));
+/** A signature segment of the right shape that nothing verifies, for cases about the other two segments. */
+const unsigned = base64urlnopad.encode(new Uint8Array(64));
 
 async function failure(promise: Promise<unknown>): Promise<InvalidFromPrior> {
   try {
@@ -55,6 +57,22 @@ async function failure(promise: Promise<unknown>): Promise<InvalidFromPrior> {
   throw new Error("verified");
 }
 
+function refusal(run: () => unknown): InvalidFromPrior {
+  try {
+    run();
+  } catch (err) {
+    if (err instanceof InvalidFromPrior) return err;
+    throw err;
+  }
+  throw new Error("accepted");
+}
+
+/** A token signed by `issuer` over the exact header and claims given, so a test can shape both. */
+function signed(issuer: Party, header: Record<string, unknown>, claims: Record<string, unknown>): string {
+  const input = `${encode(header)}.${encode(claims)}`;
+  return `${input}.${base64urlnopad.encode(new Uint8Array(nodeSign(null, new TextEncoder().encode(input), issuer.privateKey)))}`;
+}
+
 describe("inspect", () => {
   it("reads the header and claims of a token without verifying anything", async () => {
     const jwt = await rotation(b0, b1);
@@ -64,14 +82,113 @@ describe("inspect", () => {
     expect(inspectFromPrior(await ending(b0, a0)).claims).toEqual({ iss: b0.longForm, sub: undefined, aud: a0.longForm, iat: IAT });
   });
 
-  it("refuses what is not a JWT of the expected shape", () => {
-    const cases = ["", "a.b", "a.b.c", `${encode({ alg: "EdDSA" })}.${encode({ iss: "x", iat: IAT })}.AA`, `${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", iat: 1.5 })}.AA`, `${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", sub: null, iat: IAT })}.AA`, `${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", aud: ["a"], iat: IAT })}.AA`];
-    for (const jwt of cases) expect(() => inspectFromPrior(jwt), jwt).toThrow(InvalidFromPrior);
+  it("refuses what is not a JWT of the expected shape, each case for its own defect", () => {
+    const cases: [string, RegExp][] = [
+      ["", /compact JWT/],
+      ["a.b", /compact JWT/],
+      ["a.b.c", /compact JWT/],
+      [`${encode({ alg: "EdDSA" })}.${encode({ iss: "x", iat: IAT })}.${unsigned}`, /kid/],
+      [`${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", iat: 1.5 })}.${unsigned}`, /iat/],
+      [`${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", sub: null, iat: IAT })}.${unsigned}`, /sub/],
+      [`${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", aud: ["a"], iat: IAT })}.${unsigned}`, /aud/],
+    ];
+    for (const [jwt, defect] of cases) expect(refusal(() => inspectFromPrior(jwt)).message, jwt).toMatch(defect);
+    expect(() => inspectFromPrior(`${encode({ alg: "EdDSA", kid: "k" })}.${encode({ iss: "x", iat: IAT })}.${unsigned}`)).not.toThrow();
   });
 
   it("refuses a validity window, which this profile does not evaluate", async () => {
-    expect(() => inspectFromPrior(`${encode({ alg: "EdDSA", kid: b0.kid })}.${encode({ iss: b0.longForm, sub: b1.longForm, iat: IAT, exp: IAT + 10 })}.AA`)).toThrow(InvalidFromPrior);
+    expect(refusal(() => inspectFromPrior(`${encode({ alg: "EdDSA", kid: b0.kid })}.${encode({ iss: b0.longForm, sub: b1.longForm, iat: IAT, exp: IAT + 10 })}.${unsigned}`)).message).toMatch(/exp/);
     expect((await failure(verifyFromPrior(await rotation(b0, b1, {}, { nbf: IAT }), b0.document))).failure).toBe("form");
+  });
+});
+
+describe("precheck", () => {
+  const header = { alg: "EdDSA", typ: "JWT", kid: b0.kid };
+  const claims = { iss: b0.longForm, sub: b1.longForm, iat: IAT };
+
+  it("refuses, without any issuer document, what the profile can already decide, and verification refuses the same way", async () => {
+    const cases: [string, Record<string, unknown>, Record<string, unknown>, FromPriorFailure][] = [
+      ["another algorithm", { ...header, alg: "ES256" }, claims, "profile"],
+      ["alg none", { ...header, alg: "none" }, claims, "profile"],
+      ["another media type", { ...header, typ: "JWS" }, claims, "profile"],
+      ["a kid of another DID", { ...header, kid: `${b1.longForm}#key-1` }, claims, "profile"],
+      ["a kid without a fragment", { ...header, kid: b0.longForm }, claims, "profile"],
+      ["a rotation to the issuer itself", header, { ...claims, sub: b0.shortForm }, "profile"],
+      ["a rotation with an audience", header, { ...claims, aud: a0.longForm }, "profile"],
+      ["an ending addressed to the issuer", header, { iss: b0.longForm, aud: b0.shortForm, iat: IAT }, "profile"],
+      ["an issuer of another method", header, { ...claims, iss: "did:web:b0.example" }, "profile"],
+      ["a successor of another method", header, { ...claims, sub: "did:key:z6Mk" }, "profile"],
+      ["a critical header this profile does not understand", { ...header, crit: ["x-ext"], "x-ext": 1 }, claims, "profile"],
+      ["crit naming b64 the header lacks", { ...header, crit: ["b64"] }, claims, "form"],
+      ["an empty crit", { ...header, crit: [] }, claims, "form"],
+      ["a repeated crit entry", { ...header, b64: true, crit: ["b64", "b64"] }, claims, "form"],
+    ];
+    for (const [what, hdr, cl, expected] of cases) {
+      const jwt = signed(b0, hdr, cl);
+      expect(refusal(() => precheckFromPrior(jwt)).failure, what).toBe(expected);
+      expect((await failure(verifyFromPrior(jwt, b0.document))).failure, what).toBe(expected);
+    }
+  });
+
+  it("refuses a signature segment that cannot be an Ed25519 signature, and leaves a well-formed wrong one to verification", async () => {
+    const [h, p, s] = segments(signed(b0, header, claims));
+    for (const [what, segment] of [["empty", ""], ["not base64url", "!"], ["an odd length", "A"], ["one byte", "AA"], ["63 bytes", base64urlnopad.encode(new Uint8Array(63))], ["65 bytes", base64urlnopad.encode(new Uint8Array(65))], ["padded", `${s}=`]]) {
+      const jwt = `${h}.${p}.${segment}`;
+      expect(refusal(() => precheckFromPrior(jwt)).failure, what).toBe("form");
+      expect(refusal(() => inspectFromPrior(jwt)).failure, what).toBe("form");
+      expect((await failure(verifyFromPrior(jwt, b0.document))).failure, what).toBe("form");
+    }
+    const wrong = `${h}.${p}.${base64urlnopad.encode(new Uint8Array(64))}`;
+    expect(precheckFromPrior(wrong)).toEqual(inspectFromPrior(wrong));
+    expect((await failure(verifyFromPrior(wrong, b0.document))).failure).toBe("signature");
+  });
+
+  it("refuses a rotation whose successor is not the authenticated sender, before any material arrives", () => {
+    const jwt = signed(b0, header, claims);
+    expect(refusal(() => precheckFromPrior(jwt, { authenticatedSender: b0.longForm })).failure).toBe("binding");
+    expect(refusal(() => precheckFromPrior(jwt, { authenticatedSender: a0.shortForm })).failure).toBe("binding");
+    expect(refusal(() => precheckFromPrior(jwt, { authenticatedSender: "did:web:b1.example" })).failure).toBe("binding");
+    expect(precheckFromPrior(jwt, { authenticatedSender: b1.longForm })).toEqual(inspectFromPrior(jwt));
+    expect(precheckFromPrior(jwt, { authenticatedSender: b1.shortForm })).toEqual(inspectFromPrior(jwt));
+  });
+
+  it("accepts equivalent spellings: short and long forms of one DID are one identity", () => {
+    expect(precheckFromPrior(signed(b0, { ...header, kid: `${b0.shortForm}#key-1` }, claims))).toMatchObject({ header: { kid: `${b0.shortForm}#key-1` } });
+    expect(precheckFromPrior(signed(b0, header, { ...claims, iss: b0.shortForm }))).toMatchObject({ claims: { iss: b0.shortForm } });
+    expect(refusal(() => precheckFromPrior(signed(b0, header, { ...claims, sub: b0.longForm }))).failure).toBe("profile");
+    for (const typ of [undefined, "jwt", "application/jwt", "Application/JWT"]) {
+      expect(() => precheckFromPrior(signed(b0, { alg: "EdDSA", kid: b0.kid, ...(typ === undefined ? {} : { typ }) }, claims)), typ ?? "omitted").not.toThrow();
+    }
+  });
+
+  it("passes a token whose issuer material is still unknown: the host waits, it does not reject", async () => {
+    const unknown = party("unknown");
+    const jwt = signed(unknown, { alg: "EdDSA", kid: `${unknown.shortForm}#key-1` }, { iss: unknown.shortForm, sub: b1.longForm, iat: IAT });
+    expect(precheckFromPrior(jwt, { authenticatedSender: b1.shortForm })).toEqual({ header: { alg: "EdDSA", typ: undefined, kid: `${unknown.shortForm}#key-1` }, claims: { iss: unknown.shortForm, sub: b1.longForm, aud: undefined, iat: IAT } });
+    expect((await failure(verifyFromPrior(jwt, b0.document))).failure).toBe("document");
+    await expect(verifyFromPrior(jwt, unknown.document)).resolves.toMatchObject({ issuer: { canonical: unknown.shortForm } });
+  });
+
+  it("grants nothing: a tampered token passes the precheck and still fails verification, and the result carries no verified brand", async () => {
+    const jwt = await rotation(b0, b1);
+    const [h, p] = segments(jwt);
+    const tampered = `${h}.${p}.${base64urlnopad.encode(new Uint8Array(64))}`;
+    const result = precheckFromPrior(tampered, { authenticatedSender: b1.longForm });
+    expect(result).toEqual(inspectFromPrior(jwt));
+    expect(Object.getOwnPropertySymbols(result)).toEqual([]);
+    expect(Object.keys(result)).toEqual(["header", "claims"]);
+    expect((await failure(verifyFromPrior(tampered, b0.document))).failure).toBe("signature");
+  });
+
+  it("leaves an ending to verification and binding: a sender given to the precheck does not reject it", async () => {
+    const addressed = await ending(b0, a0);
+    expect(precheckFromPrior(addressed, { authenticatedSender: b0.longForm })).toEqual(inspectFromPrior(addressed));
+    const bare = await ending(b0, null);
+    expect(precheckFromPrior(bare, { authenticatedSender: b0.longForm })).toEqual(inspectFromPrior(bare));
+    const proof = await verifyFromPrior(addressed, b0.document);
+    expect(bindFromPrior(proof, { ref: "receipt-e", token: addressed, recipient: a0.longForm, sender: b0.longForm }, { transitionId: "e1" })).toMatchObject({ status: "mismatch", because: expect.stringContaining("sender") });
+    expect(bindFromPrior(proof, { ref: "receipt-e", token: addressed, recipient: a0.longForm, sender: null }, { transitionId: "e1" })).toMatchObject({ status: "bound" });
+    expect(bindFromPrior(await verifyFromPrior(bare, b0.document), { ref: "receipt-e", token: bare, recipient: a0.longForm, sender: null }, { transitionId: "e1" })).toMatchObject({ status: "unbound" });
   });
 });
 
@@ -161,6 +278,15 @@ describe("verify", () => {
     expect(unaddressed.change).toEqual({ kind: "end", audience: null });
   });
 
+  it("reports a document failure for an authorized JWK that is not an Ed25519 key", async () => {
+    for (const [what, x] of [["empty", ""], ["not base64url", "!"], ["one byte", "AA"], ["31 bytes", base64urlnopad.encode(new Uint8Array(31))], ["33 bytes", base64urlnopad.encode(new Uint8Array(33))]]) {
+      const jwk = party(`jwk-${what}`, () => ({ verificationMethod: [{ id: "#key-1", type: "JsonWebKey2020", publicKeyJwk: { kty: "OKP", crv: "Ed25519", x } }], authentication: ["#key-1"] }));
+      const jwt = await rotation(jwk, b1);
+      expect(() => precheckFromPrior(jwt), what).not.toThrow();
+      expect((await failure(verifyFromPrior(jwt, jwk.document))).failure, what).toBe("document");
+    }
+  });
+
   it("accepts a JWK method, and an embedded authentication method", async () => {
     const jwk = party("jwk", (key) => ({ verificationMethod: [{ id: "#key-1", type: "JsonWebKey2020", publicKeyJwk: key.jwk }], authentication: ["#key-1"] }));
     await expect(verifyFromPrior(await rotation(jwk, b1), jwk.document)).resolves.toMatchObject({ method: jwk.kid });
@@ -220,7 +346,9 @@ describe("verify", () => {
     await expect(verifyFromPrior(unencoded, b0.document)).rejects.toThrow(InvalidFromPrior);
     const input = `${encode({ alg: "EdDSA", typ: "JWT", kid: b0.kid, crit: ["x-ext"], "x-ext": 1 })}.${p}`;
     const critical = `${input}.${base64urlnopad.encode(new Uint8Array(nodeSign(null, new TextEncoder().encode(input), b0.privateKey)))}`;
-    expect((await failure(verifyFromPrior(critical, b0.document))).failure).toBe("signature");
+    expect(inspectFromPrior(critical).header.kid).toBe(b0.kid);
+    expect(refusal(() => precheckFromPrior(critical)).failure).toBe("profile");
+    expect((await failure(verifyFromPrior(critical, b0.document))).failure).toBe("profile");
   });
 });
 
