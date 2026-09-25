@@ -8,7 +8,9 @@
   `effective`, `pending` or `invalid` (`AdmissionFold`), and
   `foldDispositions` gives every observation its `Disposition` —
   `refused`, `admitted`, `ignored-superseded` or `pending-admission`
-  with what stands in the way — and lists the `candidates` no
+  with what stands in the way; a verified replacement of the peer
+  precedes every pending state, a saved admission still waiting for
+  its evidence included — and lists the `candidates` no
   effective or pending admission names, in first-receipt order, each
   `eligible`, `deferred`, `refused` by current policy, `invalid` or in
   an `integrity-conflict`. Both are on `VaultFold` as `admissions` and

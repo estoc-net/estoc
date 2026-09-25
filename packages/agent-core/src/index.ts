@@ -126,10 +126,10 @@ export {
 } from "./receive/receiver.js";
 export { receiptOf, recordReceipt } from "./receive/receipt.js";
 export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
-export { afterReceipt, recordOwed, type AfterReceipt, type AfterReceiptOptions, type Owed } from "./receive/after.js";
-export { completeResponse, reactTo, type Called, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
-export { completeNotification, rotate, type RotateOptions, type Rotated, type RotationTarget } from "./rotate.js";
-export { privacyPolicy, privateAddress, type PrivacyPolicy, type PrivateAddress } from "./privacy.js";
+export { afterReceipt, recordOwed, recordOwedUnderLock, type AfterReceipt, type AfterReceiptOptions, type Owed } from "./receive/after.js";
+export { callEffects, completeResponse, decideEffects, reactTo, type Called, type DecidedEffects, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
+export { callRotation, completeNotification, decideRotation, rotate, type RotateOptions, type Rotated, type RotationDecided, type RotationTarget } from "./rotate.js";
+export { callPrivateAddress, decidePrivateAddress, privacyPolicy, privateAddress, type PrivacyPolicy, type PrivateAddress, type PrivateAddressDecided } from "./privacy.js";
 export { BUILT_IN_HANDLERS, basicMessage, claimedName, effectTypesOf, empty, handlerFor, handlersOf, reportProblem, reportedProblem, trustPing, userProfile, type Handler, type Input, type Response } from "./handlers/index.js";
 export {
   recorder,

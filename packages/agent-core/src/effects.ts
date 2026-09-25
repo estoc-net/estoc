@@ -7,8 +7,10 @@
  * or whose call's step throws leaves another's intent standing,
  * recorded and dispatched, so that the receipt an input requests never
  * waits on its protocol's reply.
- * Before any is decided, the input must be established by a complete
- * witness in a channel that takes a reply now: not denied, not in
+ * Before any is decided, the input must be established by the live
+ * observation itself, admitted as its first complete witness — an
+ * admission of another observation of the input lends the live one
+ * nothing — in a channel that takes a reply now: not denied, not in
  * conflict, its peer not moved on; and the reply's sender chosen by
  * the fold — the carrier's own local DID while it may send, else the
  * unique verified successor that keeps the peer — is fixed by the
@@ -23,9 +25,11 @@
  * the notification of a rotation, decided with the rotation — and the
  * rest are the protocols', each through its handler. An intent is
  * dispatched only under an action a live input minted, once the lock
- * is released; an input that is not live leaves its unfinished
- * outputs listed, and an explicit completion makes each of them under
- * the same tuple with a manual action.
+ * is released and, over a pickup, off the turn the delivery came in,
+ * so that the call holds up no receipt behind it; an input that is not
+ * live leaves its unfinished outputs listed, and an explicit
+ * completion makes each of them under the same tuple with a manual
+ * action.
  */
 
 import { parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store";
@@ -91,11 +95,16 @@ export type EffectOutcome =
 
 export interface Reacted {
   cid: EventReference<"message.in">;
-  /** null while the observation is in no established input: anonymous, or its input not yet established */
+  /** null while the observation is in no input here: anonymous, or not yet placed */
   executionId: ExecutionId | null;
-  /** why no operation was asked: the observation is in no input here, or the input is not established */
+  /** why no operation was asked: the observation is in no input here, is not the observation its input speaks through, or its input is not established */
   because: string | null;
   effects: EffectOutcome[];
+}
+
+/** The effects of a live input as the lock decided them, each new intent recorded with the action the input minted for it, before any is called. */
+export interface DecidedEffects extends Pick<Reacted, "cid" | "executionId" | "because"> {
+  drafted: Drafted[];
 }
 
 /**
@@ -105,16 +114,46 @@ export interface Reacted {
  * input mints for it.
  */
 export async function reactTo(runtime: VaultRuntime, keys: Keys, live: LiveInput, options: EffectOptions): Promise<Reacted> {
-  const decided = await runtime.locked(async (held) => {
+  return callEffects(await decideEffects(runtime, keys, live, options), options);
+}
+
+/** The decisions of `reactTo` alone, under the lock: what a caller records before it makes the calls, or off the turn it holds. */
+export async function decideEffects(runtime: VaultRuntime, keys: Keys, live: LiveInput, options: Omit<EffectOptions, "dispatch">): Promise<DecidedEffects> {
+  const { cid } = live;
+  return runtime.locked(async (held) => {
     const fold = await scan(held, keys, options);
-    const execution = fold.inbound.ofSource(live.cid);
-    if (execution === null) return { executionId: null, because: "the observation is anonymous or in no input here", effects: [] };
+    const execution = fold.inbound.ofSource(cid);
+    if (execution === null) return { cid, executionId: null, because: "the observation is anonymous or in no input here", drafted: [] };
+    const standing = notWitnessing(fold, execution, cid);
+    if (standing !== null) return { cid, executionId: execution.id, because: standing, drafted: [] };
     const settled = await settle(held, fold, execution, options);
-    return { executionId: execution.id, because: settled.because, effects: settled.drafted.map((draft) => (draft.outcome === "created" ? { ...draft, action: live.mint(draft.messageId) } : draft)) };
+    return { cid, executionId: execution.id, because: settled.because, drafted: settled.drafted.map((draft) => (draft.outcome === "created" ? { ...draft, action: live.mint(draft.messageId) } : draft)) };
   });
+}
+
+/** The calls of `reactTo`: each intent decided, dispatched in order under the action minted for it. */
+export async function callEffects(decided: DecidedEffects, options: Pick<EffectOptions, "dispatch" | "trace">): Promise<Reacted> {
+  const { cid, executionId, because } = decided;
   const effects: EffectOutcome[] = [];
-  for (const draft of decided.effects) effects.push(await dispatched(draft, decided.executionId, options));
-  return { cid: live.cid, ...decided, effects };
+  for (const draft of decided.drafted) effects.push(await dispatched(draft, executionId, options));
+  return { cid, executionId, because, effects };
+}
+
+/**
+ * Why the live observation may not speak for its input, or null when
+ * the input is established by this very observation. An input speaks
+ * through its first admitted complete witness; a live observation
+ * that is not it — its own proof refused or still waiting while a
+ * duplicate delivered after it was admitted — earns nothing, since an
+ * admission of one duplicate lends another none of its authority. An
+ * input established by no observation is settle's to explain.
+ */
+function notWitnessing(fold: VaultFold, execution: Execution, cid: EventReference<"message.in">): string | null {
+  if (execution.firstWitness === null || execution.firstWitness.source.event.cid === cid) return null;
+  const disposition = fold.dispositions.disposition(cid);
+  if (disposition.status !== "admitted") return `the observation is not admitted: ${"because" in disposition ? disposition.because : disposition.status}`;
+  const witness = fold.continuity.witness(cid);
+  return witness.status === "complete" ? "the input is established by another observation" : `the observation is no complete witness: ${witness.because}`;
 }
 
 /**
@@ -139,7 +178,7 @@ export async function completeResponse(runtime: VaultRuntime, keys: Keys, execut
   return dispatched(decided, executionId, options);
 }
 
-function scan(held: Held, keys: Keys, options: EffectOptions): Promise<VaultFold> {
+function scan(held: Held, keys: Keys, options: Pick<EffectOptions, "handlers">): Promise<VaultFold> {
   return scanVault(held, keys, { effectTypes: effectTypesOf(handlersOf(options.handlers)) });
 }
 
@@ -159,7 +198,7 @@ export type Drafted =
  * handler that throws refuses every operation it was asked for; a
  * response that cannot be recorded refuses its own operation alone.
  */
-async function settle(held: Held, fold: VaultFold, execution: Execution, options: EffectOptions, only?: string): Promise<{ because: string | null; drafted: Drafted[] }> {
+async function settle(held: Held, fold: VaultFold, execution: Execution, options: Omit<EffectOptions, "dispatch">, only?: string): Promise<{ because: string | null; drafted: Drafted[] }> {
   if (execution.firstWitness === null) return { because: `the input is not established: ${(execution.status as Exclude<Execution["status"], { status: "complete" }>).because}`, drafted: [] };
   const { source } = execution.firstWitness;
   const handler = handlerFor(handlersOf(options.handlers), source.event.data.msgType);
@@ -241,7 +280,7 @@ async function readBody(held: Held, execution: Execution, source: Source): Promi
 }
 
 /** The one transport call of a drafted intent, under the action it carries; none for an intent no action was minted for. A call's step that throws is this operation's alone. */
-export async function dispatched(draft: Drafted, executionId: ExecutionId | null, options: EffectOptions): Promise<EffectOutcome> {
+export async function dispatched(draft: Drafted, executionId: ExecutionId | null, options: Pick<EffectOptions, "dispatch" | "trace">): Promise<EffectOutcome> {
   if (draft.outcome === "none" || draft.outcome === "refused") return draft;
   if (draft.action === undefined) return { ...draft, outcome: "existing", action: null, dispatched: null };
   const { action, messageId, effectType } = draft;

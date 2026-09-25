@@ -3,7 +3,7 @@ import { Message } from "@estoc/didcomm-node";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 
-import { BASIC_MESSAGE, PLAIN_TYP, Pickup, STATUS, createDid, ensureRoute, establish, plainMessage, reconcile, secretsResolverFor, type Delivered, type IMessage, type Opened } from "../src/index.js";
+import { BASIC_MESSAGE, DELIVERY, PLAIN_TYP, Pickup, STATUS, createDid, ensureRoute, establish, plainMessage, reconcile, secretsResolverFor, type Delivered, type IMessage, type MediatorLink, type Opened } from "../src/index.js";
 import { newMediator, party, reloaded, until } from "./helpers.js";
 
 const resolver = { resolve: resolveDIDCommDoc };
@@ -73,5 +73,40 @@ describe("pickup over the ring", () => {
     expect(p.log).toEqual([`a socket frame was dropped: the reply was not sealed by the mediator to this account: sealed by ${impostor.did}`]);
     p.link.closeSocket();
     await p.runtime.close();
+  });
+
+  it("hands the delivery behind one over while the mediator has yet to answer that one's acknowledgement: what the handle records is in the order the mail came, and no answer holds the next delivery", async () => {
+    const handled: string[] = [];
+    const acknowledged: string[][] = [];
+    let asked = (): void => undefined;
+    const asking = new Promise<void>((resolve) => (asked = resolve));
+    let answer = (): void => undefined;
+    const answering = new Promise<void>((resolve) => (answer = resolve));
+    const link = {
+      roundTrip: async (_type: string, body: Record<string, unknown>) => {
+        acknowledged.push(body["message_id_list"] as string[]);
+        if (acknowledged.length === 1) {
+          asked();
+          await answering;
+        }
+        return { type: STATUS, body: { message_count: 0 } };
+      },
+    } as unknown as MediatorLink;
+    const pickup = new Pickup(link, ({ attachmentId }) => {
+      handled.push(attachmentId);
+      return "acked";
+    });
+    const frame = (id: string): Opened => ({ msg: { type: DELIVERY, body: {}, attachments: [{ id, data: { json: { ciphertext: id } } }] } } as unknown as Opened);
+
+    const first = pickup.onFrame(frame("first"));
+    await asking;
+    const second = pickup.onFrame(frame("second"));
+    await until("the second delivery is handled behind the first", () => handled.length === 2);
+    expect([handled, acknowledged]).toEqual([
+      ["first", "second"],
+      [["first"], ["second"]],
+    ]);
+    answer();
+    await Promise.all([first, second]);
   });
 });

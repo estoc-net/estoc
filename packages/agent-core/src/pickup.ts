@@ -16,7 +16,10 @@
  *
  * Every inbound step runs after the one before it — a delivery down the
  * socket, a delivery fetched — so what the handle records is in the
- * order the mail came, whichever way it came.
+ * order the mail came, whichever way it came. Telling the mediator what
+ * was taken is no such step: it goes out once a delivery's attachments
+ * are handled, and a delivery behind it is handled while the mediator
+ * answers.
  */
 
 import { base64urlToUtf8 } from "@estoc/did-peer";
@@ -141,7 +144,7 @@ export class Pickup {
       if (delivery.msg.type !== DELIVERY) {
         throw new Error(`mediator answered ${delivery.msg.type} to delivery-request`);
       }
-      const taken = await this.enqueue(() => this.take(delivery.msg, delivery.seq));
+      const taken = await this.acknowledgeTaken(await this.enqueue(() => this.take(delivery.msg, delivery.seq)));
       acked += taken;
       if (taken === 0) {
         this.log("nothing acknowledged this round; leaving the queue for a later pickup");
@@ -155,7 +158,8 @@ export class Pickup {
   /**
    * A frame down the socket (`link.openSocket`): a status saying live
    * delivery is on is told to `onLive`; a delivery is taken, in turn
-   * with every other inbound step; anything else is logged.
+   * with every other inbound step, and what was taken acknowledged off
+   * that turn; anything else is logged.
    */
   async onFrame(opened: Opened): Promise<void> {
     const { msg } = opened;
@@ -166,7 +170,7 @@ export class Pickup {
       return;
     }
     if (msg.type === DELIVERY) {
-      await this.enqueue(() => this.take(msg, opened.seq));
+      await this.acknowledgeTaken(await this.enqueue(() => this.take(msg, opened.seq)));
       return;
     }
     this.log(`unexpected frame type ${msg.type ?? "unknown"}`);
@@ -189,13 +193,11 @@ export class Pickup {
   }
 
   /**
-   * One delivery: every attachment handed over, the taken ones
-   * acknowledged. One bad attachment stops nothing: the rest are handed
-   * over and acknowledged. Returns how many the mediator was told of —
-   * none when the acknowledgement itself failed, as they are all still
-   * queued.
+   * One delivery: every attachment handed over, in turn. One bad
+   * attachment stops nothing: the rest are handed over. Returns the
+   * attachments the handle took, for the mediator to be told of.
    */
-  private async take(delivery: IMessage, parent?: number): Promise<number> {
+  private async take(delivery: IMessage, parent?: number): Promise<string[]> {
     const attachments = (delivery.attachments ?? []) as DeliveryAttachment[];
     const taken: string[] = [];
     for (const attachment of attachments) {
@@ -221,6 +223,11 @@ export class Pickup {
         taken.push(attachmentId);
       }
     }
+    return taken;
+  }
+
+  /** The taken attachments acknowledged. Returns how many the mediator was told of — none when the acknowledgement itself failed, as they are all still queued. */
+  private async acknowledgeTaken(taken: readonly string[]): Promise<number> {
     if (taken.length === 0) {
       return 0;
     }

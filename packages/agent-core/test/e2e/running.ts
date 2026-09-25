@@ -8,6 +8,7 @@ import { SqliteVault, exportVault, importVault, openPortable, parseStrict, resto
 import { Keys, scanVault, vaultHeldRoots, vaultRetention, type Channel, type Did, type DidId, type VaultFold } from "@estoc/vault";
 
 import { PLAIN_TYP, packEncrypted, secretsResolverFor, type IMessage } from "../../src/protocol/didcomm.js";
+import { MESSAGES_RECEIVED } from "../../src/protocol/mediation.js";
 import { FORWARD } from "../../src/protocol/spec.js";
 import { Agent, AgentTrace, openVault, type AgentOptions, type Inbound, type OpenedVault } from "../../src/index.js";
 import { MEDIATOR_HTTP, type FakeMediator } from "../fake-mediator.js";
@@ -18,9 +19,11 @@ import { afterNextCommit, didcomm, mediatedParty, until as untilWithin, type Med
  * package is recorded, before any transport call is made for it;
  * `unsent` inside its next forward, which the mediator never takes;
  * `unrecorded` once the mediator has queued that forward and before
- * the caller hears so.
+ * the caller hears so; `unacknowledged` inside its next
+ * acknowledgement of a delivery, which the mediator never takes, a
+ * forward the process makes meanwhile being lost with it.
  */
-export type Death = "prepared" | "unsent" | "unrecorded";
+export type Death = "prepared" | "unsent" | "unrecorded" | "unacknowledged";
 
 /** A party whose vault is a file, run by an agent over a transport the test can refuse or cut. */
 export interface Running {
@@ -104,7 +107,8 @@ function transportOf(mediator: FakeMediator, self: () => Started, life: Life): t
   return async (input, init) => {
     const party = self();
     party.calls++;
-    const mine = (life.death !== null || party.refuseForward.armed) && (await mediator.typeOf(String(init?.body))) === FORWARD;
+    const type = life.death !== null || party.refuseForward.armed ? await mediator.typeOf(String(init?.body)) : null;
+    const mine = type === FORWARD;
     if (life.ended !== null) throw gone();
     if (party.refuseNext.armed || (mine && party.refuseForward.armed)) {
       party.refuseNext.armed = false;
@@ -112,7 +116,10 @@ function transportOf(mediator: FakeMediator, self: () => Started, life: Life): t
       return new Response(null, { status: 503 });
     }
     const death = life.death;
-    if (!mine || death === null) return mediator.fetch(input, init);
+    if (death === "unacknowledged") {
+      if (mine) throw gone();
+      if (type !== MESSAGES_RECEIVED) return mediator.fetch(input, init);
+    } else if (!mine || death === null) return mediator.fetch(input, init);
     life.death = null;
     if (death === "unrecorded") await mediator.fetch(input, init);
     throw die(party, life);

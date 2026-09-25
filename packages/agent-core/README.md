@@ -52,6 +52,12 @@ so that the writer lock is the one sequence every receipt and
 admission goes through whichever way the delivery came. Whether the
 proof verifies, which channel the input is established in and what it
 earns are the fold's to say, over the admitted observations alone.
+Over a pickup, that sequence holds a delivery's local work alone: the
+mediator is told of the delivery, and the calls it decided are made,
+off its turn, so the delivery behind it is received meanwhile.
+Evidence that arrives outside a receipt — the document a preparation
+resolves, an import the host tells the agent of — is reconciled when
+it arrives, admitting what waited for it and dispatching nothing.
 
 ## Usage
 

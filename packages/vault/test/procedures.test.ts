@@ -1,4 +1,4 @@
-import { MemoryVault } from "@estoc/event-store";
+import { MemoryVault, type Held } from "@estoc/event-store";
 import { importSeed } from "@estoc/keystore";
 import { SignJWT, importJWK } from "jose";
 import { describe, expect, it } from "vitest";
@@ -53,9 +53,9 @@ import { IAT, PURE_ACK, automatic, blocked, channel, intent, invitation, noObjec
 
 const encoder = new TextEncoder();
 
-/** A vault in memory holding the scene's events and the bytes of every text named. */
 const OTHER_HASH = "Amqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA";
 
+/** A vault in memory holding the scene's events and the bytes of every text named. */
 async function vaultOf(scene: Scene, texts: readonly string[] = []): Promise<MemoryVault> {
   const vault = new MemoryVault({ metadata: { version: 4, anchor: await Keys.anchorOf(await importSeed(SEED)) } });
   for (const text of texts) await vault.stores.objects.putObject(cidOf(text), encoder.encode(text));
@@ -189,12 +189,7 @@ describe("admitting receipts", () => {
     expectOrderFree(scene.events, (set) => admissionDrafts(foldVault(set, vault.checks)).map((draft) => draft.data.sourceEventCid));
 
     const memory = await vaultOf(scene);
-    const rounds: string[][] = [];
-    const admitted = await memory.locked(async (held) => {
-      const pass = await admitReceipts(held, await scanVault(held, keys));
-      for (const event of pass.events) rounds.push([event.data.sourceEventCid]);
-      return pass;
-    });
+    const admitted = await memory.locked(async (held) => admitReceipts(held, await scanVault(held, keys)));
     expect(admitted.events.map((event) => event.data.sourceEventCid)).toEqual([opening.cid, elsewhere.cid, carrier.cid, consistent.cid]);
     expect(admitted.fold.dispositions.candidates.map(({ source, eligibility }) => [source.event.cid, eligibility.status])).toEqual([
       [contradicting.cid, "refused"],
@@ -209,35 +204,44 @@ describe("admitting receipts", () => {
     expect([...after.admissions.admissions.values()].map(({ event, status }) => [event.data.sourceEventCid, status.status]).sort()).toEqual(admitted.events.map((event) => [event.data.sourceEventCid, "effective"]).sort());
   });
 
-  it("admits the contradicting observation instead when it comes first in receipt order, whatever order the events are read in, and stops where a commit fails with the rounds before it durable", async () => {
+  it("admits the contradicting observation instead when it comes first in receipt order, whatever order the events are read in; a commit the disk refuses ends the pass with the rounds before it durable, one whose answer is lost leaves its round durable all the same, and the next pass goes on from what is durable, admitting nothing twice", async () => {
     const { scene, keys, a0, b0, b1 } = await vaults();
     const wire = uuidv7();
     const input = (ordinal: number, hash: string) => observation(scene, { local: a0, peer: b0, resolution: resolved(scene, a0.didId, b0), ordinal, wire, overrides: { intentHash: hash as never } });
     const later = input(2, HASH);
     const earlier = input(1, OTHER_HASH);
     const other = observation(scene, { local: a0, peer: b1, resolution: resolved(scene, a0.didId, b1), ordinal: 3 });
+    const consistent = input(4, OTHER_HASH);
     const vault = await fold(scene, keys);
     expect(admissionDrafts(vault).map((draft) => draft.data.sourceEventCid)).toEqual([earlier.cid, other.cid]);
 
     const memory = await vaultOf(scene);
-    let commits = 0;
-    await expect(
-      memory.locked(async (held) => {
-        const fold = await scanVault(held, keys);
-        const refusing = Object.create(held) as typeof held;
-        refusing.commit = async (objects, drafts) => {
-          if (commits++ === 0) throw new Error("the disk is full for now");
-          return held.commit(objects, drafts);
-        };
-        return admitReceipts(refusing, fold);
-      })
-    ).rejects.toThrow("the disk is full for now");
-    expect((await scanVault(memory.vault, keys)).admissions.admissions.size).toBe(0);
+    const durable = async () => (await scanVault(memory.vault, keys)).set.of("message.admitted").map((event) => event.data.sourceEventCid).sort();
+    /** The held view with its commit failing at the `at`th: refused before anything is written, or its answer lost once the write is durable. */
+    const failing = (held: Held, at: number, how: "refused" | "lost"): Held => {
+      let commits = 0;
+      const faulty = Object.create(held) as Held;
+      faulty.commit = async (objects, drafts) => {
+        if (commits++ !== at) return held.commit(objects, drafts);
+        if (how === "refused") throw new Error("the disk is full for now");
+        await held.commit(objects, drafts);
+        throw new Error("the disk answered nothing");
+      };
+      return faulty;
+    };
+    await expect(memory.locked(async (held) => admitReceipts(failing(held, 1, "refused"), await scanVault(held, keys)))).rejects.toThrow("the disk is full for now");
+    expect(await durable()).toEqual([earlier.cid, other.cid].sort());
+    await expect(memory.locked(async (held) => admitReceipts(failing(held, 0, "lost"), await scanVault(held, keys)))).rejects.toThrow("the disk answered nothing");
+    expect(await durable()).toEqual([earlier.cid, other.cid, consistent.cid].sort());
 
-    const admitted = await reconcileAdmissions(memory, keys);
-    expect(admitted.map((event) => event.data.sourceEventCid)).toEqual([earlier.cid, other.cid]);
+    expect(await reconcileAdmissions(memory, keys)).toEqual([]);
     const after = await scanVault(memory.vault, keys);
     expect(after.inbound.ofSource(later.cid)).toMatchObject({ status: { status: "complete" }, intentHash: OTHER_HASH, contradicting: [{ source: { event: { cid: later.cid } } }] });
+    expect(after.inbound.ofSource(later.cid)!.members.map(({ source, admitted }) => [source.event.cid, admitted])).toEqual([
+      [earlier.cid, true],
+      [later.cid, false],
+      [consistent.cid, true],
+    ]);
     expect(after.dispositions.disposition(later.cid)).toEqual({ status: "pending-admission", because: "the observation contradicts the intent its input has admitted" });
   });
 });

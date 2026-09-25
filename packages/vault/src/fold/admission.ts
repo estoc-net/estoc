@@ -122,9 +122,10 @@ export interface AdmissionCandidate {
  * What an observation is to the application, the first that applies:
  * refused for good, with the reason; admitted by at least one
  * effective admission, whatever policy says now; ignored because the
- * peer has replaced its DID and no admission was recorded before; or
- * pending, with the evidence it lacks, the admission that waits or the
- * blocker current policy holds against it.
+ * peer has replaced its DID and no admission of it is effective, one
+ * still waiting for evidence included; or pending, with the evidence
+ * it lacks, the admission that waits or the blocker current policy
+ * holds against it.
  */
 export type Disposition =
   | { status: "refused"; because: string }
@@ -166,9 +167,9 @@ export function foldDispositions(evidence: ChannelEvidence, continuity: Continui
       const eligibility = eligibilities.get(sourceEventCid)!;
       if (eligibility.status === "invalid") return { status: "refused", because: eligibility.because };
       if (eligibility.status === "integrity-conflict") return { status: "refused", because: INTEGRITY };
+      if (source.channel !== null && continuity.superseded(source.channel)) return { status: "ignored-superseded" };
       const waiting = own.find(({ status }) => status.status === "pending");
       if (waiting !== undefined) return { status: "pending-admission", because: `an admission is recorded and waits: ${(waiting.status as { because: string }).because}` };
-      if (source.channel !== null && continuity.superseded(source.channel)) return { status: "ignored-superseded" };
       if (eligibility.status === "eligible") return { status: "pending-admission", because: "the observation is not yet reconciled" };
       return { status: "pending-admission", because: eligibility.because };
     },

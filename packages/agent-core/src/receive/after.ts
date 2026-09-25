@@ -2,7 +2,10 @@
  * What follows a receipt, once the observation is durably committed:
  * independent of the pickup acknowledgement, which the durable receipt
  * alone earns, and run again by an open over everything received
- * before, since a crash may fall between a receipt and this. The fold
+ * before, since a crash may fall between a receipt and this, and by
+ * whatever brings evidence an observation waited for — a resolution a
+ * preparation commits, an import the host tells the agent of — under
+ * the lock that brought it. The fold
  * has already judged every observation: whether the proof it carried
  * verifies, and what its `ack` earns. One pass under the lock records
  * what the vault owes on its own, in the order it is owed: first the
@@ -21,7 +24,7 @@
  * anything.
  */
 
-import type { VaultRuntime } from "@estoc/event-store";
+import type { Held, VaultRuntime } from "@estoc/event-store";
 import { admitReceipts, consumptionDrafts, readVaultEvent, scanVault, type Disposition, type EventReference, type Keys, type Status, type VaultEvent, type VaultFold } from "@estoc/vault";
 
 import { note, type AgentTrace } from "../trace.js";
@@ -56,22 +59,25 @@ export async function afterReceipt(runtime: VaultRuntime, keys: Keys, cid: Event
   return { proof, disposition, ...owed };
 }
 
-/** The same pass with no observation in hand: an open's, over whatever a crash left between a receipt and its pass. */
+/** The same pass with no observation in hand: an open's, over whatever a crash left between a receipt and its pass; the host's, once it brought evidence. */
 export async function recordOwed(runtime: VaultRuntime, keys: Keys): Promise<Owed> {
   const { admitted, consumed, acknowledged } = await pass(runtime, keys);
   return { admitted, consumed, acknowledged };
 }
 
-async function pass(runtime: VaultRuntime, keys: Keys): Promise<Owed & { fold: VaultFold }> {
-  return runtime.locked(async (held) => {
-    const { fold, events: admitted } = await admitReceipts(held, await scanVault(held, keys));
-    const drafts = [...consumptionDrafts(fold), ...acknowledgementDrafts(fold)];
-    const events = drafts.length === 0 ? [] : (await held.commit([], drafts)).map(readVaultEvent);
-    return {
-      fold,
-      admitted,
-      consumed: events.filter((event): event is VaultEvent<"invitation.consumed"> => event.type === "invitation.consumed"),
-      acknowledged: events.filter((event): event is VaultEvent<"delivery.acknowledged"> => event.type === "delivery.acknowledged"),
-    };
-  });
+function pass(runtime: VaultRuntime, keys: Keys): Promise<Owed & { fold: VaultFold }> {
+  return runtime.locked((held) => recordOwedUnderLock(held, keys));
+}
+
+/** The pass for a caller that holds the writer lock already and has just committed evidence under it: the fold returned is the one the pass left, for whatever the caller decides next. */
+export async function recordOwedUnderLock(held: Held, keys: Keys): Promise<Owed & { fold: VaultFold }> {
+  const { fold, events: admitted } = await admitReceipts(held, await scanVault(held, keys));
+  const drafts = [...consumptionDrafts(fold), ...acknowledgementDrafts(fold)];
+  const events = drafts.length === 0 ? [] : (await held.commit([], drafts)).map(readVaultEvent);
+  return {
+    fold,
+    admitted,
+    consumed: events.filter((event): event is VaultEvent<"invitation.consumed"> => event.type === "invitation.consumed"),
+    acknowledged: events.filter((event): event is VaultEvent<"delivery.acknowledged"> => event.type === "delivery.acknowledged"),
+  };
 }

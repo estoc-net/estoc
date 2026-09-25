@@ -106,7 +106,21 @@ export interface Rotated {
 
 /** A decision already recorded is returned with the state of its notification, nothing written or called. */
 export async function rotate(runtime: VaultRuntime, keys: Keys, target: RotationTarget, options: RotateOptions): Promise<Rotated> {
-  const decided = await runtime.locked(async (held) => {
+  return callRotation(await decideRotation(runtime, keys, target, options), options);
+}
+
+/** A rotation as the lock decided it: the decision, and its notification drafted with the action minted for it, before the call. */
+export interface RotationDecided {
+  channel: Channel;
+  decision: VaultEvent<"did.rotationSelected">;
+  existed: boolean;
+  drafted: Drafted;
+  executionId: ExecutionId | null;
+}
+
+/** The decision of `rotate` alone, under the lock: what a caller records before it makes the call, or off the turn it holds. */
+export async function decideRotation(runtime: VaultRuntime, keys: Keys, target: RotationTarget, options: Omit<RotateOptions, "dispatch">): Promise<RotationDecided> {
+  return runtime.locked(async (held) => {
     let fold = await scanVault(held, keys);
     const predecessor = didOf(fold, target.localDidId);
     if (predecessor.created === null || predecessor.conflict) throw new Unusable("DID", predecessor.didId, predecessor.faults);
@@ -136,6 +150,10 @@ export async function rotate(runtime: VaultRuntime, keys: Keys, target: Rotation
     const drafted: Drafted = settled.drafted.outcome === "created" ? { ...settled.drafted, action: new LiveAction(settled.drafted.messageId, "initial") } : settled.drafted;
     return { channel, decision, existed: false, drafted, executionId: settled.executionId };
   });
+}
+
+/** The call of `rotate`: the notification decided, dispatched under the action minted for it. */
+export async function callRotation(decided: RotationDecided, options: Pick<RotateOptions, "dispatch" | "trace">): Promise<Rotated> {
   const notification = await dispatched(decided.drafted, decided.executionId, options);
   return { decision: decided.decision, channel: decided.channel, successor: decided.decision.data.toDidId, existed: decided.existed, notification };
 }
@@ -188,7 +206,7 @@ function assertSelectingSource(fold: VaultFold, channel: Channel, sourceEventCid
  * address no one has yet. What would differ is refused rather than
  * replaced.
  */
-async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEntity, selected: boolean, options: RotateOptions): Promise<{ drafts: VaultDraft[]; successor: MintedDid }> {
+async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEntity, selected: boolean, options: Pick<RotateOptions, "routeId" | "didId">): Promise<{ drafts: VaultDraft[]; successor: MintedDid }> {
   const didId = options.didId ?? (uuidv7() as DidId);
   const existing = fold.routes.dids.get(didId);
   const preferred = fold.mediations.preferred === null ? null : mediatedRouteOf(fold, fold.mediations.preferred);

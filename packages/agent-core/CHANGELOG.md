@@ -20,6 +20,35 @@
 - A contradicting duplicate of an admitted input is refused admission
   and listed as the discrepancy it is; the input stays established by
   what it admitted first and keeps the outputs it earned.
+- **A live observation earns effects only as the witness its input
+  speaks through** (behaviour change): `reactTo` asks no operation
+  for an observation that is not its input's first admitted complete
+  witness — its own proof refused or still waiting while a duplicate
+  delivered after it was admitted — and `Reacted.because` says why.
+  What the input earns through the admitted duplicate is listed for
+  manual completion.
+- **Evidence recovered during normal operation is reconciled at
+  once**: a preparation that commits a resolution the fold did not
+  hold runs the after-receipt pass under the same lock
+  (`recordOwedUnderLock`), so a carrier whose proof waited for that
+  issuer's document is admitted then, dispatching nothing; a pass
+  that stops leaves the package standing and is noted in the `diag`
+  stream as `admission`. `Agent.localStateChanged()` runs the same
+  pass first, for evidence the host brought — an import, a document —
+  before it retries the waiting deliveries.
+- **The pickup acknowledgement and a delivery's calls run off the
+  ingress turn** (behaviour change): `Pickup` tells the mediator what
+  a delivery's attachments came to outside the sequence the
+  deliveries are handled in, and the agent's pickup handle does a
+  delivery's local work — its receipt, what the vault owes, the
+  decisions of its effects and of the private-address policy — in
+  its turn, then makes the calls decided off it, one delivery after
+  another, so that neither the mediator's answer nor a call on the
+  wire holds the receipt of the delivery behind. `Agent.settled()`
+  resolves once those calls are done and the host told; `onInbound`
+  is still told in the order the mail came. `reactTo`, `privateAddress`
+  and `rotate` are each the composition of a `decide…` step under the
+  lock and a `call…` step after it, exported alongside.
 
 - **Continuity comes from `@estoc/continuity` through the vault**
   (behaviour change): a send, a reply or a rotation from a channel a

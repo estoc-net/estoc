@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { SignJWT, importJWK } from "jose";
+
 import { decodeLongForm, encodeLongForm, longToShort, type DIDDoc } from "@estoc/did-peer";
 import { canonicalize, parseStrict, type JsonObject } from "@estoc/event-store";
 import {
+  AUTHENTICATION_METHOD,
   channelOf,
   didKeyName,
   plaintextHash,
@@ -22,12 +25,13 @@ import {
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { secretsResolverFor } from "../src/protocol/didcomm.js";
-import { AgentTrace, Keyring, UnknownEntity, createDid, createVault, pinnedResolver, prepare, prepareAll, send, unpack, type Content, type PrepareOptions, type Prepared, type Unpacked } from "../src/index.js";
-import { didcomm, directParty, memoryDriver, received, ticking, type DirectParty } from "./helpers.js";
+import { AgentTrace, Keyring, Receiver, UnknownEntity, createDid, createVault, pinnedResolver, prepare, prepareAll, receiptOf, send, unpack, type Content, type PrepareOptions, type Prepared, type Unpacked } from "../src/index.js";
+import { didcomm, directParty, memoryDriver, peerSealer, received, sealed, ticking, type DirectParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const ALICE_NEXT = "019b0000-0000-7000-8000-00000000000c" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
+const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
 const CAROL = "019b0000-0000-7000-8000-0000000000c0" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
 const SECOND = "019b0000-0000-7000-8000-000000000102" as MessageId;
@@ -302,6 +306,27 @@ describe("prepare", () => {
     expect(result).toMatchObject({ outcome: "pending", messageId: MESSAGE });
     expect((result as { because: string }).because).toMatch(/pending: the source it names is not here/);
     expect((await fold(alice)).set.of("message.prepared")).toEqual([]);
+    await closeAll(alice, bob);
+  });
+
+  it("a resolution it commits is evidence recovered: an observation whose proof waited for that issuer's document is admitted under the same lock, dispatching nothing, and the package stands", async () => {
+    const { alice, bob } = await parties();
+    const routeId = (await fold(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
+    const { minted: prior } = await createDid(bob.runtime, bob.keys, routeId, BOB_PRIOR);
+    const signing = await bob.keys.signing(didKeyName(BOB_PRIOR, "authentication"));
+    const proof = await new SignJWT({ iss: prior.did, sub: bob.longFormDid, iat: IAT }).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: `${prior.did}${AUTHENTICATION_METHOD}` }).sign(await importJWK(signing.privateJwk(), "EdDSA"));
+    const receiver = new Receiver(alice.runtime, alice.keys, await Keyring.load(alice.keys, await fold(alice)), { didcomm, receipt: receiptOf(alice.runtime, alice.keys) });
+    const carried = await receiver.receive({ packed: await sealed(await peerSealer(bob), alice.longFormDid, { from_prior: proof }), source: { kind: "direct" } });
+    receiver.close();
+    if (carried.outcome !== "received") throw new Error("not received");
+    expect((await fold(alice)).dispositions.disposition(carried.cid)).toEqual({ status: "pending-admission", because: "the source's proof is not yet verified" });
+
+    await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, prior.did), recipientDid: prior.longFormDid }, HELLO, { messageId: MESSAGE });
+    const trace = await AgentTrace.open(alice.runtime.local);
+    const result = prepared(await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace })));
+    const after = await fold(alice);
+    expect([after.continuity.status(carried.cid), after.dispositions.disposition(carried.cid).status, after.set.of("message.admitted").map(({ data }) => data.sourceEventCid)]).toEqual([{ status: "verified" }, "admitted", [carried.cid]]);
+    expect([after.outbound.outbounds.get(MESSAGE)!.package!.event.cid, after.set.of("message.out").length, await trace.read({ type: "diag.admission" })]).toEqual([result.prepared.cid, 1, []]);
     await closeAll(alice, bob);
   });
 

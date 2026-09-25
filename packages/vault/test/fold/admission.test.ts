@@ -135,6 +135,22 @@ describe("a disposition", () => {
     expect(vault.inbound.ofSource(first.cid)).toMatchObject({ status: { status: "complete" }, intentHash: HASH, contradicting: [{ source: { event: { cid: contradicting.cid } } }] });
     expectSameOverEveryOrder(scene, vault.checks);
   });
+
+  it("is ignored once the peer moved on while a saved admission of it still waits for the document of its proof's issuer, and admitted through that same admission once the document arrives", async () => {
+    const { scene, keys, peerKeys, a0, b0, b1 } = await vaults();
+    const b4 = await undocumentedPeer(peerKeys);
+    const carrier = observe(scene, { local: a0, peer: b0, ordinal: 1, fromPrior: await resign(peerKeys, b4, { alg: "EdDSA", typ: "JWT", kid: `${b4.did}${AUTHENTICATION_METHOD}` }, { iss: b4.did, sub: b0.longFormDid, iat: IAT }), admitted: true });
+    observe(scene, { local: a0, peer: b1, ordinal: 2, fromPrior: await proof(peerKeys, b0, b1), admitted: true });
+    const before = await fold(scene, keys);
+    expect([before.channels.sources.get(carrier.cid)!.standing.status, before.admissions.of(carrier.cid).map(({ status }) => status), before.continuity.superseded({ localDid: a0.did, peerDid: b0.did })]).toEqual(["complete", [{ status: "pending", because: "the source's proof is not yet verified" }], true]);
+    expect([before.dispositions.disposition(carrier.cid), before.dispositions.candidate(carrier.cid)]).toEqual([{ status: "ignored-superseded" }, null]);
+    expectSameOverEveryOrder(scene, before.checks);
+
+    resolved(scene, a0.didId, b4);
+    const after = await fold(scene, keys);
+    expect([after.continuity.status(carrier.cid), after.dispositions.disposition(carrier.cid).status, after.admissions.of(carrier.cid).length, after.dispositions.candidate(carrier.cid)]).toEqual([{ status: "verified" }, "admitted", 1, null]);
+    expectSameOverEveryOrder(scene, after.checks);
+  });
 });
 
 describe("the candidates", () => {

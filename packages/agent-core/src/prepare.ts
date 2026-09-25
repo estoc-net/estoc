@@ -15,7 +15,11 @@
  * Everything is decided under the writer lock over the fold read
  * there, and the envelope object, the resolution evidence and the
  * package are committed in that one lock; the fold holds the package
- * from then on, whatever rotates, confirms or resolves later.
+ * from then on, whatever rotates, confirms or resolves later. A
+ * resolution committed here is evidence an observation may have
+ * waited for — the document of the issuer of the proof it carried —
+ * so what the vault owes over it is recorded under the same lock,
+ * before the package's dispatch or any other work reads the fold.
  */
 
 import { v7 as uuidv7 } from "uuid";
@@ -62,6 +66,7 @@ import { packEncrypted, secretsResolverFor, type DidcommApi, type IMessage } fro
 import { recordOwedAcceptance } from "./acceptance.js";
 import { UnknownEntity } from "./errors.js";
 import { authorizedKeys, commitResolution, didcommDocumentOf, pinnedResolver } from "./evidence.js";
+import { recordOwedUnderLock } from "./receive/after.js";
 import { secretsOf } from "./keyring.js";
 import { sealData } from "./link.js";
 import { serially } from "./procedure.js";
@@ -204,7 +209,25 @@ export async function prepareUnderLock(held: Held, keys: Keys, messageId: Messag
     )
   ).map(readVaultEvent);
   notes.push({ stream: "envelope", what: "seal", data: { ...sealData(packed, plaintext as unknown as IMessage), messageId, packageId } });
+  if (!fold.set.of("peer.resolved").some((event) => event.cid === resolved.cid)) notes.push(...(await recoveredEvidence(held, keys, resolved)));
   return { result: { outcome: "prepared", messageId, packageId, prepared: prepared as VaultEvent<"message.prepared">, resolved }, notes };
+}
+
+/**
+ * The pass over a resolution the fold did not hold before: what it
+ * makes owed — an admission whose proof waited for this issuer's
+ * document, and what follows one — is recorded before the lock is
+ * released and dispatched by nothing. The package stands whether the
+ * pass ran through or stopped; one that stopped is left to the next
+ * pass a receipt or an open runs, and noted.
+ */
+async function recoveredEvidence(held: Held, keys: Keys, resolved: VaultEvent<"peer.resolved">): Promise<Note[]> {
+  try {
+    await recordOwedUnderLock(held, keys);
+    return [];
+  } catch (err) {
+    return [{ stream: "diag", what: "admission", data: { resolutionEventCid: resolved.cid, reason: `the pass over the resolution stopped: ${err instanceof Error ? err.message : String(err)}` } }];
+  }
 }
 
 interface Ends {

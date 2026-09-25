@@ -16,7 +16,7 @@ import type { VaultRuntime } from "@estoc/event-store";
 import { channelPolicy, decisionFor, kindOf, scanVault, type Decision, type EventReference, type Keys, type VaultEvent, type VaultFold } from "@estoc/vault";
 
 import type { LiveInput } from "./action.js";
-import { rotate, type RotateOptions, type Rotated, type RotationTarget } from "./rotate.js";
+import { callRotation, decideRotation, type RotateOptions, type Rotated, type RotationDecided, type RotationTarget } from "./rotate.js";
 
 export type PrivacyPolicy = { status: "rotate"; target: RotationTarget } | { status: "reuse"; decision: Decision } | { status: "none"; because: string };
 
@@ -59,9 +59,23 @@ export type PrivateAddress =
  * or not, as the policy's successor.
  */
 export async function privateAddress(runtime: VaultRuntime, keys: Keys, live: LiveInput, options: RotateOptions): Promise<PrivateAddress> {
+  return callPrivateAddress(await decidePrivateAddress(runtime, keys, live, options), options);
+}
+
+/** The policy as the lock decided it: nothing, a decision reused, or a rotation recorded with its notification still to call. */
+export type PrivateAddressDecided = Exclude<PrivateAddress, { outcome: "rotated" }> | { outcome: "rotated"; rotation: RotationDecided };
+
+/** The decision of `privateAddress` alone: what a caller records before it makes the call, or off the turn it holds. */
+export async function decidePrivateAddress(runtime: VaultRuntime, keys: Keys, live: LiveInput, options: Omit<RotateOptions, "dispatch">): Promise<PrivateAddressDecided> {
   const policy = privacyPolicy(await scanVault(runtime.vault, keys), live.cid);
   if (policy.status === "none") return { outcome: "none", because: policy.because };
   if (policy.status === "reuse") return { outcome: "reused", decision: policy.decision.event };
-  const rotation = await rotate(runtime, keys, policy.target, options);
+  const rotation = await decideRotation(runtime, keys, policy.target, options);
   return rotation.existed ? { outcome: "reused", decision: rotation.decision } : { outcome: "rotated", rotation };
+}
+
+/** The call of `privateAddress`: the notification of the rotation decided, if one was. */
+export async function callPrivateAddress(decided: PrivateAddressDecided, options: Pick<RotateOptions, "dispatch" | "trace">): Promise<PrivateAddress> {
+  if (decided.outcome !== "rotated") return decided;
+  return { outcome: "rotated", rotation: await callRotation(decided.rotation, options) };
 }
