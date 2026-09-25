@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DIDDoc } from "@estoc/did-peer";
 import { parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store";
-import { scanVault, vaultDraft, type DidId, type MessageId, type VaultEvent, type VaultFold } from "@estoc/vault";
+import { channelOf, scanVault, vaultDraft, type DidId, type MessageId, type VaultEvent, type VaultFold } from "@estoc/vault";
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { ENCRYPTED_MIME, secretsResolverFor, type IMessage } from "../src/protocol/didcomm.js";
@@ -10,10 +10,11 @@ import { FORWARD } from "../src/protocol/spec.js";
 import { RECIPIENT, RECIPIENT_QUERY } from "../src/protocol/mediation.js";
 import { AgentTrace, Keyring, LiveAction, UnknownEntity, cancel, createVault, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../src/index.js";
 import { MEDIATOR_HTTP } from "./fake-mediator.js";
-import { didcomm, directParty, mediatedParty, memoryDriver, newMediator, posting, received, refuseSubmissions, ticking, type DirectParty, type MediatedParty } from "./helpers.js";
+import { carrierWaitingForIssuer, didcomm, directParty, mediatedParty, memoryDriver, newMediator, posting, received, refuseCommits, refuseSubmissions, ticking, type DirectParty, type MediatedParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
+const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
 const CAROL = "019b0000-0000-7000-8000-0000000000c0" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
 const SECOND = "019b0000-0000-7000-8000-000000000102" as MessageId;
@@ -146,6 +147,24 @@ describe("dispatch to a direct endpoint", () => {
       ["wire.out", undefined],
       ["wire.in", 202],
     ]);
+    await closeAll(alice, bob);
+  });
+
+  it("records what the vault owes before the call: a carrier the preparation's pass left unadmitted, its commit refused, is admitted by the manual retry of the package it holds, once, and the package goes out as it is", async () => {
+    const { alice, bob } = await parties();
+    const { cid, prior } = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR);
+    await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, prior.did), recipientDid: prior.longFormDid }, HELLO, { messageId: MESSAGE });
+    refuseCommits(alice.runtime, "message.admitted", 1);
+    expect((await prepare(alice.runtime, alice.keys, MESSAGE, { didcomm })).outcome).toBe("prepared");
+    let f = await fold(alice);
+    expect([f.continuity.status(cid), f.dispositions.disposition(cid), f.outbound.outbounds.get(MESSAGE)!.work.kind]).toEqual([{ status: "verified" }, { status: "pending-admission", because: "the observation is not yet reconciled" }, "dispatch"]);
+    const envelope = await envelopeOf(alice, MESSAGE);
+
+    const wire = posting(accepted);
+    submitted(await dispatch(alice.runtime, alice.keys, new LiveAction(MESSAGE, "manual"), { didcomm, fetch: wire.fetch }));
+    f = await fold(alice);
+    expect([f.dispositions.disposition(cid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.set.of("message.prepared").length, f.set.of("message.out").length]).toEqual(["admitted", [cid], 1, 1]);
+    expect(wire.posts.map((post) => [post.url, post.body])).toEqual([[BOB_ENDPOINT, envelope]]);
     await closeAll(alice, bob);
   });
 

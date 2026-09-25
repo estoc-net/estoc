@@ -1,4 +1,5 @@
 import { Message } from "@estoc/didcomm-node";
+import { SignJWT, importJWK } from "jose";
 import { vi } from "vitest";
 
 import { resolveDIDCommDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
@@ -6,6 +7,7 @@ import { openNodeSqlite } from "@estoc/event-store/node";
 import type { Cid, Held, JsonObject, SqliteDriver, VaultRuntime } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
 import {
+  AUTHENTICATION_METHOD,
   PLAINTEXT_TYP,
   didKeyName,
   inboundMessageId,
@@ -16,6 +18,7 @@ import {
   type DidId,
   type EventReference,
   type MediationId,
+  type MintedDid,
   type PublicKey,
   type ReceiptOrdinal,
   type VaultEvent,
@@ -29,6 +32,7 @@ import {
   AgentTrace,
   Keyring,
   MediatorLink,
+  Receiver,
   authorizedKeys,
   commitResolution,
   configureRoute,
@@ -38,6 +42,7 @@ import {
   ensureRoute,
   establish,
   pinnedResolver,
+  receiptOf,
   resolve,
   type LinkOptions,
   type OpenedVault,
@@ -196,7 +201,7 @@ export interface Sealer {
 }
 
 /** A peer party sealing as `as` — its long form unless told otherwise — against the documents its own vault answers, which include every numalgo-4 long form. */
-export async function peerSealer(holder: DirectParty, as: string = holder.longFormDid): Promise<Sealer> {
+export async function peerSealer(holder: Addressed, as: string = holder.longFormDid): Promise<Sealer> {
   const fold = await scanVault(holder.runtime.vault, holder.keys);
   const ring = await Keyring.load(holder.keys, fold);
   return { did: as, secrets: ring.secrets(), resolver: pinnedResolver(fold) };
@@ -250,6 +255,47 @@ export async function received(party: DirectParty, peer: DirectParty, wire: stri
   const cid = event!.cid as EventReference<"message.in">;
   await party.runtime.vault.commit([], [vaultDraft("message.admitted", { sourceEventCid: cid })]);
   return cid;
+}
+
+/** Someone with one communication DID, whichever route it is on. */
+export type Addressed = Pick<DirectParty, "runtime" | "keys" | "didId" | "did" | "longFormDid">;
+
+const PROOF_IAT = 1_757_700_000;
+
+/** A proof that `peer`'s DID succeeds `priorDidId`, a DID the peer creates for it on the same route and signs with: the issuer's document is the peer's to hand out, and nobody else holds it. */
+export async function proofOfSuccession(peer: Addressed, priorDidId: DidId): Promise<{ prior: MintedDid; proof: string }> {
+  const routeId = (await scanVault(peer.runtime.vault, peer.keys)).routes.dids.get(peer.didId)!.created!.boundRouteId;
+  const { minted: prior } = await createDid(peer.runtime, peer.keys, routeId, priorDidId);
+  const signing = await peer.keys.signing(didKeyName(priorDidId, "authentication"));
+  const proof = await new SignJWT({ iss: prior.did, sub: peer.longFormDid, iat: PROOF_IAT }).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: `${prior.did}${AUTHENTICATION_METHOD}` }).sign(await importJWK(signing.privateJwk(), "EdDSA"));
+  return { prior, proof };
+}
+
+/**
+ * The peer's message received at `holder`, carrying a proof of
+ * succession whose issuer's document the holder does not have: the
+ * observation is recorded, its admission waiting for that document.
+ * `prior` is the issuer, for the test to bring its document when it
+ * means to.
+ */
+export async function carrierWaitingForIssuer(holder: Addressed, peer: Addressed, priorDidId: DidId, plaintext: Partial<IMessage> = {}): Promise<{ cid: EventReference<"message.in">; prior: MintedDid; proof: string }> {
+  const { prior, proof } = await proofOfSuccession(peer, priorDidId);
+  const receiver = new Receiver(holder.runtime, holder.keys, await Keyring.load(holder.keys, await scanVault(holder.runtime.vault, holder.keys)), { didcomm, receipt: receiptOf(holder.runtime, holder.keys) });
+  try {
+    const carried = await receiver.receive({ packed: await sealed(await peerSealer(peer), holder.longFormDid, { ...plaintext, from_prior: proof }), source: { kind: "direct" } });
+    if (carried.outcome !== "received") throw new Error(`not received: ${JSON.stringify(carried)}`);
+    return { cid: carried.cid, prior, proof };
+  } finally {
+    receiver.close();
+  }
+}
+
+/** The issuer's document brought to `holder` outside any receipt, as an import would: the evidence a carrier's proof waited for. */
+export async function issuerRecovered(holder: Addressed, prior: MintedDid): Promise<VaultEvent<"peer.resolved">> {
+  const answer = await resolve(prior.longFormDid, () => null);
+  if (answer.outcome !== "resolved") throw new Error(answer.reason);
+  const [peerPublicKey] = authorizedKeys(answer.resolution, "keyAgreement").values();
+  return commitResolution(holder.runtime, { resolution: answer.resolution, localKeyName: didKeyName(holder.didId, "key-agreement"), peerPublicKey: peerPublicKey as PublicKey });
 }
 
 export interface MediatedParty extends Party {

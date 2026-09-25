@@ -93,11 +93,11 @@ describe("a contact deleted with its channels denied, successors included", () =
     const forwards = forwardsSeen(mediator);
     await bob.agent.send({ channel: channelOf(b0, a0) }, { ...hello("are you there"), pleaseAck: [""] }, { messageId: THIRD });
     await until("alice has recorded the message", () => alice.inbounds.length === 2);
-    expect(alice.inbounds[1]).toMatchObject({ received: { outcome: "received", live: true }, after: { disposition: { status: "pending-admission", because: "the channel is denied" } }, reacted: { because: "the input is not established: no observation of the input is admitted", effects: [] } });
+    expect(alice.inbounds[1]).toMatchObject({ received: { outcome: "received", live: false }, after: { disposition: { status: "pending-admission", because: "the channel is denied" } }, reacted: null, address: null });
     const rotated = await bob.agent.manual.rotate({ localDidId: BOB, peerDid: a0 });
     const b1 = didOf(await foldOf(bob), rotated.successor);
     await until("alice has recorded the notification", () => alice.inbounds.length === 3);
-    expect(alice.inbounds[2]).toMatchObject({ received: { outcome: "received", live: true }, after: { proof: { status: "verified" }, disposition: { status: "pending-admission", because: "the channel is denied" } }, reacted: { because: "the input is not established: no observation of the input is admitted", effects: [] } });
+    expect(alice.inbounds[2]).toMatchObject({ received: { outcome: "received", live: false }, after: { proof: { status: "verified" }, disposition: { status: "pending-admission", because: "the channel is denied" } }, reacted: null, address: null });
     expect(forwardsSeen(mediator)).toBe(forwards + 2);
 
     const ofAlice = await foldOf(alice);

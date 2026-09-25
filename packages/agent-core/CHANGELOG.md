@@ -28,14 +28,33 @@
   What the input earns through the admitted duplicate is listed for
   manual completion.
 - **Evidence recovered during normal operation is reconciled at
-  once**: a preparation that commits a resolution the fold did not
-  hold runs the after-receipt pass under the same lock
-  (`recordOwedUnderLock`), so a carrier whose proof waited for that
-  issuer's document is admitted then, dispatching nothing; a pass
-  that stops leaves the package standing and is noted in the `diag`
-  stream as `admission`. `Agent.localStateChanged()` runs the same
-  pass first, for evidence the host brought — an import, a document —
-  before it retries the waiting deliveries.
+  once**: every preparation runs the after-receipt pass under its
+  lock once the message has its package, made now or held already
+  (`recordOwedUnderLock`), and so does every dispatch, which prepares
+  first; a carrier whose proof waited for the document the
+  preparation resolved is admitted then, dispatching nothing, and a
+  pass a commit refused after the resolution was durable — the
+  package's or the pass's own — is completed by the next preparation
+  or dispatch of any message. A pass that stops leaves the package
+  standing and is noted in the `diag` stream as `admission`, with the
+  message ID. `Agent.localStateChanged()` runs the same pass first, for
+  evidence the host brought — an import, a document — before it
+  retries the waiting deliveries. `recordOwedUnderLock` returns the
+  fold as the pass left it, every event it committed folded in.
+- **A receipt is live only as its lock admitted it** (behaviour
+  change): `ReceiptOutcome.live`, decided under the receipt's lock, is
+  what `Received.live` carries — the observation is the first the
+  vault holds of its input and the admission pass run before the lock
+  was released admitted it as the witness its input speaks through —
+  and `first` stays what it was. A first observation whose admission
+  waited for evidence is not live, and stays not: the evidence, when
+  it comes, admits the observation and revives no call, so the agent
+  decides no effects and no private address for it, and what the input
+  earns is listed for the user. A first observation refused, denied or
+  superseded at its receipt is not live either, where before it was
+  and its effects came to nothing; `Inbound.reacted` and `address` are
+  null for it, and `after.disposition` says why. A custom `receipt`
+  must decide `live` the same way.
 - **The pickup acknowledgement and a delivery's calls run off the
   ingress turn** (behaviour change): `Pickup` tells the mediator what
   a delivery's attachments came to outside the sequence the

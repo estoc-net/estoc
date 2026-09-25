@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { SignJWT, importJWK } from "jose";
-
 import { decodeLongForm, encodeLongForm, longToShort, type DIDDoc } from "@estoc/did-peer";
 import { canonicalize, parseStrict, type JsonObject } from "@estoc/event-store";
 import {
-  AUTHENTICATION_METHOD,
   channelOf,
   didKeyName,
   plaintextHash,
@@ -25,8 +22,8 @@ import {
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { secretsResolverFor } from "../src/protocol/didcomm.js";
-import { AgentTrace, Keyring, Receiver, UnknownEntity, createDid, createVault, pinnedResolver, prepare, prepareAll, receiptOf, send, unpack, type Content, type PrepareOptions, type Prepared, type Unpacked } from "../src/index.js";
-import { didcomm, directParty, memoryDriver, peerSealer, received, sealed, ticking, type DirectParty } from "./helpers.js";
+import { AgentTrace, Keyring, UnknownEntity, createDid, createVault, pinnedResolver, prepare, prepareAll, send, unpack, type Content, type PrepareOptions, type Prepared, type Unpacked } from "../src/index.js";
+import { carrierWaitingForIssuer, didcomm, directParty, memoryDriver, received, refuseCommits, ticking, type DirectParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const ALICE_NEXT = "019b0000-0000-7000-8000-00000000000c" as DidId;
@@ -311,14 +308,8 @@ describe("prepare", () => {
 
   it("a resolution it commits is evidence recovered: an observation whose proof waited for that issuer's document is admitted under the same lock, dispatching nothing, and the package stands", async () => {
     const { alice, bob } = await parties();
-    const routeId = (await fold(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
-    const { minted: prior } = await createDid(bob.runtime, bob.keys, routeId, BOB_PRIOR);
-    const signing = await bob.keys.signing(didKeyName(BOB_PRIOR, "authentication"));
-    const proof = await new SignJWT({ iss: prior.did, sub: bob.longFormDid, iat: IAT }).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: `${prior.did}${AUTHENTICATION_METHOD}` }).sign(await importJWK(signing.privateJwk(), "EdDSA"));
-    const receiver = new Receiver(alice.runtime, alice.keys, await Keyring.load(alice.keys, await fold(alice)), { didcomm, receipt: receiptOf(alice.runtime, alice.keys) });
-    const carried = await receiver.receive({ packed: await sealed(await peerSealer(bob), alice.longFormDid, { from_prior: proof }), source: { kind: "direct" } });
-    receiver.close();
-    if (carried.outcome !== "received") throw new Error("not received");
+    const { cid, prior } = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR);
+    const carried = { cid };
     expect((await fold(alice)).dispositions.disposition(carried.cid)).toEqual({ status: "pending-admission", because: "the source's proof is not yet verified" });
 
     await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, prior.did), recipientDid: prior.longFormDid }, HELLO, { messageId: MESSAGE });
@@ -328,6 +319,28 @@ describe("prepare", () => {
     expect([after.continuity.status(carried.cid), after.dispositions.disposition(carried.cid).status, after.set.of("message.admitted").map(({ data }) => data.sourceEventCid)]).toEqual([{ status: "verified" }, "admitted", [carried.cid]]);
     expect([after.outbound.outbounds.get(MESSAGE)!.package!.event.cid, after.set.of("message.out").length, await trace.read({ type: "diag.admission" })]).toEqual([result.prepared.cid, 1, []]);
     await closeAll(alice, bob);
+  });
+
+  it("owes that pass at every preparation: a commit refused once the resolution is durable — the package's, or the pass's own — leaves the carrier to the next preparation, which admits it once, whether it makes the package or reuses it", async () => {
+    for (const refused of ["message.prepared", "message.admitted"] as const) {
+      const { alice, bob } = await parties();
+      const { cid, prior } = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR);
+      await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, prior.did), recipientDid: prior.longFormDid }, HELLO, { messageId: MESSAGE });
+      const trace = await AgentTrace.open(alice.runtime.local);
+      refuseCommits(alice.runtime, refused, 1);
+      if (refused === "message.prepared") await expect(prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).rejects.toThrow("the disk is full for now");
+      else prepared(await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace })));
+      let f = await fold(alice);
+      expect([f.continuity.status(cid), f.dispositions.disposition(cid), f.set.of("peer.resolved").filter(({ data }) => data.did === prior.did).length, f.set.of("message.prepared").length]).toEqual([{ status: "verified" }, { status: "pending-admission", because: "the observation is not yet reconciled" }, 1, refused === "message.prepared" ? 0 : 1]);
+      expect((await trace.read({ type: "diag.admission" })).map((entry) => entry.data)).toEqual(refused === "message.prepared" ? [] : [{ messageId: MESSAGE, reason: "the pass the preparation runs stopped: the disk is full for now" }]);
+
+      expect((await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).outcome).toBe(refused === "message.prepared" ? "prepared" : "reused");
+      f = await fold(alice);
+      expect([f.dispositions.disposition(cid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.set.of("message.prepared").length, f.set.of("message.out").length]).toEqual(["admitted", [cid], 1, 1]);
+      expect((await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).outcome).toBe("reused");
+      expect((await fold(alice)).set.of("message.admitted")).toHaveLength(1);
+      await closeAll(alice, bob);
+    }
   });
 
   it("prepares nothing the fold asks no package for, and terminates an intent whose expiry has passed", async () => {

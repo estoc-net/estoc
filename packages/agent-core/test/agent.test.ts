@@ -1,23 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SignJWT, importJWK } from "jose";
-
-import { AUTHENTICATION_METHOD, PING_RESPONSE_EFFECT, PING_TYPE, PURE_ACK_EFFECT, didKeyName, scanVault, vaultDraft, type Did, type DidId, type MessageId, type PublicKey, type VaultFold } from "@estoc/vault";
+import type { VaultRuntime } from "@estoc/event-store";
+import { PING_RESPONSE_EFFECT, PING_TYPE, PURE_ACK_EFFECT, scanVault, vaultDraft, type Did, type DidId, type MessageId, type VaultFold } from "@estoc/vault";
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { MESSAGES_RECEIVED } from "../src/protocol/mediation.js";
 import { FORWARD, PROBLEM_REPORT } from "../src/protocol/spec.js";
 import type { IMessage } from "../src/protocol/didcomm.js";
-import { Agent, AgentTrace, UNKNOWN_REGISTRATIONS_KEPT, Pickup, Receiver, ReceiverInUse, authorizedKeys, commitResolution, createDid, createMediation, disclose, receiptOf, reconcile, resolve, selectMediation, send, type AgentOptions, type Inbound } from "../src/index.js";
+import { Agent, AgentTrace, UNKNOWN_REGISTRATIONS_KEPT, Pickup, Receiver, ReceiverInUse, createMediation, disclose, receiptOf, reconcile, selectMediation, send, type AgentOptions, type Inbound } from "../src/index.js";
 import type { FakeMediator } from "./fake-mediator.js";
-import { didcomm, freshVault, json, mediatedParty, newMediator, peerSealer, refuseCommits, sealed, until, webIdentity, type MediatedParty } from "./helpers.js";
+import { carrierWaitingForIssuer, didcomm, freshVault, issuerRecovered, json, mediatedParty, newMediator, peerSealer, proofOfSuccession, refuseCommits, sealed, until, webIdentity, type MediatedParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
 const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
 const PING = "019b0000-0000-7000-8000-000000000101" as MessageId;
 const PING_AGAIN = "019b0000-0000-7000-8000-000000000102" as MessageId;
-const IAT = 1_757_700_000;
 
 const opened: { agent: Agent | null; party: MediatedParty }[] = [];
 
@@ -320,7 +318,7 @@ describe("a live input", () => {
     expect(forwards).toHaveLength(sentBefore + 2);
   });
 
-  it("is followed step by step, a step that fails leaving the others done and the pass a reply's preparation runs over the resolution it commits noted where it stops too; a repeated delivery completes local recovery without repeating automatic effects", async () => {
+  it("is followed step by step, a step that fails leaving the others done and the pass each reply's preparation runs noted where it stops too; a repeated delivery completes local recovery without repeating automatic effects", async () => {
     const mediator = await newMediator();
     const alice = await partyOf(mediator, 1, ALICE);
     const bob = await partyOf(mediator, 2, BOB);
@@ -335,7 +333,7 @@ describe("a live input", () => {
     const inbounds: Inbound[] = [];
     const log: string[] = [];
     const agent = await agentOf(alice, "open", { onInbound: (inbound) => inbounds.push(inbound), log: (line) => log.push(line) });
-    refuseCommits(alice.runtime, "invitation.consumed", 2);
+    refuseCommits(alice.runtime, "invitation.consumed", 3);
     let cut = true;
     mediator.intercept = (msg, from) => {
       if (!cut || msg.type !== MESSAGES_RECEIVED) return undefined;
@@ -348,7 +346,8 @@ describe("a live input", () => {
     expect(inbounds).toHaveLength(1);
     expect(inbounds[0]).toMatchObject({ received: { outcome: "received", live: true }, after: null, reacted: { effects: [{ outcome: "created" }, { outcome: "created" }] } });
     expect(log.filter((line) => line.includes("what the vault owes"))).toHaveLength(1);
-    expect((await alice.trace.read({ type: "diag.admission" })).map((entry) => entry.data)).toEqual([{ resolutionEventCid: expect.any(String), reason: "the pass over the resolution stopped: the disk is full for now" }]);
+    const stopped = { messageId: expect.any(String), reason: "the pass the preparation runs stopped: the disk is full for now" };
+    expect((await alice.trace.read({ type: "diag.admission" })).map((entry) => entry.data)).toEqual([stopped, stopped]);
     expect((await fold(alice)).set.of("invitation.consumed")).toHaveLength(0);
 
     const sentBefore = forwardsSeen(mediator);
@@ -402,21 +401,11 @@ describe("a live input", () => {
     const mediator = await newMediator();
     const alice = await partyOf(mediator, 1, ALICE);
     const bob = await partyOf(mediator, 2, BOB);
-    const routeId = (await fold(bob)).routes.dids.get(BOB)!.created!.boundRouteId;
-    const { minted: prior } = await createDid(bob.runtime, bob.keys, routeId, BOB_PRIOR);
-    const signing = await bob.keys.signing(didKeyName(BOB_PRIOR, "authentication"));
-    const proof = await new SignJWT({ iss: prior.did, sub: bob.longFormDid, iat: IAT }).setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: `${prior.did}${AUTHENTICATION_METHOD}` }).sign(await importJWK(signing.privateJwk(), "EdDSA"));
-    const receiver = new Receiver(alice.runtime, alice.keys, alice.ring, { didcomm, receipt: receiptOf(alice.runtime, alice.keys) });
-    const carried = await receiver.receive({ packed: await sealed(await peerSealer(bob), alice.longFormDid, { type: PING_TYPE, body: { response_requested: true }, from_prior: proof }), source: { kind: "direct" } });
-    receiver.close();
-    if (carried.outcome !== "received") throw new Error("not received");
+    const carried = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR, { type: PING_TYPE, body: { response_requested: true } });
 
     const agent = await agentOf(alice, "open");
     expect([agent.recovered.admitted, (await fold(alice)).dispositions.disposition(carried.cid)]).toEqual([[], { status: "pending-admission", because: "the source's proof is not yet verified" }]);
-    const answer = await resolve(prior.longFormDid, () => null);
-    if (answer.outcome !== "resolved") throw new Error(answer.reason);
-    const [peerPublicKey] = authorizedKeys(answer.resolution, "keyAgreement").values();
-    await commitResolution(alice.runtime, { resolution: answer.resolution, localKeyName: didKeyName(ALICE, "key-agreement"), peerPublicKey: peerPublicKey as PublicKey });
+    await issuerRecovered(alice, carried.prior);
     expect((await fold(alice)).dispositions.disposition(carried.cid)).toEqual({ status: "pending-admission", because: "the observation is not yet reconciled" });
 
     expect(await agent.localStateChanged()).toEqual([]);
@@ -424,5 +413,51 @@ describe("a live input", () => {
     expect([told.continuity.status(carried.cid), told.dispositions.disposition(carried.cid).status, told.inbound.ofSource(carried.cid)!.status, told.set.of("message.out")]).toEqual([{ status: "verified" }, "admitted", { status: "complete" }, []]);
     expect(forwardsSeen(mediator)).toBe(0);
     expect((await agent.pending()).missingResponses.map((owed) => owed.effectType)).toEqual([PING_RESPONSE_EFFECT]);
+  });
+
+  it("is live only as the receipt admitted it: a receipt whose admission waits for the issuer's document is not, and stays not when that document comes while the receipt is still in hand — the carrier is admitted, the reply listed for the user and sent by hand; the same document in hand before the next receipt makes that one live", async () => {
+    const mediator = await newMediator();
+    const alice = await partyOf(mediator, 1, ALICE);
+    const bob = await partyOf(mediator, 2, BOB);
+    const { prior, proof } = await proofOfSuccession(bob, BOB_PRIOR);
+    await agentOf(bob, "start");
+    const sealer = await peerSealer(bob);
+    const ping = (): Promise<string> => sealed(sealer, alice.longFormDid, { type: PING_TYPE, body: { response_requested: true }, from_prior: proof });
+    const agent = await agentOf(alice, "start");
+
+    // The receipt is held once its lock is released and its record in hand, until the test lets it go on.
+    const locked = alice.runtime.locked.bind(alice.runtime);
+    let recorded!: () => void;
+    let resume!: () => void;
+    const holdOnce = { recorded: new Promise<void>((resolve) => (recorded = resolve)), resume: new Promise<void>((resolve) => (resume = resolve)), armed: true };
+    vi.spyOn(alice.runtime, "locked").mockImplementation((async (work: (held: never) => Promise<unknown>) => {
+      const result = await locked(work as never);
+      if (holdOnce.armed && typeof result === "object" && result !== null && "first" in result) {
+        holdOnce.armed = false;
+        recorded();
+        await holdOnce.resume;
+      }
+      return result;
+    }) as VaultRuntime["locked"]);
+
+    const receiving = agent.receive(await ping());
+    await holdOnce.recorded;
+    const [carried] = (await fold(alice)).set.of("message.in");
+    expect((await fold(alice)).dispositions.disposition(carried!.cid)).toEqual({ status: "pending-admission", because: "the source's proof is not yet verified" });
+    await issuerRecovered(alice, prior);
+    expect(await agent.localStateChanged()).toEqual([]);
+    expect([(await fold(alice)).dispositions.disposition(carried!.cid).status, forwardsSeen(mediator)]).toEqual(["admitted", 0]);
+
+    resume();
+    const inbound = await receiving;
+    expect(inbound).toMatchObject({ received: { outcome: "received", cid: carried!.cid, live: false }, after: { proof: { status: "verified" }, disposition: { status: "admitted" } }, reacted: null, address: null });
+    const told = await fold(alice);
+    expect([told.set.of("message.out"), forwardsSeen(mediator), (await agent.pending()).missingResponses.map((owed) => owed.effectType)]).toEqual([[], 0, [PING_RESPONSE_EFFECT]]);
+    expect(await agent.manual.completeResponse(told.inbound.ofSource(carried!.cid)!.id, PING_RESPONSE_EFFECT)).toMatchObject({ outcome: "created", action: { kind: "manual" }, dispatched: { outcome: "submitted" } });
+    expect(forwardsSeen(mediator)).toBe(1);
+
+    const next = await agent.receive(await ping());
+    expect(next).toMatchObject({ received: { outcome: "received", live: true }, after: { proof: { status: "verified" }, disposition: { status: "admitted" } }, reacted: { effects: [{ effectType: PING_RESPONSE_EFFECT, outcome: "created", action: { kind: "initial" }, dispatched: { outcome: "submitted" } }] } });
+    expect([forwardsSeen(mediator), (await fold(alice)).set.of("message.out")]).toEqual([2, [expect.anything(), expect.anything()]]);
   });
 });

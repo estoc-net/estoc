@@ -37,7 +37,11 @@ Agent            a vault running: one receiver, one dispatcher, a line to each m
 A message is decided over the fold read under the vault's writer lock
 and committed as an intent, then as a package, before its one transport
 call. That call is made under a live action: the user's send, the input
-a live receipt answered, or an explicit manual step. Opening, importing
+a live receipt answered, or an explicit manual step. A receipt is live
+when it recorded the first observation the vault holds of its input
+and the admission pass under its lock admitted that observation as
+the witness its input speaks through; one whose admission waited for
+evidence is not, whatever admits it later. Opening, importing
 or restoring a vault mints none, so whatever such a runtime finds
 waiting is shown as pending work, each item naming the manual procedure
 (`agent.manual`) that completes it.
@@ -57,7 +61,9 @@ mediator is told of the delivery, and the calls it decided are made,
 off its turn, so the delivery behind it is received meanwhile.
 Evidence that arrives outside a receipt — the document a preparation
 resolves, an import the host tells the agent of — is reconciled when
-it arrives, admitting what waited for it and dispatching nothing.
+it arrives, admitting what waited for it and dispatching nothing:
+every preparation and every dispatch runs that pass under its lock,
+so a pass a refused commit cut short is completed by the next.
 
 ## Usage
 

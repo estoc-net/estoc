@@ -14,20 +14,25 @@
  *
  * Only two things here authorize a transport call by themselves: the
  * user's send, and the first observation the vault holds of an input,
- * in the call that recorded it. Such a live input has what the vault
- * owes recorded, then its automatic effects and the private-address
- * policy decided, then their calls made; each step stands alone, so
- * that one that fails leaves the others done and the observation
- * recorded all the same. Over a pickup, the local steps run in the
- * turn the delivery came in, and the calls off it: neither they nor
- * the acknowledgement to the mediator hold the receipt of the delivery
- * behind. An input the vault already held is no live input when it is
- * delivered again, whether this agent recorded it or one before it,
- * and whether or not what it earned was ever sent: it is observed
- * again, what the vault owes is recorded, and a reply it still earns
- * stays listed for the user. Evidence the host recovered outside the
- * agent — an import, a document — is told to it, and what the vault
- * owes over it is recorded then, dispatching nothing.
+ * in the call that recorded it and had it admitted under the receipt's
+ * lock as the witness its input speaks through. Such a live input has
+ * what the vault owes recorded, then its automatic effects and the
+ * private-address policy decided, then their calls made; each step
+ * stands alone, so that one that fails leaves the others done and the
+ * observation recorded all the same. A first observation the receipt
+ * left waiting for evidence is not live, and stays so: the evidence,
+ * whenever and however it comes, admits the observation, and what the
+ * input then earns is listed for the user. Over a pickup, the local
+ * steps run in the turn the delivery came in, and the calls off it:
+ * neither they nor the acknowledgement to the mediator hold the
+ * receipt of the delivery behind. An input the vault already held is
+ * no live input when it is delivered again, whether this agent
+ * recorded it or one before it, and whether or not what it earned was
+ * ever sent: it is observed again, what the vault owes is recorded,
+ * and a reply it still earns stays listed for the user. Evidence the
+ * host recovered outside the agent — an import, a document — is told
+ * to it, and what the vault owes over it is recorded then,
+ * dispatching nothing.
  */
 
 import type { DIDDoc } from "@estoc/did-peer";

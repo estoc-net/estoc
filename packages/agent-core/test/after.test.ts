@@ -55,7 +55,7 @@ async function eventsOf<T extends VaultEventType>(holder: Fresh, type: T): Promi
 }
 
 describe("after the receipt", () => {
-  it("a peer's ack names an outbound: once the outbound has its package, the witness is recorded as one acknowledgement, the same ack delivered again is not recorded twice, another ack from the peer is, and an unrelated peer naming the ID earns nothing", async () => {
+  it("a peer's ack names an outbound: once the outbound has its package, the witness is recorded as one acknowledgement by the preparation's own pass, the same ack delivered again is not recorded twice, another ack from the peer is, and an unrelated peer naming the ID earns nothing", async () => {
     const { alice, bob } = await parties();
     const carol = await directParty(3, "https://carol.example/didcomm", CAROL);
     await send(alice.runtime, alice.keys, { channel: { localDid: alice.did, peerDid: bob.longFormDid } }, HELLO, { messageId: MESSAGE });
@@ -65,11 +65,10 @@ describe("after the receipt", () => {
     const early = await receivedThen(receiver, alice, bob, { id: wire, ack: [MESSAGE] });
     expect(early.after).toMatchObject({ proof: { status: "not-present" }, disposition: { status: "admitted", admissions: [{ event: { data: { sourceEventCid: early.cid } }, status: { status: "effective" } }] }, admitted: [], consumed: [], acknowledged: [] });
     expect((await prepare(alice.runtime, alice.keys, MESSAGE, { didcomm })).outcome).toBe("prepared");
-    expect(acknowledgementDrafts(await foldOf(alice)).map(({ data }) => data)).toEqual([
+    expect((await eventsOf(alice, "delivery.acknowledged")).map(({ data }) => data)).toEqual([
       { messageId: MESSAGE, localKeyName: didKeyName(DID, "key-agreement"), peerPublicKey: seen[0]!.sender!.peerPublicKey, ackMessageId: inboundMessageId(bob.did, alice.did, wire), ackWireMessageId: wire },
     ]);
-    const recorded = await recordAcks(alice.runtime, alice.keys);
-    expect([recorded.map(({ type }) => type), await recordAcks(alice.runtime, alice.keys)]).toEqual([["delivery.acknowledged"], []]);
+    expect([acknowledgementDrafts(await foldOf(alice)), await recordAcks(alice.runtime, alice.keys)]).toEqual([[], []]);
     const outbound = (await foldOf(alice)).outbound.outbounds.get(MESSAGE)!;
     expect([outbound.acknowledged, outbound.acknowledgements.map(({ status }) => status), outbound.outcome, outbound.work.kind]).toEqual([true, [{ status: "complete" }], { status: "prepared" }, "dispatch"]);
 

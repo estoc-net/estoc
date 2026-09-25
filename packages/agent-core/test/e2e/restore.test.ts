@@ -155,7 +155,7 @@ describe("a vault restored from a snapshot", () => {
     expect(second.rotation.notification).toMatchObject({ outcome: "created", dispatched: { outcome: "submitted" } });
 
     await until("bob has the second notification", () => bob.inbounds.length === 2);
-    expect(bob.inbounds[1]).toMatchObject({ received: { outcome: "received", live: true }, after: { proof: { status: "conflict" } }, reacted: { effects: [] } });
+    expect(bob.inbounds[1]).toMatchObject({ received: { outcome: "received", live: false }, after: { proof: { status: "conflict" } }, reacted: null, address: null });
     expect(queuedFor(mediator, bob)).toBe(0);
     const ofBob = await foldOf(bob);
     expect(ofBob.continuity.conflicts).toMatchObject([{ conflict: { kind: "competing-changes", side: "peer" } }]);

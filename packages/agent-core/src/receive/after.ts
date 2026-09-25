@@ -3,9 +3,9 @@
  * independent of the pickup acknowledgement, which the durable receipt
  * alone earns, and run again by an open over everything received
  * before, since a crash may fall between a receipt and this, and by
- * whatever brings evidence an observation waited for — a resolution a
- * preparation commits, an import the host tells the agent of — under
- * the lock that brought it. The fold
+ * every preparation, whose resolution may be evidence an observation
+ * waited for, and whatever else brings such evidence — an import the
+ * host tells the agent of — under the lock that brought it. The fold
  * has already judged every observation: whether the proof it carried
  * verifies, and what its `ack` earns. One pass under the lock records
  * what the vault owes on its own, in the order it is owed: first the
@@ -69,13 +69,13 @@ function pass(runtime: VaultRuntime, keys: Keys): Promise<Owed & { fold: VaultFo
   return runtime.locked((held) => recordOwedUnderLock(held, keys));
 }
 
-/** The pass for a caller that holds the writer lock already and has just committed evidence under it: the fold returned is the one the pass left, for whatever the caller decides next. */
+/** The pass for a caller that holds the writer lock already: the fold returned is the one the pass left, every event it committed folded in, for whatever the caller decides next. */
 export async function recordOwedUnderLock(held: Held, keys: Keys): Promise<Owed & { fold: VaultFold }> {
-  const { fold, events: admitted } = await admitReceipts(held, await scanVault(held, keys));
-  const drafts = [...consumptionDrafts(fold), ...acknowledgementDrafts(fold)];
+  const { fold: admittedFold, events: admitted } = await admitReceipts(held, await scanVault(held, keys));
+  const drafts = [...consumptionDrafts(admittedFold), ...acknowledgementDrafts(admittedFold)];
   const events = drafts.length === 0 ? [] : (await held.commit([], drafts)).map(readVaultEvent);
   return {
-    fold,
+    fold: events.length === 0 ? admittedFold : await scanVault(held, keys),
     admitted,
     consumed: events.filter((event): event is VaultEvent<"invitation.consumed"> => event.type === "invitation.consumed"),
     acknowledged: events.filter((event): event is VaultEvent<"delivery.acknowledged"> => event.type === "delivery.acknowledged"),
