@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **phase 1, implemented** — ordinary DIDComm channels, discovery and
+Status: **phase 1; application-admission and rotation restrictions specified, implementation pending** — ordinary DIDComm channels, discovery and
 early private-address allocation for one active writable vault runtime.
 Phase-1 channel endpoints support only `did:peer:4`; mediator DID resolution
 is independent of that restriction.
@@ -164,14 +164,14 @@ retained keys may receive while their routes remain eligible. Explicit route
 or mediation retirement stops transport; temporary outage remains recoverable.
 
 Rotation is a channel link, not global address retirement. Keep old and new
-recipient routes through exact-successor confirmation. It changes selection
-for newly created intents only. An existing fixed-channel message never moves
-to the successor; explicit key/route retirement can make its retry impossible.
-Old-peer inputs remain receivable. At creation of new work derived from
-old-peer input, check current verified supersession under [channels.md](channels.md#continuity),
-including when the input was received before that supersession became known.
-Supersession alone neither prohibits an explicit user send to an eligible old
-address nor blocks manual dispatch of an already committed intent.
+recipient routes through exact-successor confirmation. Existing messages keep
+their fixed channels. A verified endpoint replacement prohibits new sends,
+preparation, first dispatch and manual retries on that old endpoint within its
+rotation context under [channels.md](channels.md#fixed-outbound-channel).
+Key or route retirement independently prevents sending. Old-peer inputs remain
+receivable, but cannot gain new admission or start source-derived work after
+supersession becomes known, even if sent or received earlier. Retain prior
+admitted history and committed operations without granting another dispatch.
 
 <a id="ordinary-sending-and-birth-selection"></a>
 
@@ -353,7 +353,8 @@ state. Snapshot restore can cause these conditions under
 
 Commit the authenticated observation before source-derived work. Validate each
 consumer under [operation eligibility](channels.md#operation-eligibility),
-including carried proof and current policy where required. Later rotation or
+including durable application admission, carried proof and current policy
+where required. Raw observation alone cannot update chat/profile/ACK state. Later rotation or
 blocking preserves earlier facts; duplicates follow
 [the duplicate receipt rules](distributed-delivery.md#duplicate-receipt-handling).
 
@@ -386,7 +387,7 @@ Before the first channel package is submitted, its sender MUST durably retain:
 - the exact RFC 8785 canonical resolved DID document under its raw DASL CID;
 - the document's authorized authentication and key-agreement method lists;
 - the selected peer key under `peer.resolved.peerPublicKey`; and
-- the resolution event ID.
+- the resolution event CID.
 
 These are immutable operation snapshots, not a permanent channel key set.
 The exact envelope identifies the selected recipient `kid`; it must name an
@@ -464,8 +465,9 @@ channel peer's immutable key changed. Live prerequisite retries follow section 1
 For an unopened delivery waiting on local receive prerequisites, retry only
 when its missing local material changes and then reapply sender authentication.
 For a committed observation, newly available exact evidence schedules continuity
-verification or operation recovery without another receipt or pickup. Neither
-kind of evidence recovery grants a new automatic dispatch action.
+verification, admission reconciliation and operation recovery without another
+receipt or pickup. Neither kind of evidence recovery grants a new automatic
+dispatch action.
 
 <a id="duplicate-authentication-and-historical-recovery"></a>
 
@@ -482,13 +484,18 @@ replaying the receive operation.
 #### Predecessor resolution for DID replacement
 
 After durable receipt and without delaying pickup ACK, verify the carrier's
-original JWT under [the continuity fold](channels.md#continuity). Use maintained
-library decoding APIs to check the claims that need
-no predecessor document: compact JWS syntax, integer `iat`, `sub` equal to the
-carrier's exact authenticated `from`, supported and distinct canonical `iss`
-and `sub`, and a protected `kid` whose DID portion is byte-identical to `iss`.
-Validate any supplied numalgo-4 long form before canonicalizing it. Failure is
-invalid proof; decoding supplies no signature or channel authority.
+original JWT through [the continuity adapter](channels.md#continuity-integration).
+Use the shared package's proof profile and canonical DID binding, including
+equivalent issuer/`kid` DID spellings and subject/sender spellings. Preserve
+document-independent rejection separately from missing material: malformed
+claims, unsupported profile headers and `exp`/`nbf`, or a mismatched canonical
+subject are invalid even without an issuer document. `inspectFromPrior` locates
+material and already rejects `exp`, `nbf`, non-integer `iat` and invalid
+`b64`/`crit` use. It still lacks the document-independent precheck of `alg`,
+optional `typ`, canonical equivalence of the DID in `kid` with `iss`, distinct
+canonical `sub` and `iss`, and canonical `sub` against the authenticated sender.
+Keep that precheck extension in the package, without a second parser in the runtime. Decoding
+supplies no signature or channel authority.
 
 Resolve a long-form issuer locally from its validated encoded document using
 [the fixed document representation](vault-events.md#peer-resolved). For a
@@ -501,12 +508,15 @@ If the issuer is a valid short form and no matching retained `peer.resolved`
 document is available, keep the original carrier and show `pending-proof`.
 Do not poll the network, expire the proof into invalidity, or keep the original
 receive action waiting for that material. A later matching `peer.resolved`
-schedules verification; it grants no automatic ACK, reply or notification for
-that historical carrier.
+schedules verification and admission reconciliation under
+[channels.md](channels.md#application-admission); it grants no automatic ACK,
+reply or notification for that historical carrier. If the material never
+arrives, that carrier remains a pending diagnostic without application admission.
 A new independently authenticated live carrier is evaluated separately.
 
-The fold checks the original signature and the document's authorized
-authentication method without appending an event.
+`verifyFromPrior` checks the original signature against the authentication
+method in the issuer's own long-form DID, and `bindFromPrior` checks the exact
+carrier. The vault appends no verification event.
 A bad signature or unauthorized key is invalid. Missing source/endpoint/history
 references remain pending for their own reason. Invalid or pending proof never
 undoes durable receipt or pickup ACK.
@@ -534,8 +544,8 @@ another DID. Public and private disclosure use this same method.
 
 First disclosure of any local address uses its long form, whether in OOB or
 plaintext `from`. Within each exact channel context, a sender MUST use its long
-form until a complete authenticated observation confirms knowledge of that exact
-address under [channels.md](channels.md#continuity). A successor also includes
+form until an admitted complete authenticated observation confirms knowledge of
+that exact address under [channels.md](channels.md#continuity). A successor also includes
 its frozen proof until confirmed. Confirmation in an unrelated channel does not
 satisfy either condition merely because the address is shared. Later new
 messages in the confirmed context may use the short form;
@@ -586,8 +596,9 @@ Create or reuse the dedicated notification under
 preserving the decision's source, successor and proof. Existing replies neither
 move to the successor nor suppress the notification; historical work requires
 manual completion subject to current source eligibility. A superseded source
-peer prevents creation of a missing notification intent, but does not by itself
-prevent manual dispatch of an already committed intent.
+peer prevents creation of a missing notification intent. A replaced sender or
+peer recipient also prohibits preparation and manual dispatch of an already
+committed intent; retaining its history is not permission to send.
 
 <a id="automatic-response-selection"></a>
 
@@ -623,7 +634,7 @@ Verify the new recipient registration before disclosure, then follow
 Use the exact-address, authenticated-peer and local-only/join context checks in
 [channels.md](channels.md#continuity). Input at a predecessor confirms no
 successor. An ACK's named message IDs alone confirm no address knowledge.
-Its complete authenticated carrier, including a pure ACK, can independently
+Its admitted complete authenticated carrier, including a pure ACK, can independently
 confirm the exact successor address to which it was sent.
 Retain both recipient routes through confirmation; retire a shared resource
 only when no other channel or disclosure still needs it.
@@ -637,17 +648,23 @@ evidence is missing. Derive its issuer document under
 [predecessor resolution](#predecessor-resolution), then derive links, joins and
 supersession under [continuity](channels.md#continuity). Show the resulting
 [verification status](channels.md#verification-status). Superseded peer input
-remains receivable but cannot start new application work.
+remains receivable but cannot acquire new application admission or start new
+application work. Preserve previously admitted history and expose unadmitted
+old-peer observations as ignored diagnostics under
+[application admission](channels.md#application-admission). Ordinary chat,
+profile, received ACK/error state and address confirmation require that
+admission. Explicit old-address sending and retry are prohibited in the
+affected context, without globally disabling a shared DID or deleting its keys.
 
 <a id="remote-errors-and-integrity-failures"></a>
 
 ## 13. Remote errors and integrity failures
 
 A Report Problem is a display diagnostic beside a uniquely correlated outbound
-only when its carrier has a complete source witness, the same channel or a
-verified role-preserving successor path, and the required protocol thread
+only when its carrier is an admitted complete source witness in the same channel
+or a verified role-preserving successor channel, with the required protocol thread
 correlation. Keep its body available for display. It does not prove submission
-failure, retract a link or authorize replay. A normal authenticated observation may
+failure, retract a link or authorize replay. Its admitted complete carrier may
 separately prove exact-address knowledge.
 
 Missing source/verification evidence defers attribution; inconsistent evidence exposes
@@ -771,7 +788,7 @@ roll back; explicit new communication is a new channel and new message.
 
 - <a id="rz-31"></a> **RZ-31.** Missing required source/endpoint records or issuer material defer derived continuity while authenticated receipt still commits and pickup-ACKs; UI distinguishes missing proof material from missing history. Invitation state is separate and cannot defer an otherwise complete link.
 
-- <a id="rz-33"></a> **RZ-33.** Verified peer supersession refuses new old-peer work through its local-only context, preserves prior receipts and decisions, and leaves unrelated public-DID channels unaffected.
+- <a id="rz-33"></a> **RZ-33.** Verified peer supersession refuses new old-peer application admission and work through its local-only context, prohibits preparation/dispatch to that peer including manual retries, preserves raw receipts and prior admitted history/decisions, and leaves unrelated public-DID contexts unaffected.
 
 - <a id="rz-34"></a> **RZ-34.** A matching invitation.consumed assigns a one-use disclosure to its proof-free source's canonical peer; plain receipt, continuation and pthid alone do not.
 

@@ -1,10 +1,10 @@
-# The Estoc event store, version 3
+# The Estoc event store, version 4
 
 <!-- suite-navigation:start -->
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **phase 1, implemented**. SQLite is the sole persistent vault and interchange
+Status: **phase 1; version-4 content-addressed events specified, implementation pending**. SQLite is the sole persistent vault and interchange
 format for one active writable runtime. This specification defines observable
 store semantics, not SQLite's implementation. Capitalized requirement words
 have their BCP 14 meanings.
@@ -34,7 +34,7 @@ these primitives.
 
 Portable vault state consists of immutable events, retained content-addressed
 objects, immutable identity metadata and an encrypted seed wrapper. Local IDs,
-positions, options, caches and diagnostics do not travel with that state.
+positions, options, caches and transient diagnostics do not travel with that state.
 SQLite's committed view determines what is accepted; private preparation is
 not acceptance.
 
@@ -46,8 +46,14 @@ A server-hosted full runtime has the same rules as an end-user runtime.
 
 ## 2. Invariants
 
-Events are immutable and merged by `eventId` using canonical-byte equality.
-Folds depend on the accepted event set, never arrival or physical row order.
+Events are immutable and identified by the raw DASL CID of their canonical
+envelope bytes. Merge is set union by event CID: identical bytes are one event,
+and different bytes have different identities under the hash profile. An
+**accepted event** is durably retained, not necessarily a trusted domain fact or
+an application-admitted message. Folds depend on this event set, never arrival
+or physical row order. An event reference names exact content; it cannot be
+retargeted to another event with similar fields. Content addressing does not
+authenticate the author or the supplied history.
 Authorship is explicit; a replica ID is provenance, not a credential. Phase 1
 has one active writable runtime, and two writable copies cannot share an author.
 
@@ -77,27 +83,31 @@ this minimum alone is not a power-loss-safe receipt claim.
 
 ## 3. The event
 
-An event has exactly six top-level fields:
+The portable event envelope has exactly five top-level fields. The API returns
+those fields together with a derived `cid`, which is not part of the envelope:
 
 ```ts
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [field: string]: JsonValue };
 type JsonObject = { [field: string]: JsonValue };
-type EventId = string & { readonly __eventId: unique symbol };
+type EventCid = string & { readonly __eventCid: unique symbol };
 type AuthorId = string & { readonly __authorId: unique symbol };
 
-type Event<D extends JsonObject = JsonObject> = {
-  eventId: EventId;
+type EventEnvelope<D extends JsonObject = JsonObject> = {
   at: string;
   author: AuthorId;
   type: string;
   roots: Cid[];
   data: D;
 };
+
+type Event<D extends JsonObject = JsonObject> = EventEnvelope<D> & {
+  cid: EventCid;
+};
 ```
 
-`eventId` and `author` are canonical lowercase UUIDv7 strings. `at` is the UTC
-wall-clock timestamp defined in section 4.2. `type` is nonempty; `roots` and
+`cid` is a canonical raw DASL CID; `author` is a canonical lowercase UUIDv7.
+`at` is the UTC wall-clock timestamp defined in section 4.2. `type` is nonempty; `roots` and
 `data` are always present, with `[]` and `{}` permitted. `Cid` is defined in
 [DO §6](dasl-objects.md#objectstore). These validated types serialize as strings;
 brands do not replace validation. Domain identifiers belong to
@@ -133,10 +143,16 @@ roots of the erasure event.
 ### 3.3 RFC 8785 canonical JSON and equality
 
 ```text
-canonicalEventBytes(event) = UTF8(RFC8785(event))
+canonicalEventBytes(envelope) = UTF8(RFC8785(envelope))
+eventCid(envelope) = rawCid(canonicalEventBytes(envelope))
 ```
 
-All six fields participate in byte equality. Accept only I-JSON eligible for
+All five envelope fields participate in byte equality. The derived `cid` is
+excluded: extract the envelope only after validating the API record's exact
+shape. Do not hash the full API record or silently discard unknown fields.
+Use the [raw object profile](dasl-objects.md#object-identity) and maintained
+JCS/CID/hash libraries rather than a second encoding or hash implementation.
+Accept only I-JSON eligible for
 RFC 8785: no duplicate member names, unpaired surrogates, non-finite numbers,
 undefined values, bigint, cycles or host objects. Numbers use finite IEEE-754
 binary64; values needing more precision use strings. Preserve strings exactly
@@ -146,19 +162,43 @@ array order and uses its specified number serialization without whitespace.
 Append and ingest validate before acceptance. Ingest may accept noncanonical
 source JSON, but must detect duplicate members and compare/store canonical
 bytes. Persistent and portable event BLOBs are exactly those bytes without a
-newline. Indexed columns must agree with them; SQL JSON conversion or a generic
+newline. The event CID must match those bytes and indexed envelope columns
+must agree with them; SQL JSON conversion or a generic
 stable-stringify is not an alternative equality representation.
+
+For this complete envelope:
+
+```json
+{
+  "at": "2026-09-25T00:00:00.000Z",
+  "author": "019b0000-0000-7000-8000-000000000001",
+  "type": "example.note",
+  "roots": [],
+  "data": { "text": "hello" }
+}
+```
+
+The event CID is
+`bafkreigwmldn6qzody7iex3vwompw3zkdqihb5jzbpp3npvdod6rdnt5zi`.
+Whitespace and object member order do not change it; a changed envelope value
+does. The CID itself is not appended to these bytes.
 
 <a id="envelope-validation"></a>
 
 ### 3.4 Envelope validation
 
-Reject unless the input is a JSON object with exactly `eventId`, `at`, `author`,
-`type`, `roots` and `data`; IDs are canonical lowercase UUIDv7; `at` is a valid
+Reject unless the envelope is a JSON object with exactly `at`, `author`,
+`type`, `roots` and `data`; `author` is a canonical lowercase UUIDv7; `at` is a valid
 Gregorian UTC instant in `YYYY-MM-DDTHH:mm:ss.sssZ`; `type` is nonempty; `roots`
 is an array of canonical raw CIDs; `data` is an object; and the complete event
 passes section 3.3. Seconds range from 00 through 59. Payload validation remains
 above the generic store. Type brands alone cannot establish these checks.
+
+An API `Event` has exactly those five fields plus `cid`. Validate its canonical
+raw CID and require it to equal the envelope's computed CID before acceptance
+or duplicate detection. A portable row's CID is checked in the same way. A
+well-formed CID for other bytes is not a valid event. No event UUID, nonce or
+other generated discriminator is added to the envelope.
 
 <a id="identity-authorship-time-and-order"></a>
 
@@ -176,12 +216,14 @@ replica-creation event or mediator replica registration.
 
 <a id="event-id-and-timestamp"></a>
 
-### 4.2 Event ID and timestamp
+### 4.2 Event CID and timestamp
 
-Local appends mint `eventId` with a standard RFC 9562 UUIDv7 generator. Generator
-counter layout, monotonicity and rollback handling are not additional Estoc
-requirements. Appends share one generator under the operation lock. Failure to
-mint any ID fails the whole batch before acceptance.
+Local appends assign the current author and sampled timestamp, then compute
+the CID of the complete canonical envelope. Equal envelopes represent one
+event, even when produced by separate append calls or repeated drafts in a
+batch. A domain that must distinguish occurrences records that distinction in
+its payload, such as a message ID or receipt ordinal. Hashing or validation
+failure aborts the whole local batch before acceptance.
 
 `at` is one integer Unix-millisecond wall-clock observation, truncating any
 sub-millisecond precision and formatting it as `YYYY-MM-DDTHH:mm:ss.sssZ`.
@@ -189,12 +231,10 @@ A batch shares one reading. Leap-second spelling, missing fractions and other
 fractional precision are rejected. After clock rollback, `at` follows the newly
 sampled earlier time; it is not clamped or replaced with a logical clock.
 
-The UUID's embedded time and `at` are independent observations. Readers MUST
-NOT compare them or reject history because they differ. The generator may hold
-or advance its own timestamp under RFC 9562. No 4096-events-per-millisecond
-limit is imposed by this profile; generated IDs must remain distinct.
+An event CID contains no timestamp to compare with `at`. The author's UUID
+identifies a writable incarnation, not the event's time.
 
-A caller obtains event IDs from returned events. Event IDs carry no authority
+A caller obtains event CIDs from returned events. Event CIDs carry no authority
 or domain identity. Decisions needing causality use explicit references,
 immutable IDs, tombstones or set semantics, not wall-clock latest-wins.
 
@@ -202,10 +242,11 @@ immutable IDs, tombstones or set semantics, not wall-clock latest-wins.
 
 ### 4.3 Canonical order
 
-Canonical order is ascending `(at, eventId, author)` using literal string
-comparison. The fixed UTC millisecond form makes timestamp lexical order equal
-represented instant order. `eventId` is globally unique; author is a defensive
-final component. This is presentation order and the order for explicitly
+Canonical order is ascending `(at, cid)` using literal string comparison of
+the timestamp and canonical lowercase base32 CID text. Compare CID text, not
+decoded CID bytes; these orders need not agree. The fixed UTC millisecond form
+makes timestamp lexical order equal represented instant order. This is
+presentation order and the order for explicitly
 specified latest-wins fields, not arrival order, causality or necessarily batch
 input order.
 
@@ -233,19 +274,18 @@ type Draft<D extends JsonObject = JsonObject> = {
 };
 
 type Filter = {
+  cid?: EventCid;
   author?: AuthorId;
   type?: string;
   data?: { [field: string]: JsonPrimitive | undefined };
 };
 
 type ChangeToken = string;
-type Conflict = { eventId: EventId; kept: Event; rejected: Event; source?: string };
 type Rejected = { value: unknown; error: string; source?: string };
 type Damaged = { where: string; bytes?: Uint8Array; error: string };
 type Ingested = {
   added: number;
   duplicates: number;
-  conflicts: Conflict[];
   rejected: Rejected[];
 };
 
@@ -260,7 +300,6 @@ interface EventStore {
     since?: ChangeToken
   ): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }>;
   damaged(): Promise<Damaged[]>;
-  conflicting(): Promise<Conflict[]>;
 }
 ```
 
@@ -268,30 +307,39 @@ interface EventStore {
 
 ### 5.1 `append`
 
-Validate the draft, read the clock, mint an event ID, assign the current author
-and default omitted roots to `[]`. Reject caller-supplied `eventId`, `at` or
-`author`; they cannot override generated envelope fields. Write and return the
-complete event at section 2.1's success boundary. Local vault callers use commit.
+Validate the draft, read the clock, assign the current author and default
+omitted roots to `[]`. A draft has only `type`, `data` and optional `roots`;
+reject caller-supplied `cid`, `at`, `author` or any other field. Compute the
+envelope's CID, retain it if new, and return the complete API event at section
+2.1's success boundary. An identical retained event is returned without a new
+row or position. Local vault callers use commit.
 
 <a id="appendall"></a>
 
 ### 5.2 `appendAll`
 
-Validate every draft before writing. Sample one `at` for the batch, mint distinct
-IDs in input order, assign the current author, and accept all events in one
-transaction. Return events in input order, which need not be canonical order.
+Validate every draft before writing. Sample one `at` for the batch, assign the
+current author and compute each envelope's CID. Deduplicate against both the
+retained set and earlier drafts in this batch; accept all new events in one
+transaction. Return one event per input draft in input order, including repeated
+CIDs for identical envelopes. Return order need not be canonical order.
 An empty batch writes nothing. Crash before resolution leaves all or none;
 success survives process restart. No failed batch exposes an accepted subset.
+Each new CID receives one position; an event-only duplicate batch writes nothing.
+Local producers obtain event references from earlier commits; they do not assume
+the CID of another draft in the same batch. The generic store leaves payload
+reference validation to the owning schema.
 
 <a id="ingest"></a>
 
 ### 5.3 `ingest`
 
 Read or stage the full input and perform fork preflight before accepting any
-new event. An absent ID is added; the same ID with identical canonical bytes
-counts as a duplicate; a different value for an accepted ID reports a conflict
-without overwriting either source. Reject/report malformed envelopes rather
-than partially reinterpreting them. Accept all new valid events and positions
+new event. Validate each API event and its CID before duplicate detection.
+Each previously unseen CID is retained and increments `added`; each repeat of
+a retained or already staged event increments `duplicates`. Reject/report
+malformed records or CID mismatches rather than reinterpreting them under a
+replacement CID. Accept all new valid events and positions
 in one transaction, updating or invalidating any caches. Retrying the same
 input is idempotent. Full-vault import also publishes staged objects and repairs
 atomically.
@@ -300,8 +348,8 @@ atomically.
 
 #### Forked author
 
-An incoming event with `author == store.author` that is not already present
-with identical bytes fails the entire operation with `ForkedAuthor`. To recover,
+An incoming valid event with `author == store.author` whose CID is not already
+present fails the entire operation with `ForkedAuthor`. To recover,
 close the runtime, atomically select a fresh replica ID and generation under
 ownership, reopen and retry ingest. Old events remain unchanged. This detects
 accidental cloned histories, not malicious authorship by a shared-seed holder.
@@ -310,20 +358,28 @@ accidental cloned histories, not malicious authorship by a shared-seed holder.
 
 ### 5.4 `scan`
 
-Yield one event per accepted ID, parsed from canonical bytes, in canonical order
-at one fixed cut. Filters are conjunctions of author equality, type equality
+Yield every accepted event once, with its stored CID and parsed envelope, in
+canonical order at one fixed cut. Normal scans and deltas return stored CIDs
+without recomputing envelope hashes; verification boundaries are in
+[section 5.6](#event-damage).
+
+Filters are conjunctions of exact CID equality, author equality, type equality
 and equality of specified top-level `data` fields to the supplied JSON primitive.
+Validate a supplied `cid` as a canonical raw CID before querying; it matches at
+most one event and does not bypass the other filters.
 `undefined` adds no constraint; `null` matches only present JSON null. Missing,
 boolean and number values cannot be conflated by SQL coercion. Filtering must
-equal applying the filter to the same unfiltered cut; it cannot expose rejected
-conflicts. Ranges, joins, full text and nested fields are outside this API.
+equal applying the filter to the same unfiltered cut. An exact CID lookup may
+use an index; consumers still validate the referenced event's type and domain
+prerequisites. Ranges, joins, full text and nested fields are outside this API.
 
 <a id="changes"></a>
 
 ### 5.5 `changes`
 
 Return a frontier token and every matching event accepted after `since` through
-that frontier, once each, in no promised order. Missing token starts at zero.
+that frontier, once per CID, in no promised order. An already retained CID adds
+no position and does not advance the frontier. Missing token starts at zero.
 Late events with earlier timestamps still appear. An empty filtered result still
 advances its token. Consume the complete result before checkpointing it.
 
@@ -335,27 +391,30 @@ cursor or authorization credential. SQLite position rules are in
 
 Portable snapshot inspection has no local change frontier. Every `changes`
 call MUST reject with `UnsupportedOperation`, with or without a token; it MUST
-NOT mint local IDs, positions or tokens. Use `scan`, `damaged` and `conflicting`
+NOT mint local IDs, positions or tokens. Use `scan` and `damaged`
 to inspect the snapshot.
 
 <a id="damage-and-conflicts"></a>
+<a id="event-damage"></a>
 
-### 5.6 Damage and conflicts
+### 5.6 Event damage
 
-Damage includes invalid event bytes and disagreement with indexed columns.
-Report location and exclude damaged values from diagnostic scans. Event damage
+Damage includes invalid event bytes, a CID/bytes mismatch and disagreement
+with indexed envelope columns. Verify CID/bytes correspondence before acceptance,
+during full [portable source validation](vault-sqlite.md#portable-source-validation)
+and on every `damaged()` call. `damaged()` checks all event rows, including their
+canonical bytes and indexed columns. A normal scan is not a fresh integrity
+check; ordinary reads still report any damage they encounter. Report its location
+and exclude known-damaged values from scans. Event damage
 makes the history incomplete and blocks mutation, GC and full export; structural
 SQLite damage fails the runtime. In-place event repair is outside the phase-1
 contract. Recovery uses a validated snapshot restored into a new runtime under
 [SQ §12.1](vault-sqlite.md#restore). Object damage follows
 [SQ §6](vault-sqlite.md#reads-damage-and-collection).
 
-`conflicting()` reports observed rejected values with the accepted value as
-`kept`. This diagnostic history is local and may be cleared. Portable snapshot
-inspection always returns an empty array from `conflicting()` because rejected
-values and their diagnostic history are not exported. Never use row order
-or a read filter to pick another accepted value, including after structural
-damage. A conflict is not permission to overwrite an accepted event.
+Malformed rejected input remains diagnostic data; it is not an accepted event.
+Different events can contain conflicting semantic facts. Those conflicts belong
+to domain folds and do not by themselves make the stored event bytes damaged.
 
 <a id="folds-and-local-caches"></a>
 
@@ -363,7 +422,8 @@ damage. A conflict is not permission to overwrite an accepted event.
 
 Folds are deterministic functions of the accepted event set, independent of
 arrival order and, except for explicitly local views, the current replica ID.
-They can always be rebuilt from `scan()`. Start with direct folds. Caching and
+They can always be rebuilt from unfiltered `scan()`, retaining every event CID.
+Start with direct folds. Caching and
 incremental updates are optional; correctness and invalidation requirements
 are in [SQ §7](vault-sqlite.md#local-state-and-projections).
 
@@ -384,7 +444,7 @@ and collection semantics. Only the vault runtime computes held roots under
 ### 8.1 Metadata and keystore
 
 ```ts
-type VaultMetadata = Readonly<{ version: 3; anchor: string }>;
+type VaultMetadata = Readonly<{ version: 4; anchor: string }>;
 type WrappedSeed = Readonly<{ version: 3; seedJwe: string }>;
 
 interface KeystoreAccess {
@@ -393,6 +453,7 @@ interface KeystoreAccess {
 }
 ```
 
+The keystore wrapper version is independent of the vault version and remains 3.
 Metadata is immutable. The unlocked host owns privileged rewrap and verifies
 that the replacement opens to the same seed/anchor. Read returns a detached
 value, not identity authority. `seedJwe` is a compact JWE string. Exact bytes
@@ -418,7 +479,7 @@ type CommitObject = { cid: Cid; source: ByteSource };
 
 interface Vault {
   readonly metadata: VaultMetadata;
-  readonly events: Pick<EventStore, "scan" | "changes" | "damaged" | "conflicting">;
+  readonly events: Pick<EventStore, "scan" | "changes" | "damaged">;
   readonly objects: Omit<ObjectStore, "putRaw" | "putObject" | "collect">;
   commit(objects: CommitObject[], drafts: Draft[]): Promise<Event[]>;
 }
@@ -436,8 +497,8 @@ Use [import](#import-into-an-existing-vault) to fill or repair absent or
 known-damaged objects retained by existing events without accepting new events.
 
 Portable snapshot inspection returns a read-only `Vault`. Its `metadata` is the
-snapshot's immutable metadata; `events` provides `scan`, `damaged` and
-`conflicting`, and `objects` provides `open`, `read`, `stat`, `has` and `list`
+snapshot's immutable metadata; `events` provides `scan` and `damaged`,
+and `objects` provides `open`, `read`, `stat`, `has` and `list`
 under their ordinary read and damage rules. `commit` and `events.changes` MUST
 always reject with `UnsupportedOperation`, without consuming object sources or
 minting local IDs, positions or tokens. No local `EventStore.author` is exposed
@@ -450,10 +511,11 @@ read cancellation and SQLite procedures belong to
 [SQ](vault-sqlite.md#ownership-and-lifecycle). Nonblocking reads, live brokers
 and online repair are not API guarantees.
 
-An ambiguous outcome is not a safe instruction to resubmit drafts: commit mints
-new IDs on each call. Recover and reconcile the stable domain operation first
+An ambiguous outcome is not a safe instruction to resubmit drafts: a new commit
+samples a new `at` and can produce different CIDs for the same drafts. Exact-byte
+deduplication is not domain-operation idempotency. Recover the stable operation first
 under [SQ §9.2](vault-sqlite.md#failure-and-recovery). Internal ingest, unlike a new
-commit, carries existing IDs and can deduplicate retries.
+commit, preserves the complete envelopes and can deduplicate retries.
 
 <a id="interchange"></a>
 
@@ -486,7 +548,7 @@ it outside that lock, in that order. Success still requires completed output.
 [SQ §§11–12](vault-sqlite.md#portable-source-validation) define stable-source
 validation and atomic same-anchor union. Validate source-only properties before
 taking the target lock; perform target-dependent checks under it. Apply
-canonical duplicate/conflict, own-author fork, known payload,
+CID validation/deduplication, own-author fork, known payload,
 [receipt-integrity](vault-events.md#message-in) and erasure rules. Every root
 retained by a newly accepted source event in the prospective union, and every
 root held by the union but not by the target before import, must have verified
@@ -537,7 +599,13 @@ browser support.
 
 ## 12. Versioning
 
-Vault version 3 covers envelope, object profile, key derivation and domain folds.
+Vault version 4 covers envelope, object profile, key derivation and domain folds.
+It adopts the five-field content-addressed event envelope and CID references,
+the continuity integration and durable application admission. DID/key derivation,
+deterministic domain-ID transcripts, the raw object profile and version-3 keystore
+wrapper remain as defined here; the version bump does not rename their purpose strings.
+The target runtime accepts only vault version 4 with SQLite schema version 2.
+No migration or import/restore compatibility with earlier vaults is required.
 SQLite schema versioning is separate. For published versions, compatible
 additions are new event types, optional payload fields with a fixed absent
 meaning, or negotiated capabilities. Changing existing
@@ -554,22 +622,35 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 
 ### Commit, validation and identity (ES-1–ES-7)
 
-1. <a id="es-1"></a> Append returns the six-field event under the local author and survives restart.
+1. <a id="es-1"></a> Append returns the five-field envelope plus its computed raw CID
+    under the local author and survives restart.
 2. <a id="es-2"></a> Pre-resolution crash leaves the whole event or none.
 3. <a id="es-3"></a> A batch and its new objects commit entirely, with one timestamp.
 4. <a id="es-4"></a> JCS-ineligible events fail before acceptance.
 5. <a id="es-5"></a> Different JSON spellings with equal canonical bytes ingest as duplicates.
-6. <a id="es-6"></a> Conflicting bytes for an accepted ID never overwrite its value.
-7. <a id="es-7"></a> Unseen or conflicting current-author input aborts the whole ingest.
+6. <a id="es-6"></a> Different canonical envelopes produce different events; equal
+    bytes ingest once in either order. A supplied CID for other bytes is rejected
+    before duplicate detection, even when that CID is already retained.
+7. <a id="es-7"></a> Unseen valid current-author input aborts the whole ingest;
+    identical retained events remain duplicates.
 
 <a id="folds-scans-and-interchange-es-8-es-16"></a>
 
 ### Folds, scans and interchange (ES-8–ES-16)
 
 8. <a id="es-8"></a> Shuffling/repartitioning events does not change folds.
-9. <a id="es-9"></a> Scans have canonical order regardless of physical order.
-10. <a id="es-10"></a> Event BLOBs round-trip exactly without LF and agree with indexed fields.
+9. <a id="es-9"></a> Scans have `(at, cid)` canonical order regardless of physical order;
+    memory and SQLite use CID text order even where decoded-byte order differs.
+    An exact CID filter yields at most one event, still conjoined with author,
+    type and data filters; a CID absent from the event set yields none, and an
+    invalid CID is rejected.
+10. <a id="es-10"></a> Event BLOBs contain only the five envelope fields, round-trip
+    exactly without LF, hash to their row CID and agree with indexed fields.
+    Acceptance, full portable validation and `damaged()` detect CID/bytes mismatch;
+    ordinary scans and deltas return stored CIDs without recomputing those hashes.
 11. <a id="es-11"></a> Deltas are complete for their cut and reject wrong-generation tokens.
+    Each new CID advances the token; exact-duplicate append or ingest allocates
+    no position. Object-only repair still invalidates dependent projections.
 12. <a id="es-12"></a> Full reconciliation needs no local token.
 13. <a id="es-13"></a> Portable values round-trip under the defined wrapper import policy.
 14. <a id="es-14"></a> Portable restore creates fresh local identity.
@@ -582,10 +663,15 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 
 17. <a id="es-17"></a> Timestamps have the exact UTC millisecond grammar and lexical time order.
 18. <a id="es-18"></a> Process durability is not presented as a power-loss guarantee.
-19. <a id="es-19"></a> A same-millisecond batch over 4096 events has distinct IDs and input-order results.
-20. <a id="es-20"></a> Clock rollback changes sampled `at`, not ID uniqueness or the batch timestamp rule.
-21. <a id="es-21"></a> UUID time and `at` are validated independently.
-22. <a id="es-22"></a> ID-generator failure commits no part of a batch.
+19. <a id="es-19"></a> A large same-millisecond batch has one timestamp
+    and one result per input in input order. Identical drafts return the same CID
+    and add one row/position; different envelopes remain distinct.
+20. <a id="es-20"></a> Clock rollback changes sampled `at`, not the batch timestamp
+    rule. If a repeated draft recreates a retained envelope, it deduplicates.
+21. <a id="es-21"></a> Event identity is the canonical envelope's raw CID, not a
+    UUID. Reject extra envelope fields, noncanonical CIDs and mismatched digests;
+    the author's UUID time is not compared with the event's `at`.
+22. <a id="es-22"></a> Canonicalization or hashing failure commits no part of a batch.
 
 <a id="import-collection-and-reader-protection-es-23-es-32"></a>
 
@@ -602,5 +688,5 @@ Storage procedures are tested under [SQLite conformance](vault-sqlite.md#require
 31. <a id="es-31"></a> Independent clients cannot bypass runtime ownership; a broker is optional.
 32. <a id="es-32"></a> Offline inspection excludes a later writer; separate immutable snapshots need no live owner.
     Portable inspection exposes the read-only `Vault` members, no local author,
-    and an empty `conflicting()` result. Every `commit` and `changes` call fails
+    and the complete CID-addressed event set. Every `commit` and `changes` call fails
     with `UnsupportedOperation` without consuming sources or minting local IDs.

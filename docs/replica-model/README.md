@@ -1,8 +1,16 @@
-# Estoc version 3 specification suite
+# Estoc version 4 specification suite
 
-Status: **implemented**. Phase 1 has one active writable full vault runtime, seven
+Status: **version-4 target specified, implementation pending**. Content-addressed
+events, continuity integration, durable application admission and strict rotation
+restrictions are not yet implemented; see
+[conformance status](conformance-status.md#rotation-admission-revision).
+Phase 1 has one active writable full vault runtime, seven
 specifications. SQLite is the sole persistent vault and portable interchange
 format. This guide is informative; linked specification sections define requirements.
+The target uses vault version 4 and SQLite schema 2, retaining the version-3
+seed wrapper and existing key/domain-ID derivation. Event identity and references
+use raw CIDs of five-field canonical envelopes.
+Identical envelopes are one event. No old-vault migration is required.
 
 <a id="model-overview"></a>
 
@@ -20,11 +28,17 @@ whose status remains visible.
 Operations use their own evidence and policy. One-use OOB consumption is
 recorded automatically, including on recovery, and is independent of other
 operations; many-use invitations have no exclusive consumer. Contacts organize
-selected channels with local names and preferences. Applications derive display
-data from retained message history under their protocol rules.
+selected channels with local names and preferences. Applications derive ordinary display
+data only from durably admitted message history under their protocol rules.
+Authenticated receipt and application admission are separate facts; ignored
+old-peer observations remain available as explicitly labelled diagnostics.
+Admission is required for new source-derived operations and application views.
+Existing rotation, consumption, outbound and submission records retain their
+own validity without it. A saved operation cannot supply missing admission for
+its source; see [application admission](channels.md#application-admission).
 
-An outbound fixes its channel at intent commit; rotation selects new messages
-only. Preparation commits one fixed package. Every transport call requires that
+An outbound fixes its channel at intent commit; rotation never retargets it
+and can prohibit its preparation or dispatch, including manual retries. Preparation commits one fixed package. Every transport call requires that
 package and a live initial/manual action. Recovery exposes pending work for manual
 action. Retry preserves the package; a different package or channel requires a
 new message ID. Peer ACKs record receipt independently of submission. See
@@ -39,7 +53,7 @@ permits at most one compatible intent per execution.
 | Storage | [Event store](event-store.md), [DASL objects](dasl-objects.md) | Event API, identity/order, object bytes and retention |
 | Persistence | [SQLite vault](vault-sqlite.md) | Schema, exclusive ownership, transactions and portable recovery |
 | Domain facts | [Vault events](vault-events.md) | Message, delivery, contact and local policy payloads/folds |
-| Communication authority | [Channels](channels.md), [Address/contact policy](relationships.md) | Fixed DID pairs, operation evidence, directed continuity, contact selections |
+| Communication authority | [Channels](channels.md), [Address/contact policy](relationships.md) | Fixed DID pairs, continuity adapter, operation/admission policy, contact selections |
 | Runtime | [Delivery](distributed-delivery.md) | Channel-local identity, ACK paths, fixed packaging and live dispatch actions |
 
 Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
@@ -48,8 +62,12 @@ The [`@estoc/continuity` package](../../packages/continuity/README.md)
 implements shared `from_prior` proof verification, creation and context
 binding alongside a pure continuity model. Its README defines the package
 inputs, queries, replica merge contract and host responsibilities. The
-package is not yet consumed by the vault and sits outside the current
-phase-1 contract.
+package owns proof and graph semantics in this target contract. The vault
+integration is specified in [channels](channels.md#continuity-integration) and
+is not yet implemented. Keep package semantics in its code, public contract and
+tests; app policy and storage integration belong in this suite. The package's
+[illustrated guide](../../packages/continuity/docs/guide.md) explains its queries
+and boundary cases. This app revision supports rotations only, not endings.
 
 <a id="reading-paths"></a>
 
@@ -60,6 +78,7 @@ phase-1 contract.
 | Understand the system | [Vault model](vault-events.md#model) → [channels and continuity](channels.md#model) → [address/contact policy](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
 | Implement storage | [DASL identity](dasl-objects.md#reading-guide) → [EventStore/Vault](event-store.md#reading-guide) → [SQLite](vault-sqlite.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas/folds](vault-events.md#reading-guide) → [procedures](vault-events.md#procedures) |
+| Integrate continuity | [Event identity](event-store.md#invariants) → [vault adapter](channels.md#continuity-integration) → [admission](channels.md#application-admission) → [implementation stages](conformance-status.md#continuity-integration-revision) |
 | Implement sending | [Send](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
 | Implement receiving | [Receive](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) → [receipt gates](relationships.md#uniform-receipt) → [evidence](vault-events.md#receipt-and-relationship-evidence) → [source evidence](distributed-delivery.md#address-chains-and-observation-membership) → [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
 | Back up or recover | [Recovery material](vault-sqlite.md#recovery-material-and-product-requirement) → [export](vault-sqlite.md#snapshot-and-export) → [restore/import](vault-sqlite.md#restore-and-import) → [unfinished receive work](distributed-delivery.md#receive-recovery) |
@@ -70,8 +89,8 @@ phase-1 contract.
 
 Change the defining section and align its consumers. ES owns event envelopes,
 DO owns raw objects/retention APIs and SQ owns SQLite lifecycle. CH owns channels,
-invitation/rotation/denial events, proof verification, the continuity fold and dispatch
-authority. VE owns contact selections, display payloads and the remaining
+invitation/rotation/denial events, the continuity adapter and dispatch authority.
+The continuity package owns proof verification and graph semantics. VE owns contact selections, display payloads and the remaining
 domain payloads/folds; DD owns runtime ordering and message/effect identity;
 RZ owns DID resolution and address/display policy.
 
@@ -82,11 +101,12 @@ RZ owns DID resolution and address/display policy.
 | Storage ownership and recovery | [SQ](vault-sqlite.md#ownership-and-lifecycle) | [VE open](vault-events.md#open-the-writable-full-runtime) |
 | Object identity and held roots | [DO](dasl-objects.md#accepted-dasl-cids), [VE retention](vault-events.md#held-roots) | [SQ objects](vault-sqlite.md#objects-and-streams) |
 | Channel pair and selectors | [CH identity](channels.md#channel-identity) | [VE vocabulary](vault-events.md#identifier-and-reference-vocabulary), [contact selection](vault-events.md#contact-channelsset) |
-| Proof evidence, derived links and joins | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
+| Proof verification, links, joins and query semantics | [Continuity package](../../packages/continuity/README.md) | [CH adapter](channels.md#continuity-integration) |
+| Source projection, admitted confirmation and query policy | [CH adapter](channels.md#continuity-integration) | [RZ rotation](relationships.md#peer-address-changes), [DD receive](distributed-delivery.md#receive-a-message) |
 | New-send head selection | [CH](channels.md#fixed-outbound-channel) | [VE contact fold](vault-events.md#contact-fold), [DD built-in replies](distributed-delivery.md#built-in-independent-operations), [RZ sending](relationships.md#ordinary-sending-and-birth-selection), [VE rotation](vault-events.md#rotate-a-local-relationship-address) |
 | Deferred-proof adapter boundary | [CH](channels.md#carried-proof-and-library-boundary) | [RZ wait/gate](relationships.md#uniform-receipt), [DD receipt](distributed-delivery.md#receive-a-message), [VE carrier](vault-events.md#message-in) |
 | Receipt verification status | [CH status](channels.md#verification-status) | [DD recovery](distributed-delivery.md#receive-recovery) |
-| Operation eligibility | [CH](channels.md#operation-eligibility) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
+| Durable application admission and operation eligibility | [CH](channels.md#application-admission) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
 | Fixed intent/package and manual dispatch | [CH](channels.md#fixed-outbound-channel) | [VE intent](vault-events.md#message-out), [package](vault-events.md#message-prepared), [DD send](distributed-delivery.md#send-an-ordinary-message) |
 | Inbound/execution IDs | [DD identity](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE execution](vault-events.md#inbound-message-and-execution-fold) |
 | Content/intent/plaintext normalization | [DD hashes](distributed-delivery.md#canonical-projections-and-hashes), [VE stored content](vault-events.md#stored-message-document) | [VE package](vault-events.md#message-prepared) |
