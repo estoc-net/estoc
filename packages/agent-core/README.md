@@ -62,8 +62,10 @@ off its turn, so the delivery behind it is received meanwhile.
 Evidence that arrives outside a receipt — the document a preparation
 resolves, an import the host tells the agent of — is reconciled when
 it arrives, admitting what waited for it and dispatching nothing:
-every preparation and every dispatch runs that pass under its lock,
-so a pass a refused commit cut short is completed by the next.
+a preparation runs that pass under its lock once the message has a
+package to send, made then or held already, and a dispatch prepares
+first, so a pass a refused commit cut short is completed by the next
+message that reaches that point.
 
 ## Usage
 

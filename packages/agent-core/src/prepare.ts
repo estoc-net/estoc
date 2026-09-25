@@ -167,7 +167,7 @@ export async function expireUnderLock(held: Held, messageId: MessageId, phase: "
   return { result: { outcome: "expired", messageId, failed: event as VaultEvent<"delivery.failed"> }, notes };
 }
 
-/** `prepare` for a caller that already holds the message's turn and the writer lock: the dispatch of a message the fold says needs a package first. */
+/** `prepare` for a caller that already holds the message's turn and the writer lock. */
 export async function prepareUnderLock(held: Held, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Settled<Prepared>> {
   const notes: Note[] = [];
   const fold = await scanVault(held, keys, scanOptions(options));
