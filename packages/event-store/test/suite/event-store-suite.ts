@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import {
   BadToken,
@@ -653,7 +653,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(refolded.order).toHaveLength(5);
     });
 
-    it("events of a retired replica are immutable history: a successor author ingests them, scans them under the old author, and appends as itself", async () => {
+    test("events of a retired replica are immutable history: a successor author ingests them, scans them under the old author, and appends as itself", async () => {
       const c = clock(T0);
       const retired = await open({ author: authorN(1), now: c.now });
       const history = await retired.appendAll([

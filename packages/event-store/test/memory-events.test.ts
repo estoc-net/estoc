@@ -98,7 +98,7 @@ describe("MemoryEventStore", () => {
     expect((await all(store.scan())).map((event) => event.data.n)).toEqual([1, 2, 3]);
   });
 
-  it("writes are serialised: interleaved appends and an ingest all land; appends in issue order, the ingest once it has read its input", async () => {
+  test("writes are serialised: interleaved appends and an ingest all land; appends in issue order, the ingest once it has read its input", async () => {
     const c = clock("2026-09-06T10:00:00.000Z");
     const store = new MemoryEventStore({ author: authorN(1), now: c.now });
     const other = new MemoryEventStore({ author: authorN(2), now: c.now });

@@ -85,11 +85,10 @@ describe("hashTree", () => {
     }
   });
 
-  test("a single-block file's CID equals the raw CID of its bytes — unchanged from the dag-json branch", async () => {
+  test("a single-block file's CID is the raw CID of its bytes, and its bytes are not duplicated into nodes", async () => {
     const tree = await hashTree(snapshot());
     const profileCid = await fileCid(utf8('{"name":"merely"}'));
     expect(tree.files.get(profileCid)).toBe("profile.json");
-    // and its bytes are not duplicated into nodes
     expect(tree.nodes.has(profileCid)).toBe(false);
   });
 

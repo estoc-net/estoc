@@ -1,6 +1,6 @@
 import { base32Encode } from "@estoc/dasl";
 import { sha256 } from "@noble/hashes/sha2";
-import { describe, expect, it, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import {
   DamagedObject,
@@ -189,7 +189,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await all(store.list())).toEqual([HELLO_CID]); // nothing accepted, nothing unlinked
       });
 
-      it("bytes that do not hash to the CID given — one byte changed, one missing, one extra — are refused with no object exposed", async () => {
+      test("bytes that do not hash to the CID given — one byte changed, one missing, one extra — are refused with no object exposed", async () => {
         const bytes = bytesOf(5_000, 2);
         const want = cidOf(bytes);
         const changed = bytes.slice();
