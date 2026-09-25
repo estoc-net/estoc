@@ -668,7 +668,7 @@ messageId = UUIDv5(
 )
 ```
 
-Keys and source event IDs remain exact authentication evidence. Different
+Keys and source event CIDs remain exact authentication evidence. Different
 authorized keys in the same immutable DID document can represent the same
 channel input; selected key differences create no new deduplication scope.
 Opposite sender directions cannot collide merely by choosing the same wire ID.
@@ -850,7 +850,7 @@ eligibility. It uses type `https://didcomm.org/trust-ping/2.0/ping-response`,
 empty body/attachments/headers, `ack == []` and `pleaseAck == null`. An expired
 Ping cannot start a new reply. It is independent of an ACK requested by that Ping.
 
-A rotation notification names the exact `rotationEventId` in its intent. It
+A rotation notification names the exact `rotationEventCid` in its intent. It
 uses the decision's trigger source for its execution, not a later input that
 discovers unfinished notification work. Its type is `https://didcomm.org/empty/1.0/empty`,
 body/attachments/headers are empty, `ack == []`, `pleaseAck == [""]`, expiry is
@@ -867,7 +867,7 @@ Empty/ACK-request/expiry rules. Under the operation lock, reuse an existing
 notification for that rotation decision before allocating its message ID.
 Different selected notification IDs for one rotation decision conflict for
 notification work; neither new triggers nor retries may create another selection.
-Its source/effect fields are null, while `rotationEventId` remains present.
+Its source/effect fields are null, while `rotationEventCid` remains present.
 In either case, notification recovery reuses the rotation; it never allocates
 another successor. A missing notification is manual work only while its source,
 when present, remains eligible under [channels.md](channels.md#operation-eligibility).
@@ -941,7 +941,7 @@ Pairwise DIDs SHOULD be disclosed only in encrypted messages and use
 Peer DID long form on first disclosure.
 
 Pure ACKs reveal durable receipt timing to the ultimate peer. Implementations
-SHOULD NOT encode contact names, replica labels, event IDs or content in peer-
+SHOULD NOT encode contact names, replica labels, event CIDs or content in peer-
 or mediator-visible IDs.
 
 <a id="required-conformance-cases"></a>

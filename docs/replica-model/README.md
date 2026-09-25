@@ -1,14 +1,16 @@
 # Estoc version 4 specification suite
 
-Status: **version-4 target specified, implementation pending**. Portable source
-variants, continuity integration, durable application admission and strict rotation
+Status: **version-4 target specified, implementation pending**. Content-addressed
+events, continuity integration, durable application admission and strict rotation
 restrictions are not yet implemented; see
 [conformance status](conformance-status.md#rotation-admission-revision).
 Phase 1 has one active writable full vault runtime, seven
 specifications. SQLite is the sole persistent vault and portable interchange
 format. This guide is informative; linked specification sections define requirements.
 The target uses vault version 4 and SQLite schema 2, retaining the version-3
-seed wrapper and existing key/ID derivation. No old-vault migration is required.
+seed wrapper and existing key/domain-ID derivation. Event identity and references
+use raw CIDs of five-field canonical envelopes, with no event UUID or nonce.
+Identical envelopes are one event. No old-vault migration is required.
 
 <a id="model-overview"></a>
 
@@ -76,7 +78,7 @@ and boundary cases. This app revision supports rotations only, not endings.
 | Understand the system | [Vault model](vault-events.md#model) → [channels and continuity](channels.md#model) → [address/contact policy](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
 | Implement storage | [DASL identity](dasl-objects.md#reading-guide) → [EventStore/Vault](event-store.md#reading-guide) → [SQLite](vault-sqlite.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas/folds](vault-events.md#reading-guide) → [procedures](vault-events.md#procedures) |
-| Integrate continuity | [Source variants](event-store.md#invariants) → [vault adapter](channels.md#continuity-integration) → [admission](channels.md#application-admission) → [implementation stages](conformance-status.md#continuity-integration-revision) |
+| Integrate continuity | [Event identity](event-store.md#invariants) → [vault adapter](channels.md#continuity-integration) → [admission](channels.md#application-admission) → [implementation stages](conformance-status.md#continuity-integration-revision) |
 | Implement sending | [Send](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
 | Implement receiving | [Receive](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) → [receipt gates](relationships.md#uniform-receipt) → [evidence](vault-events.md#receipt-and-relationship-evidence) → [source evidence](distributed-delivery.md#address-chains-and-observation-membership) → [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
 | Back up or recover | [Recovery material](vault-sqlite.md#recovery-material-and-product-requirement) → [export](vault-sqlite.md#snapshot-and-export) → [restore/import](vault-sqlite.md#restore-and-import) → [unfinished receive work](distributed-delivery.md#receive-recovery) |

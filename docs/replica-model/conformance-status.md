@@ -33,29 +33,42 @@ specification-only revision.
 
 <a id="continuity-integration-revision"></a>
 
-## Pending continuity integration and source preservation — 2026-09-24
+## Pending content-addressed events and continuity integration — 2026-09-25
 
 The target now uses vault version 4 / SQLite schema 2 and consumes
 `@estoc/continuity` through the vault. Its package is available, but the storage,
 adapter and application changes below are **not implemented**. The version-3
-seed wrapper, DID/key derivation and deterministic ID transcripts stay unchanged.
+seed wrapper, DID/key derivation and deterministic domain-ID transcripts stay unchanged.
+Events now use five-field canonical envelopes and raw CIDs, with no event UUID
+or nonce; typed references use `*EventCid` fields. Equal envelopes deduplicate
+even within one local batch. The existing UUID implementation does not implement
+this format, and baseline test evidence does not establish CID reference validation.
 Earlier vaults need no migration. Documentation checks do not verify runtime
 behavior, and the package's own tests do not establish host conformance.
 
 | Cases | Status after this revision | Remaining work |
 | --- | --- | --- |
-| ES-6, ES-9, ES-11, ES-32 | `partial` | Preserve and scan all canonical variants, deterministic tie-break, variant deltas and portable conflicts |
-| ES-33; SQ-41–SQ-42 | `missing` | Source ambiguity despite filters, atomic variant/object publication, collision retention and portable round trips |
-| SQ-11, SQ-14, SQ-29, SQ-35, SQ-36 | `partial` | Composite event/position keys and source/target variant union with complete root preflight |
+| ES-1, ES-6, ES-9, ES-10, ES-19, ES-21 | `missing` | Five-field CID identity, digest validation, text-CID order and duplicate local-batch results |
+| ES-7, ES-11, ES-20, ES-22, ES-32 | `partial` | Adapt author preflight, frontiers, rollback/failure handling and portable inspection to CID events |
+| SQ-10–SQ-12, SQ-14, SQ-29, SQ-35, SQ-36 | `partial` | CID event/position keys, verified CID/envelope round trips, exact-byte deduplication and complete root preflight |
+| VE-37, VE-90, VE-95, VE-111, VE-152; CH-41 | `partial` | Replace UUID event references with validated typed CIDs in schemas, producers and consumers |
+| VE-52 | `partial` | Verify permanent erase coverage across distinct imported event CIDs without reviving the erased relation |
 | DD-34; VE-39 | `partial` | Shared proof verification and canonical received binding; retain local producer spelling constraints |
-| CH-67–CH-79 | `missing` | Vault adapter, admitted confirmation, explicit query policy, source faults, ordered admission, revision checks, strict dispatch and app views |
+| CH-67, CH-69–CH-79 | `missing` | CID-derived fact/evidence references, admitted confirmation, default first-contact candidates, ordered admission, revision checks, strict dispatch and app views |
+
+ES-33, SQ-41, SQ-42 and CH-68 are withdrawn: they required multiple canonical
+values under one event UUID. Their IDs are not reused. Distinct events with
+conflicting domain facts remain covered by the domain and import cases.
+Endings are unsupported in phase 1: CH-78 covers diagnostics, not a
+relationship-ended state. Adopting endings needs a separate application-policy,
+event and UI revision; none of the stages below enables them implicitly.
 
 Implement in this order; each stage needs its own integration evidence before
 its status is promoted:
 
 | Stage | Deliverable | Completion evidence |
 | --- | --- | --- |
-| 1 | Event-store and SQLite variant inventory | Opposite import orders, cache clearing, export/restore and crash preserve every source variant and its held objects; reject old formats |
+| 1 | CID-addressed event store and SQLite schema | Five-field hash vectors, duplicate append/batch/deltas, matching text order, exact reference identity, import/export/restore and atomic event/object publication; reject old formats |
 | 2 | Vault dependency, proof adapter and complete fact projection | Stable IDs, same-receipt binding, issuer/profile boundaries including document-independent rejection, joins, unconfirmed decisions and source conflicts; replace the old graph/parser |
 | 3 | Admission schema/fold and agent-core reconciliation | Ordered contradictory candidates, receipt/admission crashes, uncertain commit, shared direct/pickup sequence and revision-change rechecks |
 | 4 | Admitted witnesses and shared send policy | Historical decisions rebuild; new confirmation needs an admitted observation; same/cross-channel ACK rules and both endpoint gates cover every dispatch path |
@@ -68,19 +81,19 @@ its status is promoted:
 Apply these criteria during the stages above. They guide implementation and
 review; they add no portable fields, query semantics or required package layout.
 
-- Model source storage as one inventory of canonical variants. Derive conflicts
-  from that inventory, replacing the separate accepted-value/rejected-history
-  machinery. Centralize exact reference resolution so consumers do not repeat
-  variant selection and ambiguity checks.
-- Evaluate a small pure record-set core for event-store and continuity, covering
-  canonical-value union and missing/unique/conflicting lookup. Extract a shared
-  package only if both can use it without domain-specific switches or bringing
-  storage dependencies into continuity. Otherwise prefer small internal modules.
+- Model event storage as one set keyed by verified content CID. Remove the
+  accepted-value/rejected-history and same-ID variant machinery. Centralize
+  typed CID reference resolution and domain prerequisite checks.
+- Keep event-set union small. Continuity supports fact-ID variants for generic
+  hosts, while the vault's event CIDs identify exact bytes; do not add a generic
+  conflict collection solely to share an abstraction between the two. Extract a
+  shared package only for an actual common contract without domain-specific
+  switches or storage dependencies in continuity. Otherwise prefer internal modules.
   Source inventories and derived fact projections retain their different
   lifecycles: sharing collection code does not make cached projections permanent.
 - Keep source validation, continuity adaptation and admission in distinct vault
   modules. Compose their results into operation eligibility and diagnostics;
-  daemon/app consumers should not reproduce proof, variant or revision checks.
+  daemon/app consumers should not reproduce proof, reference or revision checks.
   Keep admission local to vault until a separate package has a useful independent
   contract; do not introduce a generic policy framework solely to move it out.
 - Each implementation review should identify which old states, branches and
@@ -95,8 +108,8 @@ that change. Module names and extraction choices belong to the implementation.
 The following summary and detailed rows are the **2026-09-21 baseline**. Their
 counts exclude all subsequently added cases, and their old evidence does not
 verify revised clauses. Both revision tables above override baseline status for
-listed cases. Reassess every storage/fold consumer for the complete variant
-inventory and every application consumer for admission before claiming version-4
+listed cases. Reassess every storage/fold consumer for CID event identity and
+exact references, and every application consumer for admission before claiming version-4
 conformance; unchanged test titles alone are not evidence of either prerequisite.
 
 ## Baseline summary

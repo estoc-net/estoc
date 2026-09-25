@@ -191,7 +191,7 @@ account-local insertion sequence
 server timestamps
 ```
 
-It MUST NOT be told the plaintext object kind, event ID, extension ID or DASL
+It MUST NOT be told the plaintext object kind, event CID, extension ID or DASL
 CID. The fixed encrypted-container framing reveals a protocol version and
 approximately the same length information already revealed by ciphertext
 size; it does not reveal the plaintext frame header.
@@ -257,17 +257,16 @@ Header:
 {
   "kind": "event",
   "store": "vault",
-  "eventId": "019b1b61-1ff1-74d7-a3d6-c493db8e5032",
-  "sha256": "k3sU...base64url..."
+  "cid": "bafkreifn5yxi7nkftsn46b6x26grda57ict7md2xuvfbsgkiahe2e7vnq4"
 }
 ```
 
 `store` is either `vault` or `extension:<uuidv7>`. Payload is the exact RFC
-8785 canonical UTF-8 event JSON. `sha256` is the unpadded base64url SHA-256 of
-that payload.
+8785 canonical UTF-8 five-field event envelope, without its derived CID.
 
-The client MUST validate the event envelope, require its `eventId` to equal the
-header, and require the payload hash to match before ingest.
+The client MUST validate the event envelope and the header's canonical raw CID,
+and verify that the exact payload hashes to that CID before ingest. The local
+API record combines this envelope with the verified CID.
 
 <a id="dasl-object"></a>
 
@@ -305,20 +304,19 @@ root:
 
 event:
   HMAC(K_index,
-       UTF8("event\0" + store + "\0" + eventId + "\0") || SHA256(payload))
+       UTF8("event\0" + store + "\0") || binary_event_cid)
 
 DASL object:
   HMAC(K_index, UTF8("object\0") || binary_dasl_cid)
 ```
 
-Each `\0` is one zero byte. `store` and `eventId` are encoded as UTF-8 exactly as
-serialized in the frame header. `binary_dasl_cid` is the exact 36-byte decoded
-DASL CID, not its string form.
+Each `\0` is one zero byte. `store` is encoded as UTF-8 exactly as serialized in
+the frame header. `binary_event_cid` and `binary_dasl_cid` are the exact 36-byte
+decoded raw DASL CIDs, not their string forms.
 
-Including the event payload hash permits two conflicting contents under one
-`eventId` to coexist as different opaque server objects so clients can report the
-event-store conflict instead of having the server choose one. A DASL CID
-already commits to its object payload.
+An event CID commits to its canonical envelope; an object CID commits to its
+object payload. Different event envelopes have distinct identities under the
+hash profile and equal envelopes share one sync object within their store.
 
 The server treats object IDs as opaque strings and MUST enforce canonical
 unpadded base64url.
@@ -1356,13 +1354,13 @@ server descriptor or accept bytes without `ObjectStore.putObject` verification.
 
 <a id="event-conflicts"></a>
 
-### 13.4 Event conflicts
+### 13.4 Event integrity and domain conflicts
 
-Two decrypted event objects with the same `eventId` and different event
-content are an integrity conflict, not an ordinary concurrent decision.
-A client MUST surface the conflict and MUST NOT claim full convergence.
-It MAY quarantine the incoming object. Automatic first-wins resolution
-across replicas is forbidden because arrival order differs.
+A decrypted envelope that does not hash to its declared CID is invalid input
+and MUST NOT be ingested. Equal verified envelopes deduplicate by CID;
+different valid envelopes remain separate events even if their domain facts
+conflict. Domain folds expose those conflicts without selecting an arrival-order
+winner. CID verification does not authenticate who supplied the history.
 
 <a id="bootstrap-and-recovery"></a>
 
@@ -1536,7 +1534,7 @@ The sync store can observe:
 - account totals; and
 - network metadata.
 
-It MUST NOT receive plaintext object kinds, event IDs, CIDs, event types,
+It MUST NOT receive plaintext object kinds, event CIDs, object CIDs, event types,
 message bodies, contacts, key names or extension IDs.
 
 Opaque IDs are deterministic within one vault and therefore reveal
@@ -1628,8 +1626,9 @@ MUST NOT disclose another account's object existence.
 12. <a id="vs-12"></a> A large whole-resource raw object is uploaded, range-classified,
     downloaded, decrypted and verified with bounded memory and without any
     portable chunk CID.
-13. <a id="vs-13"></a> Concurrent offline event sets converge after exchange; the same `eventId`
-    with different RFC 8785 canonical event bytes is an integrity conflict.
+13. <a id="vs-13"></a> Event sets converge by verified CID after exchange; exact
+    canonical duplicates occur once, CID/bytes mismatches are rejected, and
+    distinct events with conflicting domain facts remain available to the fold.
 
 <a id="bootstrap-admission-and-privacy-vs-14-vs-17"></a>
 

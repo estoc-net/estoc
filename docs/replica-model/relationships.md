@@ -387,7 +387,7 @@ Before the first channel package is submitted, its sender MUST durably retain:
 - the exact RFC 8785 canonical resolved DID document under its raw DASL CID;
 - the document's authorized authentication and key-agreement method lists;
 - the selected peer key under `peer.resolved.peerPublicKey`; and
-- the resolution event ID.
+- the resolution event CID.
 
 These are immutable operation snapshots, not a permanent channel key set.
 The exact envelope identifies the selected recipient `kid`; it must name an
@@ -490,8 +490,11 @@ equivalent issuer/`kid` DID spellings and subject/sender spellings. Preserve
 document-independent rejection separately from missing material: malformed
 claims, unsupported profile headers and `exp`/`nbf`, or a mismatched canonical
 subject are invalid even without an issuer document. `inspectFromPrior` locates
-material but does not establish profile validity. Keep any required precheck
-extension in the package, without a second parser in the runtime. Decoding
+material and already rejects `exp`, `nbf`, non-integer `iat` and invalid
+`b64`/`crit` use. It still lacks the document-independent precheck of `alg`,
+optional `typ`, canonical equivalence of the DID in `kid` with `iss`, distinct
+canonical `sub` and `iss`, and canonical `sub` against the authenticated sender.
+Keep that precheck extension in the package, without a second parser in the runtime. Decoding
 supplies no signature or channel authority.
 
 Resolve a long-form issuer locally from its validated encoded document using
