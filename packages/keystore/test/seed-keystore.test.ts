@@ -87,7 +87,7 @@ describe("seed keystore", () => {
     expect(reopened.name).toBe("anchor");
   });
 
-  it("wrong passphrase fails without leaking jose internals; passphrase change works", async () => {
+  it("fails a wrong passphrase without leaking jose internals; a changed passphrase unlocks the same seed and the old one no longer does", async () => {
     const { doc, seedKey } = await createSeedKeystore("right");
     await expect(unlockSeedKeystore(doc, "wrong")).rejects.toThrow(/wrong passphrase/);
     const changed = await changeSeedPassphrase(doc, "right", "newer");

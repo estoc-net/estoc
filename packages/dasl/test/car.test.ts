@@ -78,7 +78,7 @@ describe("DASL CAR", () => {
     await expect(decodeCar(short)).rejects.toThrow(/shorter than a CID/);
   });
 
-  it("many roots, an empty roots array, big sections; a repeated CID is kept once", async () => {
+  it("round-trips many roots, no roots and a big section, and keeps a repeated CID once", async () => {
     const big = new Uint8Array(300_000).fill(7);
     const cid = await rawCid(big);
     const other = await rawCid(utf8("o"));

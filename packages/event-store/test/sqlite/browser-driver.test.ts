@@ -186,7 +186,7 @@ describe.skipIf(outcome === undefined)("sqlite-wasm driver (in a Chromium Worker
 
   describe("the conformance suites over the pool", () => {
     for (const suite of SUITES) {
-      it(`${suite}: collected`, () => {
+      it(`collects results of the ${suite} suite from the browser`, () => {
         expect(suites.filter((result) => result.name.startsWith(suite)).length).toBeGreaterThan(0);
       });
     }

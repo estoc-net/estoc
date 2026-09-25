@@ -116,7 +116,7 @@ describe("a snapshot inspected", () => {
 });
 
 describe("in memory", () => {
-  it("a private database works the same, for tests", async () => {
+  it("makes and folds a vault on a private in-memory database", async () => {
     const made = await freshVault(3, "Carol", memoryDriver());
     expect(made.fold.label).toBe("Carol");
     await made.runtime.close();

@@ -44,7 +44,7 @@ describe("codec", () => {
     }
   });
 
-  it("handles big byte arrays", () => {
+  it("round-trips a large byte array", () => {
     const big = new Uint8Array(300_000).map((_, i) => i % 251);
     expect(decode(encode({ big }))).toEqual({ big });
   });

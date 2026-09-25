@@ -291,7 +291,7 @@ describe("strict parsing", () => {
     expect(() => parseStrict("[".repeat(MAX_DEPTH) + "]".repeat(MAX_DEPTH))).not.toThrow();
   });
 
-  it("says where", () => {
+  it("reports the offset of the error, and the name of a duplicated member", () => {
     expect(() => parseStrict('{"a":1,"a":2}')).toThrow(/duplicate member "a" at offset 7/);
     expect(() => parseStrict("[1 2]")).toThrow(/at offset 3/);
   });

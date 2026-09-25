@@ -24,7 +24,7 @@ describe("DRISL encode — RFC 8949 Appendix A vectors that DRISL keeps", () => 
     [["a", { b: "c" }], "826161a161626163"],
   ];
   for (const [value, expected] of vectors) {
-    it(`${JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v))} → ${expected}`, () => {
+    it(`encodes ${JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v))} as ${expected} and decodes it back`, () => {
       expect(hex(encodeDrisl(value as never))).toBe(expected);
       const back = decodeDrisl(bytes(expected));
       expect(back).toEqual(value);
@@ -139,11 +139,10 @@ describe("DRISL agrees with @ipld/dag-cbor (cborg) on the values a manifest is m
     [{ "水": "𐅑", "aa": "", "b": "ü" }, { "水": "𐅑", "aa": "", "b": "ü" }],
   ];
   for (const [ours, theirs] of samples) {
-    it(`byte-identical: ${JSON.stringify(theirs).slice(0, 60)}`, () => {
+    it(`encodes ${JSON.stringify(theirs).slice(0, 60)} to dag-cbor's bytes, and each decodes the other's`, () => {
       const a = encodeDrisl(ours as never);
       const b = dagCbor.encode(theirs);
       expect(hex(a)).toBe(hex(b));
-      // and each decodes the other's bytes
       expect(() => decodeDrisl(b)).not.toThrow();
       expect(() => dagCbor.decode(a)).not.toThrow();
     });
@@ -151,7 +150,7 @@ describe("DRISL agrees with @ipld/dag-cbor (cborg) on the values a manifest is m
 });
 
 describe("DRISL agrees with @atcute/cbor (the AT Protocol's DASL codec)", () => {
-  it("byte-identical manifest, and each decodes the other's bytes", async () => {
+  it("encodes a manifest to @atcute/cbor's bytes, and each decodes the other's", async () => {
     const atcute = await import("@atcute/cbor");
     const atcid = await import("@atcute/cid");
     const ours = encodeDrisl({ resources: { "/index.json": { src: new Link(parseCid(RAW)), size: 272 }, "/files/a.png": { src: new Link(parseCid(RAW)), size: 5 } } });

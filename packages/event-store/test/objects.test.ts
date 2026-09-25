@@ -25,7 +25,7 @@ async function collect(source: AsyncIterable<Uint8Array>): Promise<Uint8Array[]>
 }
 
 describe("raw CIDs", () => {
-  it("the vectors — from a digest, and back to the digest", () => {
+  it("encodes known digests as their CIDs and parses a CID back to its codec, digest and bytes", () => {
     expect(rawCidFromDigest(sha256(new Uint8Array(0))).text).toBe(EMPTY_CID);
     expect(rawCidFromDigest(sha256(HELLO)).text).toBe(HELLO_CID);
     const parsed = rawCidOf(HELLO_CID);

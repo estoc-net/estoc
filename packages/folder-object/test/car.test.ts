@@ -71,7 +71,7 @@ describe("CAR", () => {
     expect(await decodeCar(backing.subarray(5, 5 + car.length))).toEqual(await decodeCar(car));
   });
 
-  it("handles many roots and big sections", async () => {
+  it("round-trips many roots and a big section", async () => {
     const big = new Uint8Array(300_000).fill(7);
     const cid = await fileCid(big);
     const other = await fileCid(utf8("o"));

@@ -119,7 +119,7 @@ describe("inboundMessageId and executionId", () => {
 });
 
 describe("effectKey and automaticMessageId", () => {
-  it("the pure ACK of the delivery fixture", () => {
+  it("give the delivery fixture's pure ACK its published key and message ID", () => {
     const key = effectKey(ACK_EXECUTION, PURE_ACK);
     expect(key).toBe("Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20");
     expect(automaticMessageId(key)).toBe("3543ac01-4ac6-5c14-b160-4f8f4e2e6811");

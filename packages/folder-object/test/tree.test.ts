@@ -497,7 +497,7 @@ describe("resolvePath", () => {
 describe("golden vectors", () => {
   // Pinned outputs: if a dependency upgrade ever changes the encoding,
   // these fail loudly instead of silently re-rooting every tree.
-  it("root CID of a fixed snapshot — cross-checked against kubo", async () => {
+  it("gives a fixed snapshot the root CID kubo computes", async () => {
     // Independently reproduced with kubo 0.43.0:
     //   ipfs config profile apply unixfs-v1-2025
     //   ipfs add -r -Q --offline fixture/     (same two files)
@@ -511,7 +511,7 @@ describe("golden vectors", () => {
     );
   });
 
-  it("empty directories — cross-checked against kubo", async () => {
+  it("gives empty directories, alone and nested, the CIDs kubo computes", async () => {
     // kubo 0.43.0, unixfs-v1-2025 profile applied, ipfs add -r -Q --offline:
     //   empty/                            → bafybeiczss…f354 (EMPTY_DIR)
     //   h/hollow/                         → bafybeifqql…2p4q
@@ -530,7 +530,7 @@ describe("golden vectors", () => {
     ).toBe("bafybeiheomt3ohnbhxepizovx2txgbsvgd6hdfimwxfkatiobqznug5g2e");
   });
 
-  it("chunked file root CID — cross-checked against kubo", async () => {
+  it("gives a chunked file the root CID kubo computes", async () => {
     // Same 2 MiB + 7 B pattern file through kubo 0.43.0 with the
     // unixfs-v1-2025 profile applied: ipfs add -Q --offline big.bin
     const tree = await hashTree({ "big.bin": bigFile(2) });

@@ -8,7 +8,7 @@ const utf8 = (s: string) => new TextEncoder().encode(s);
 describe("base32 lower (RFC 4648, no padding)", () => {
   const vectors: [string, string][] = [["", ""], ["f", "my"], ["fo", "mzxq"], ["foo", "mzxw6"], ["foob", "mzxw6yq"], ["fooba", "mzxw6ytb"], ["foobar", "mzxw6ytboi"]];
   for (const [input, expected] of vectors) {
-    it(`${JSON.stringify(input)} ↔ ${expected}`, () => {
+    it(`encodes ${JSON.stringify(input)} as ${expected} and decodes it back`, () => {
       expect(base32Encode(utf8(input))).toBe(expected);
       expect(new TextDecoder().decode(base32Decode(expected))).toBe(input);
     });
