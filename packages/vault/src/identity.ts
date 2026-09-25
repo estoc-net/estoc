@@ -13,9 +13,10 @@
 import type { JsonObject, WrappedSeed } from "@estoc/event-store";
 import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import { deriveIdentity, unlockSeedKeystore, type SeedKey } from "@estoc/keystore";
+import { ed25519 } from "@noble/curves/ed25519";
 import { base64urlnopad } from "@scure/base";
 
-import { IdentityMismatch, Locked } from "./errors.js";
+import { IdentityMismatch, InvalidPublicKey, Locked } from "./errors.js";
 import { ANCHOR_KEY_NAME, didKeyName, mediationKeyName } from "./ids.js";
 import { authorizedMethodIds, didcommServiceUris, methodPublicKey, peerResolution, splitDidUrl, type PeerResolution } from "./peer-document.js";
 import { canonicalPublicKey } from "./public-key.js";
@@ -33,6 +34,8 @@ export interface LocalKey {
   publicKeyBytes(): Uint8Array;
   /** A fresh copy each call, for a library that runs its own crypto. */
   privateJwk(): OkpPrivateJwk;
+  /** The Ed25519 signature over the bytes; an X25519 key signs nothing. */
+  sign(data: Uint8Array): Promise<Uint8Array>;
 }
 
 /** The two keys of a communication-DID entity, or the two keys a mediation arrangement's one name derives. */
@@ -45,6 +48,10 @@ function localKey(name: KeyName, type: "Ed25519" | "X25519", publicKey: Uint8Arr
     publicKey: canonicalPublicKey({ kty: "OKP", crv: type, x: base64urlnopad.encode(publicKey) }),
     publicKeyBytes: () => publicKey.slice(),
     privateJwk: () => ({ kty: "OKP", crv: type, x: base64urlnopad.encode(publicKey), d: base64urlnopad.encode(privateKey) }),
+    sign: async (data) => {
+      if (type !== "Ed25519") throw new InvalidPublicKey(`${name} is an X25519 key, which signs nothing`);
+      return ed25519.sign(data, privateKey);
+    },
   };
 }
 

@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- **Continuity is derived by `@estoc/continuity`.** The vault projects
+  its evidence into the package's facts (`projectFacts`) under IDs every
+  replica derives from the event CIDs — `receipt:<cid>:observation`,
+  `receipt:<cid>:transition`, `decision:<cid>`, with the event CIDs as
+  evidence references — and `foldContinuity` derives the one model with
+  `deriveContinuity`. `Continuity` exposes it as `model` and keeps the
+  host queries over it: `status`, `witness`, `conflicted`, `superseded`,
+  `head`, `confirmed`, `ackPath`, `blocked`, `decisionsIn`; `conflicts`
+  are the package's, each with the channels its scope reaches
+  (`ScopedConflict`). Gone: `links`, `unconfirmed`, `ContinuityLink`,
+  `Replaced`, `PeerLink`, `LocalLink`, the vault's own `Conflict`,
+  `Components`; `Carrier.link` is `Carrier.facts`, the two facts a bound
+  proof establishes, and a candidate decision carries its `fact`.
+- **`from_prior` is parsed, prechecked, verified, bound and created by
+  `@estoc/continuity/from-prior`.** `fromPriorClaims`, `carriedClaims`,
+  `verifyFromPrior`, `verifyLocalProof`, `issuerDocumentOf`,
+  `FROM_PRIOR_ALG` and the vault's `InvalidFromPrior` are gone;
+  `signFromPrior` stays and signs through `createFromPrior` with the
+  entity's key (`LocalKey.sign`), `issuerLongFormOf` replaces
+  `issuerDocumentOf`, and `ProofCheck` — the verified proof, or why it
+  is refused — replaces the yes/no proof check. DID spellings compare
+  by validated equivalence wherever the profile does: a short-form
+  `sub` for a long-form sender and a short-form `kid` for a long-form
+  `iss` verify; `typ` may be absent, `JWT` or `application/jwt` in any
+  case; what the profile refuses without a document — the `alg`, the
+  `typ`, a `kid` of another DID, a `sub` equal to `iss` or unequal to
+  the sender, `exp`/`nbf` — is invalid at once.
+- **An ending is `unsupported`**, a new `Proof` and `Status` variant:
+  retained, applied to nothing, no fact.
+- A carried proof's issuer is compared with the local DID by did:peer:4
+  spelling alone, as the profile already validated it; the vault's
+  document validator no longer runs on it. A hash-valid issuer whose
+  document the vault would refuse to retain used to throw out of the
+  fold, and one such receipt, once recorded or imported, stopped every
+  later scan.
+- **Heads follow the model** (behaviour change): a channel no fact
+  mentions is its own head; one a saved rotation leaves has no head
+  until the peer confirms the predecessor and never falls back to the
+  old pair; a fork or a cycle ahead of a channel makes it `conflicted`,
+  so a send or automatic work there is refused rather than left
+  headless. A proof-free receipt is a complete witness on its own
+  authentication even in a conflicted context.
+
 - **Event references are CIDs.** Every payload field that named an
   event by UUID names it by its event CID and is renamed for it:
   `sourceEventCid`, `rotationEventCid`, `peerResolutionEventCid`,

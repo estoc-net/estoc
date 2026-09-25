@@ -22,7 +22,17 @@ const hello = (content: string) => ({ type: BASIC_MESSAGE, body: { content } });
 
 const didOf = (fold: VaultFold, didId: DidId): Did => fold.routes.dids.get(didId)!.created!.did;
 
-const links = (fold: VaultFold): string[][] => fold.continuity.links.map((link) => [channelKey(link.from), channelKey(link.to), link.replaces, String(link.verified)]);
+/** Every link of the positive history, from every pair a fact mentions, as comparable rows: from, to, the side replaced, whether it is usable. */
+const links = (fold: VaultFold): string[][] => {
+  const rows = new Map<string, string[]>();
+  for (const fact of fold.continuity.facts) {
+    for (const link of fold.continuity.model.history(fact.at).links) {
+      const row = [channelKey(link.from as Channel), channelKey(link.to as Channel), link.replaces, String(link.usable)];
+      rows.set(`${row[0]} ${row[1]}`, row);
+    }
+  }
+  return [...rows.values()].sort();
+};
 
 const packageOf = (output: Outbound) => output.package!.event.data;
 

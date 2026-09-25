@@ -402,6 +402,9 @@ importers:
 
   packages/vault:
     dependencies:
+      '@estoc/continuity':
+        specifier: workspace:^
+        version: link:../continuity
       '@estoc/did-peer':
         specifier: workspace:^
         version: link:../did-peer
@@ -423,9 +426,6 @@ importers:
       ipaddr.js:
         specifier: ^2.5.0
         version: 2.5.0
-      jose:
-        specifier: ^6.0.0
-        version: 6.2.9
       multiformats:
         specifier: ^14.0.5
         version: 14.0.5
@@ -436,6 +436,9 @@ importers:
       '@types/node':
         specifier: ^26.6.2
         version: 26.6.2
+      jose:
+        specifier: ^6.0.0
+        version: 6.2.9
       typescript:
         specifier: ~5.8.0
         version: 5.8.3

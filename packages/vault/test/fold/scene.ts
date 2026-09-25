@@ -5,6 +5,7 @@
  * side signs, rotation decisions, intents and packages between them,
  * so a fold over messages can be set up in a few lines.
  */
+import type { ContinuityFact } from "@estoc/continuity";
 import { encodeLongForm } from "@estoc/did-peer";
 import type { Event, JsonObject } from "@estoc/event-store";
 import { v7 as uuidv7 } from "uuid";
@@ -176,6 +177,14 @@ export const IAT = 1_757_700_000;
 export const proof = (keys: Keys, predecessor: { didId: DidId; longFormDid: Did }, successor: { longFormDid: Did }, iat = IAT) => signFromPrior(keys, predecessor, successor.longFormDid, iat);
 
 export const channel = (local: { did: Did }, peer: { did: Did }): Channel => channelOf(local.did, peer.did);
+
+/** The two facts a carrier's bound proof establishes: the peer's transition at the predecessor pair and the successor's observation, both of this receipt. */
+export function factsOf(carrier: VaultEvent<"message.in">, local: { did: Did }, predecessor: { did: Did }, successor: { did: Did }): ContinuityFact[] {
+  return [
+    { kind: "peer-transition", id: `receipt:${carrier.cid}:transition`, at: channel(local, predecessor), change: { kind: "rotate", successor: successor.did }, receipt: carrier.cid },
+    { kind: "address-observed", id: `receipt:${carrier.cid}:observation`, at: channel(local, successor), carriedTransition: `receipt:${carrier.cid}:transition`, receipt: carrier.cid },
+  ];
+}
 
 export type Rotation = { from: Local; peer: Peer; to: Local; source?: VaultEvent<"message.in"> | null; fromPrior?: string; overrides?: Partial<VaultData["did.rotationSelected"]> };
 

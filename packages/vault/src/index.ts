@@ -45,7 +45,7 @@ export type {
   WireMessageId,
 } from "./types.js";
 
-export { IdentityMismatch, InvalidDidDocument, InvalidFromPrior, InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey, Locked } from "./errors.js";
+export { IdentityMismatch, InvalidDidDocument, InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey, Locked } from "./errors.js";
 
 export {
   NAMESPACE_PURPOSES,
@@ -62,6 +62,9 @@ export {
   effectKey,
   automaticMessageId,
   ANCHOR_KEY_NAME,
+  observationFactId,
+  transitionFactId,
+  decisionFactId,
   type DidKeyRole,
   didKeyName,
   mediationKeyName,
@@ -136,7 +139,7 @@ export {
   methodPublicKey,
 } from "./peer-document.js";
 
-export { FROM_PRIOR_ALG, type FromPriorClaims, type CarriedClaims, type VerifiedFromPrior, signFromPrior, fromPriorClaims, carriedClaims, issuerDocumentOf, verifyFromPrior, verifyLocalProof } from "./from-prior.js";
+export { type IssuerLongForm, signFromPrior, issuerLongFormOf } from "./from-prior.js";
 
 export { VaultEventSet, type InvalidVaultEvent, type Resolved, type SourceKey, latest, groupBy, samePayload, keyOf, compareKeys } from "./fold/set.js";
 export { type AuthorActivity, foldAuthors, foldLabel } from "./fold/author.js";
@@ -168,13 +171,12 @@ export {
   type Source,
   type ReceiptKey,
   type ReceiptIntegrity,
-  type PeerLink,
   type Proof,
   type Carrier,
-  type LocalLink,
   type DecisionStatus,
   type Decision,
   type ChannelEvidence,
+  type ProofCheck,
   type ChannelChecks,
   foldChannelEvidence,
   foldSources,
@@ -185,7 +187,7 @@ export {
   foldDecisions,
   verifyProofs,
 } from "./fold/channels.js";
-export { type Replaced, type ContinuityLink, type Conflict, type Status, type Witness, type Continuity, foldContinuity } from "./fold/continuity.js";
+export { type Status, type Witness, type ScopedConflict, type Continuity, projectFacts, foldContinuity } from "./fold/continuity.js";
 export { EMPTY_MESSAGE_TYPE, PING_RESPONSE_TYPE, PROBLEM_REPORT_TYPE, EMPTY_CONTENT_CID, type InboundKind, kindOf, type Member, type ExecutionStatus, type Execution, type InboundFold, foldInbound } from "./fold/inbound.js";
 export { type ConsumptionStatus, type Consumption, type Eligibility, type Candidate, type InvitationStatus, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type Contact, type ContactFold, foldContacts } from "./fold/contacts.js";

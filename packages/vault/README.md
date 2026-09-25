@@ -26,7 +26,7 @@ X25519, not a low-order point, which `@noble/curves` refuses as every
 shared secret with it is zero; `@scure/base` does the
 base58btc and base64url, `multiformats` the multicodec prefix), the event
 schemas (`schema.ts`: `readVaultEvent` / `readVaultDraft` / `vaultDraft`
-accept an event of one of the 28 version-3 types — the closed member set
+accept an event of one of the version-4 types — the closed member set
 of its payload, each member's type, nullability and spelling, the rules
 between members such as a package naming its sender entity's
 key-agreement key, an automatic effect's key being its tuple's and a
@@ -60,18 +60,14 @@ the fixed retained representation as object, RFC 8785 bytes and raw
 CID; `canonicalDidOf` is the DID folds compare by; `authorizedMethodIds`,
 `methodPublicKey` and `didcommServiceUris` read any retained document's
 relationships, keys and DIDComm endpoints) and the `from_prior` proof
-(`from-prior.ts`: `signFromPrior` issues the compact EdDSA JWT with
-`jose`; a carried proof is read in three steps, `fromPriorClaims` for
-its form and claims, `carriedClaims` for the claims against the
-carrier they arrived on, and `verifyFromPrior` for the signature
-against the issuer's immutable document, which `issuerDocumentOf`
-derives from a long-form issuer's spelling or takes from a retained
-method-valid `peer.resolved` of a short-form issuer and which the
-caller must have checked to be that DID's before verifying; DID
-spellings compare by validated equivalence and the rest of a method
-ID byte for byte; `verifyLocalProof` holds a rotation decision's
-frozen proof to the exact counterpart of signing one; what a proof
-means for a channel is the continuity fold's), and the first
+(`from-prior.ts`, over `@estoc/continuity/from-prior`, which owns the
+profile, the parsing, the precheck, the signature and the receipt
+binding: `signFromPrior` signs a local rotation through the package with
+the key the seed derives for the predecessor entity, under the method
+its own document gives that key, and `issuerLongFormOf` finds the long
+form a carried proof verifies against, the issuer's own spelling or the
+one a verified retained `peer.resolved` of a short-form issuer holds;
+what a proof means for a channel is the continuity fold's), and the first
 folds (`fold/`: `VaultEventSet` reads every event once against its
 schema and hands a type's events out in canonical order and a typed
 reference's target as present, missing or mismatched; `foldAuthors` and
@@ -104,41 +100,44 @@ agrees no keys or is on another curve than the entity's own
 key-agreement key, each contradiction looked for as soon as what it
 needs is here and always reported over an absence; `foldReceipts`, the receipt
 ordinals' high-water mark and the messages one author's reused ordinal
-affects; `foldCarriers`, each source that brought a `from_prior`,
-its proof invalid on the carrier's own evidence, pending while the
-issuer's document is not here, or verified, and the peer link a
-complete carrier's verified proof derives; `foldDecisions`, each
-`did.rotationSelected` checked against its own fields and source into a
-local-link candidate, pending while evidence may still arrive, in
-conflict when its source can never be positive — anonymous, from
-another peer or at another key than the predecessor's, its
-authentication contradicted, its proof refused — each refusal made on
-the fields it needs, not held for the entities' creations; `foldChannelEvidence` runs the three and says
-which sources are `positive`, the ones the continuity graph may be
-built from; the signatures are `verifyProofs` beside the fold, each
-carried or frozen proof against the issuer's document its long form
-derives or a verified resolution retains), the continuity graph
-(`fold/continuity.ts`: `foldContinuity` closes the positive evidence
-into a graph of channels whose edges replace one endpoint — the peer's
-by a carrier's verified proof, ours by a rotation decision once the
-peer or a verified successor has written to exactly the predecessor,
-that confirmation never coming from the decision's own descendants —
-and joins a local and a peer replacement leaving one pair into the
-pair of both successors, transporting each to the other's successor;
-then, over the whole graph, finds the conflicts, competing successors
-of one endpoint in one context, cycles and a join that would pair a
-DID with itself; then takes the same closure again, admitting no edge
-that touches a conflicted channel, a join's included, over the carriers
-and decisions that are complete witnesses — a masked carrier confirms
-no decision, a join transports nothing through a conflict — as what
-grants authority, each link saying whether it is `verified`; then
-answers: each carrier's and decision's six-state `status`, what each
-source `witness`es, whether a channel is `conflicted` or `superseded`
-in its local-only context, its default `head`, none while a replacement
-ahead of it is not granted, whether a local DID is `confirmed` toward a peer, the
+affects; `foldCarriers`, each source that brought a `from_prior`: the
+package's precheck refuses, before any document, what the profile
+decides on its own — the algorithm, the media type, a `kid` of another
+DID, a subject that is the issuer or not the authenticated sender, a
+validity window — an ending is set aside as `unsupported`, a proof
+whose signature the checks beside the fold verified is bound to its
+receipt, and a bound proof on a complete carrier is the peer
+transition and the observation of the successor, both facts of that
+one receipt; `foldDecisions`, each `did.rotationSelected` checked
+against its own fields and source into a local-decision fact, pending
+while evidence may still arrive, in conflict when its source can never
+be positive — anonymous, from another peer or at another key than the
+predecessor's, its authentication contradicted, its proof refused —
+each refusal made on the fields it needs, not held for the entities'
+creations; `foldChannelEvidence` runs the three and says which sources
+are `positive`, the ones the continuity facts are projected from; the
+signatures are `verifyProofs` beside the fold, each carried or frozen
+proof against the long form its issuer presents or a verified
+resolution retains), the continuity (`fold/continuity.ts`:
+`projectFacts` turns the evidence into `@estoc/continuity` facts under
+IDs every replica derives from the same event CIDs — the observation
+of a complete proof-free receipt, the transition and observation of a
+bound proof, the decision of a `did.rotationSelected` that passes its
+own checks, naming its source's observation — and `foldContinuity`
+hands them to the package's `deriveContinuity`, which owns the links,
+the joins, the contexts, the conflicts, the heads, the paths and the
+confirmation; the fold reads that model beside the evidence's own
+verdicts: each carrier's and decision's `status`, `unsupported` for an
+ending, what each source `witness`es, a proof-free receipt on its own
+authentication alone, whether a channel is `conflicted` — a conflict
+reaches it or what lies ahead of it — or `superseded` in its
+local-only context, its `head`, the channel itself when no fact
+mentions it and none while a replacement ahead waits, conflicts or is
+not unique, whether a local DID is `confirmed` toward a peer, the
 role-preserving `ackPath` from an outbound to a carrier, the denials
-that cover a channel and the decisions already made in its peer-only
-context; a conflict masks authority and removes no edge), the
+that cover a channel through the history and the decisions of a
+peer-only context whether or not they are projected; the package's
+`model` is exposed for what those do not summarize), the
 invitations (`fold/invitations.ts`: `foldInvitations` reads each
 one-use OOB disclosure with the consumption records that name it and
 the receipts that could consume it; a record is read on its own —

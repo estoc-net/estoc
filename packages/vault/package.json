@@ -37,6 +37,7 @@
     "decentralized-identity"
   ],
   "dependencies": {
+    "@estoc/continuity": "workspace:^",
     "@estoc/did-peer": "workspace:^",
     "@estoc/event-store": "workspace:^",
     "@estoc/keystore": "workspace:^",
@@ -44,12 +45,12 @@
     "@noble/hashes": "^1.8.0",
     "@scure/base": "^1.2.0",
     "ipaddr.js": "^2.5.0",
-    "jose": "^6.0.0",
     "multiformats": "^14.0.5",
     "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "jose": "^6.0.0",
     "typescript": "~5.8.0",
     "vitest": "^3.2.7"
   }

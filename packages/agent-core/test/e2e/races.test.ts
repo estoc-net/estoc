@@ -88,7 +88,7 @@ describe("first messages that race", () => {
       expect(party.inbounds.map(({ received }) => received.outcome === "received" && received.live)).toEqual([true, true]);
       const fold = await foldOf(party);
       expect((await party.agent.records()).channels().map(channelKey)).toEqual([channelKey(channel)]);
-      expect(fold.continuity.links).toEqual([]);
+      expect(fold.continuity.model.history(channel).links).toEqual([]);
       expect(fold.set.of("did.rotationSelected")).toEqual([]);
       const view = fold.views.channel(channel);
       expect(view.inbound.map((execution) => [execution.kind, execution.status.status]).sort()).toEqual([

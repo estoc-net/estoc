@@ -27,7 +27,7 @@
 
 import { v7 as uuidv7 } from "uuid";
 
-import type { Event, Held, VaultRuntime } from "@estoc/event-store";
+import { eventCidOf, type Event, type EventEnvelope, type Held, type VaultRuntime } from "@estoc/event-store";
 import {
   EMPTY_MESSAGE_TYPE,
   ROTATION_NOTIFICATION_EFFECT,
@@ -50,7 +50,7 @@ import {
   signFromPrior,
   vaultDraft,
   type Channel,
-  type Conflict,
+  type ScopedConflict,
   type Did,
   type DidId,
   type EventCid,
@@ -212,7 +212,10 @@ async function successorOf(fold: VaultFold, keys: Keys, predecessor: LocalDidEnt
  */
 async function rotationRefusal(held: Held, runtime: VaultRuntime, keys: Keys, fold: VaultFold, drafts: readonly VaultDraft[]): Promise<string | null> {
   const at = new Date().toISOString();
-  const candidates: Event[] = drafts.map((draft) => ({ cid: uuidv7() as EventCid, at, author: runtime.author, type: draft.type, roots: draft.roots ?? [], data: draft.data }));
+  const candidates: Event[] = drafts.map((draft) => {
+    const envelope: EventEnvelope = { at, author: runtime.author, type: draft.type, roots: draft.roots ?? [], data: draft.data };
+    return { ...envelope, cid: eventCidOf(envelope) };
+  });
   const set = VaultEventSet.of([...fold.set.all(), ...candidates]);
   const next = foldVault(set, await checkVault(set, keys, objectReader(held.objects)));
   const decisionId = candidates[candidates.length - 1]!.cid;
@@ -225,12 +228,9 @@ async function rotationRefusal(held: Held, runtime: VaultRuntime, keys: Keys, fo
   return null;
 }
 
-function conflictedChannels(conflicts: readonly Conflict[]): Map<string, Conflict["kind"]> {
-  const reached = new Map<string, Conflict["kind"]>();
-  for (const conflict of conflicts) {
-    const channels = conflict.kind === "cycle" || conflict.kind === "identity" ? conflict.channels : [...conflict.context, ...conflict.successors];
-    for (const channel of channels) reached.set(channelKey(channel), conflict.kind);
-  }
+function conflictedChannels(conflicts: readonly ScopedConflict[]): Map<string, ScopedConflict["conflict"]["kind"]> {
+  const reached = new Map<string, ScopedConflict["conflict"]["kind"]>();
+  for (const { conflict, channels } of conflicts) for (const channel of channels) reached.set(channelKey(channel), conflict.kind);
   return reached;
 }
 

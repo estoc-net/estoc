@@ -1,28 +1,24 @@
 /**
- * The raw channel evidence: what each inbound observation establishes
- * on its own, before any graph is built over it. A source is one
- * `message.in` with the local entity its key belongs to and the channel
- * its actual endpoints form; its standing says whether the receipt's
- * own authentication evidence is complete, missing or contradicted,
- * and the local side of that evidence is the seed's word that the
- * entity is ours. A carrier is a source that brought a `from_prior`
- * proof, whose signature the checks beside the fold verified against
- * the issuer's document; a verified proof with legal endpoints is one
- * peer link. A decision is a `did.rotationSelected` checked as far as
- * its own fields and source allow; what passes is one local-link
- * candidate. The continuity fold owns everything that needs the whole
- * graph: confirmation of a decision's predecessor, joins, contexts,
- * conflicts and the final status of each carrier. Alongside, the
- * receipt ordinals give the allocator's high-water mark and the
- * integrity conflicts of one author reusing an ordinal.
+ * The raw channel evidence, what each event establishes on its own,
+ * kept apart from the continuity model derived over it. A source is
+ * one `message.in` read against the local entity and the resolution it
+ * names; a carrier is a source that brought a `from_prior` proof, read
+ * first against the profile and the receipt alone, then against the
+ * verdict reached beside the fold under the issuer's document; a
+ * decision is a `did.rotationSelected` checked as far as its own fields
+ * and its source allow. Whatever needs the whole history, confirmation
+ * of a predecessor, joins, contexts, conflicts, is the model's question
+ * and is not asked here.
  */
 
-import { isLongForm } from "@estoc/did-peer";
+import type { ContinuityFact, LocalDecision } from "@estoc/continuity";
+import { InvalidFromPrior, bindFromPrior, precheckFromPrior, verifyFromPrior, type VerifiedFromPrior } from "@estoc/continuity/from-prior";
+import { isLongForm, longToShort } from "@estoc/did-peer";
 
-import { InvalidDidDocument, InvalidFromPrior, InvalidPublicKey } from "../errors.js";
-import { carriedClaims, fromPriorClaims, issuerDocumentOf, verifyFromPrior, type CarriedClaims } from "../from-prior.js";
-import { channelOf, didKeyName, inboundMessageId } from "../ids.js";
+import { InvalidDidDocument, InvalidPublicKey } from "../errors.js";
+import { issuerLongFormOf } from "../from-prior.js";
 import { methodPublicKey } from "../peer-document.js";
+import { channelOf, decisionFactId, didKeyName, inboundMessageId, observationFactId, transitionFactId } from "../ids.js";
 import { agreementKey, decodePublicKey, type DecodedPublicKey, type KeyType } from "../public-key.js";
 import type { VaultEvent } from "../schema.js";
 import type { AuthorId, Channel, Did, DidId, EventCid, MessageId, VaultData } from "../types.js";
@@ -60,45 +56,31 @@ export interface ReceiptIntegrity {
   readonly affected: ReadonlySet<MessageId>;
 }
 
-/** The peer replaced its DID: one endpoint of a channel, derived from one carrier's verified proof. */
-export interface PeerLink {
-  readonly from: Channel;
-  readonly to: Channel;
-  readonly carrier: EventCid;
-}
-
 /**
  * What a carrier's proof establishes on its own. Invalid is for good:
- * a form or claim the carrier itself contradicts, a predecessor that
- * is the carrier's own local DID, or a signature its issuer's document
- * refuses. Pending while the issuer's document is not here or not yet
- * checked; a proof refused without the document stays refused.
+ * a form or profile the token fails, a successor that is not the
+ * sender, a predecessor that is the carrier's own local DID, a
+ * signature its issuer's document refuses, or a binding the receipt
+ * contradicts. Unsupported is for good too: an ending, which this
+ * vault retains as a diagnostic and applies to no relationship.
+ * Pending while the issuer's document is not here or not yet checked.
  */
-export type Proof = { status: "invalid"; because: string } | { status: "pending-proof" } | { status: "verified"; claims: CarriedClaims };
+export type Proof = { status: "invalid"; because: string } | { status: "unsupported"; because: string } | { status: "pending-proof" } | { status: "verified"; proof: VerifiedFromPrior };
 
 export interface Carrier {
   readonly source: Source;
   readonly proof: Proof;
-  /** the link this carrier supports: only when its standing is complete and its proof verified */
-  readonly link: PeerLink | null;
-}
-
-/** We replaced our DID toward one peer: one endpoint of a channel, decided locally. */
-export interface LocalLink {
-  readonly from: Channel;
-  readonly to: Channel;
-  readonly decision: EventCid;
-  readonly source: EventCid | null;
+  /** the peer transition and the observation of its successor, both of this receipt; empty until the proof is verified and the standing complete */
+  readonly facts: readonly ContinuityFact[];
 }
 
 /**
- * A decision checked without the graph. Invalid contradicts its own
+ * A decision checked without the history. Invalid contradicts its own
  * fields or proof; conflict contradicts the evidence it references;
- * pending waits for evidence that may still arrive. A candidate is a
- * local link whose predecessor confirmation the continuity fold still
- * has to find.
+ * pending waits for evidence that may still arrive. A candidate is the
+ * local-decision fact the continuity model confirms or leaves waiting.
  */
-export type DecisionStatus = { status: "invalid"; because: string } | { status: "conflict"; because: string } | { status: "pending"; because: string } | { status: "candidate"; link: LocalLink };
+export type DecisionStatus = { status: "invalid"; because: string } | { status: "conflict"; because: string } | { status: "pending"; because: string } | { status: "candidate"; fact: LocalDecision };
 
 export interface Decision {
   readonly event: VaultEvent<"did.rotationSelected">;
@@ -112,62 +94,45 @@ export interface ChannelEvidence {
   readonly receipts: ReceiptIntegrity;
   /** every source that brought a proof, by its event */
   readonly carriers: ReadonlyMap<EventCid, Carrier>;
-  /** the links of the carriers that support one, in canonical event order */
-  readonly peerLinks: readonly PeerLink[];
   readonly decisions: ReadonlyMap<EventCid, Decision>;
-  /** the candidate links of the decisions that pass, in canonical event order */
-  readonly localLinks: readonly LocalLink[];
   /**
-   * May this observation stand in the graph? Its standing is complete,
-   * it has a channel, and any proof it brought supports a link. This is
-   * what the continuity fold builds from and what intent conflicts are
-   * detected over; it authorizes no operation by itself.
+   * Does this observation stand as an address observation? Its
+   * standing is complete, it has a channel, and any proof it brought
+   * is verified and bound. This is what the continuity model is
+   * derived from and what intent conflicts are detected over; it
+   * authorizes no operation by itself.
    */
   positive(sourceEventCid: EventCid): boolean;
 }
 
+/** The verdict on a proof reached under its issuer's document; none while the document is not here. */
+export type ProofCheck = { status: "verified"; proof: VerifiedFromPrior } | { status: "invalid"; because: string };
+
 export type ChannelChecks = {
   resolutionChecks?: ReadonlyMap<EventCid, EvidenceCheck>;
   /** each carried or frozen proof against its issuer's document, from `verifyProofs` */
-  proofChecks?: ReadonlyMap<EventCid, EvidenceCheck>;
+  proofChecks?: ReadonlyMap<EventCid, ProofCheck>;
 };
 
-const none = new Map<EventCid, EvidenceCheck>();
+const noResolutionChecks = new Map<EventCid, EvidenceCheck>();
+const noProofChecks = new Map<EventCid, ProofCheck>();
 
 export function foldChannelEvidence(set: VaultEventSet, routes: RouteFold, checks: ChannelChecks = {}): ChannelEvidence {
-  const sources = foldSources(set, routes, checks.resolutionChecks ?? none);
-  const carriers = foldCarriers(sources, checks.proofChecks ?? none);
+  const sources = foldSources(set, routes, checks.resolutionChecks ?? noResolutionChecks);
+  const carriers = foldCarriers(sources, checks.proofChecks ?? noProofChecks);
   const positive = (id: EventCid) => {
     const source = sources.get(id);
     if (source === undefined || source.channel === null || source.standing.status !== "complete") return false;
-    return source.event.data.fromPrior === null || carriers.get(id)?.link != null;
+    return source.event.data.fromPrior === null || (carriers.get(id)?.facts.length ?? 0) > 0;
   };
-  const decisions = foldDecisions(set, routes, sources, carriers, checks.proofChecks ?? none);
-  return {
-    sources,
-    receipts: foldReceipts(set),
-    carriers,
-    peerLinks: [...carriers.values()].flatMap((carrier) => (carrier.link === null ? [] : [carrier.link])),
-    decisions,
-    localLinks: [...decisions.values()].flatMap((decision) => (decision.status.status === "candidate" ? [decision.status.link] : [])),
-    positive,
-  };
+  return { sources, receipts: foldReceipts(set), carriers, decisions: foldDecisions(set, routes, sources, carriers, checks.proofChecks ?? noProofChecks), positive };
 }
 
 /**
- * Each observation with the entity and channel it belongs to. An
- * authenticated one is complete when the entity its key name derives
- * from is consistent, the seed has confirmed the entity's keys, the
- * key is the entity's key-agreement key, the resolution it names is
- * here, is its own — same key, same sender under the same spelling —
- * and is verified against its document, the peer key it selected
- * agrees keys and is on the curve the entity's own key-agreement key
- * is, and its message ID is the one its endpoints and wire ID derive.
- * Whatever contradicts the observation does so for good, however much
+ * Whatever contradicts an observation does so for good, however much
  * else is still missing, so each contradiction is looked for as soon
- * as what it needs is here, and every one before any absence is
- * reported. An anonymous one has nothing to authenticate and no
- * channel.
+ * as what it needs is here, and every one is reported before any
+ * absence.
  */
 export function foldSources(set: VaultEventSet, routes: RouteFold, resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>): Map<EventCid, Source> {
   const sources = new Map<EventCid, Source>();
@@ -261,69 +226,62 @@ export function foldReceipts(set: VaultEventSet): ReceiptIntegrity {
   return { nextReceiptOrdinal: max + 1n, conflicts, affected };
 }
 
-/**
- * Each authenticated source that brought a proof, read on its own.
- * The claims are checked against the carrier first, which needs no
- * document: their form, their fit with the carrier, and that the
- * predecessor they name is not the carrier's own local DID, since no
- * document makes a pair of one DID with itself. The signature's
- * verdict comes from the checks beside the fold. A verified proof
- * names the peer's predecessor; with the carrier's own endpoints it is
- * a link. One carrier's verdict says nothing about another's.
- */
-export function foldCarriers(sources: ReadonlyMap<EventCid, Source>, proofChecks: ReadonlyMap<EventCid, EvidenceCheck>): Map<EventCid, Carrier> {
+/** Each proof read against its own carrier alone: one carrier's verdict says nothing about another's. */
+export function foldCarriers(sources: ReadonlyMap<EventCid, Source>, proofChecks: ReadonlyMap<EventCid, ProofCheck>): Map<EventCid, Carrier> {
   const carriers = new Map<EventCid, Carrier>();
   for (const source of sources.values()) {
     const { cid, data } = source.event;
     if (data.fromPrior === null || data.presentedDid === null) continue;
-    const local = source.channel?.localDid ?? null;
-    const proof = proofOf(data.fromPrior, data.presentedDid, local, proofChecks.get(cid));
-    const link: PeerLink | null =
-      proof.status === "verified" && source.channel !== null && local !== null && source.standing.status === "complete"
-        ? { from: channelOf(local, proof.claims.predecessorDid), to: source.channel, carrier: cid }
-        : null;
-    carriers.set(cid, { source, proof, link });
+    carriers.set(cid, { source, ...carrierOf(source, data.fromPrior, data.presentedDid, proofChecks.get(cid)) });
   }
   return carriers;
 }
 
-function proofOf(jwt: string, presentedDid: Did, local: Did | null, check: EvidenceCheck | undefined): Proof {
-  let claims: CarriedClaims;
+function carrierOf(source: Source, jwt: string, sender: Did, check: ProofCheck | undefined): { proof: Proof; facts: readonly ContinuityFact[] } {
+  const refused = (proof: Proof) => ({ proof, facts: [] });
+  let claims: ReturnType<typeof precheckFromPrior>;
   try {
-    claims = carriedClaims(jwt, presentedDid);
+    claims = precheckFromPrior(jwt, { authenticatedSender: sender });
   } catch (err) {
     if (!(err instanceof InvalidFromPrior)) throw err;
-    return { status: "invalid", because: err.message };
+    return refused({ status: "invalid", because: err.message });
   }
-  if (local !== null && claims.predecessorDid === local) return { status: "invalid", because: "the predecessor is the local DID" };
-  if (check === undefined) return { status: "pending-proof" };
-  if (check === "invalid") return { status: "invalid", because: "the proof does not verify under the issuer's document" };
-  return { status: "verified", claims };
+  if (claims.claims.sub === undefined) return refused({ status: "unsupported", because: "an ending is not applied: this vault retains it and ends no relationship by it" });
+  const local = source.channel?.localDid ?? null;
+  if (local !== null && shortFormOf(claims.claims.iss) === local) return refused({ status: "invalid", because: "the predecessor is the local DID" });
+  if (check === undefined) return refused({ status: "pending-proof" });
+  if (check.status === "invalid") return refused({ status: "invalid", because: check.because });
+  const proof: Proof = { status: "verified", proof: check.proof };
+  if (source.channel === null || source.standing.status !== "complete") return { proof, facts: [] };
+  const { cid } = source.event;
+  const binding = bindFromPrior(check.proof, { ref: cid, token: jwt, recipient: source.channel.localDid, sender }, { transitionId: transitionFactId(cid), observationId: observationFactId(cid) });
+  if (binding.status !== "bound") return refused({ status: "invalid", because: binding.because });
+  return { proof, facts: binding.facts };
 }
 
 /**
- * Each rotation decision checked against its own fields: both entities
- * consistent, created and confirmed by the seed, the successor another
- * DID than the peer (another entity than the predecessor by the
- * schema, and no two consistent entities share a DID), the frozen
- * proof spelled over the two entities' exact long forms and verified
- * under the predecessor's document, and the source, when named, a
- * positive observation in the very pair the decision rotates away
- * from: from the peer the decision names, at the predecessor's
- * key-agreement key. What contradicts the decision does so for good
- * — an entity in conflict, a proof refused, a source that can never be
- * positive: anonymous, of another pair, its authentication
- * contradicted, its own proof refused — so each is looked for as soon
- * as what it needs is here, all before the decision is left pending on
- * what may still arrive. What the predecessor was confirmed by is the
- * graph's question, not asked here.
+ * The identity a did:peer:4 spelling the profile has already validated
+ * names. Only spellings are compared here; whether the issuer's
+ * document supports the proof is the shared proof verifier's verdict,
+ * and the vault's full document validator, which can throw, is not
+ * applied to an identity comparison.
+ */
+const shortFormOf = (did: string): string => (isLongForm(did) ? longToShort(did) : did);
+
+/**
+ * What contradicts a decision does so for good, so each contradiction
+ * is looked for as soon as what it needs is here, before the decision
+ * is left pending on what may still arrive. A frozen proof is held to
+ * the two entities' exact long forms, since the vault signed it that
+ * way itself. What the predecessor was confirmed by is the model's
+ * question.
  */
 export function foldDecisions(
   set: VaultEventSet,
   routes: RouteFold,
   sources: ReadonlyMap<EventCid, Source>,
   carriers: ReadonlyMap<EventCid, Carrier>,
-  proofChecks: ReadonlyMap<EventCid, EvidenceCheck>
+  proofChecks: ReadonlyMap<EventCid, ProofCheck>
 ): Map<EventCid, Decision> {
   const decisions = new Map<EventCid, Decision>();
   for (const event of set.of("did.rotationSelected")) {
@@ -345,7 +303,7 @@ function decisionStatus(
   set: VaultEventSet,
   sources: ReadonlyMap<EventCid, Source>,
   carriers: ReadonlyMap<EventCid, Carrier>,
-  check: EvidenceCheck | undefined
+  check: ProofCheck | undefined
 ): DecisionStatus {
   const { data } = event;
   const missing: string[] = [];
@@ -358,18 +316,19 @@ function decisionStatus(
   if (typeof successor === "string") return conflict(successor);
   if (predecessor !== null && channel === null) return invalid("the peer is the predecessor's own DID");
   if (successor !== null && successor.did === data.peerDid) return invalid("the successor is the peer's DID");
+  if (predecessor !== null && successor !== null && successor.did === predecessor.did) return invalid("the successor is the predecessor's DID");
 
-  let iss: string;
-  let sub: string;
+  let claims: ReturnType<typeof precheckFromPrior>["claims"];
   try {
-    ({ iss, sub } = fromPriorClaims(data.fromPrior));
+    ({ claims } = precheckFromPrior(data.fromPrior));
   } catch (err) {
     if (!(err instanceof InvalidFromPrior)) throw err;
     return invalid(err.message);
   }
-  if (predecessor !== null && iss !== predecessor.longFormDid) return invalid("the proof's iss is not the predecessor's long form");
-  if (successor !== null && sub !== successor.longFormDid) return invalid("the proof's sub is not the successor's long form");
-  if (check === "invalid") return invalid("the proof does not verify under the predecessor's document");
+  if (claims.sub === undefined) return invalid("the proof is an ending, not a rotation");
+  if (predecessor !== null && claims.iss !== predecessor.longFormDid) return invalid("the proof's iss is not the predecessor's long form");
+  if (successor !== null && claims.sub !== successor.longFormDid) return invalid("the proof's sub is not the successor's long form");
+  if (check?.status === "invalid") return invalid(check.because);
   if (check === undefined) missing.push("the proof is not yet checked");
 
   if (data.sourceEventCid !== null) {
@@ -383,14 +342,24 @@ function decisionStatus(
       if (source.event.data.localKeyName !== didKeyName(data.fromDidId, "key-agreement")) return conflict("the source is not at the predecessor's key-agreement key");
       if (source.standing.status === "conflict") return conflict(`the source's authentication is in conflict: ${source.standing.because}`);
       const carrier = carriers.get(data.sourceEventCid);
-      if (carrier?.proof.status === "invalid") return conflict(`the source's proof is invalid: ${carrier.proof.because}`);
+      if (carrier?.proof.status === "invalid" || carrier?.proof.status === "unsupported") return conflict(`the source's proof is ${carrier.proof.status}: ${carrier.proof.because}`);
       if (source.standing.status === "incomplete") missing.push(`the source's authentication is incomplete: ${source.standing.because}`);
       if (carrier?.proof.status === "pending-proof") missing.push("the source's proof is not yet verified");
     }
   }
 
   if (missing.length > 0) return { status: "pending", because: missing[0]! };
-  return { status: "candidate", link: { from: channel!, to: channelOf(successor!.did, data.peerDid), decision: event.cid, source: data.sourceEventCid } };
+  return {
+    status: "candidate",
+    fact: {
+      kind: "local-decision",
+      id: decisionFactId(event.cid),
+      at: channel!,
+      change: { kind: "rotate", successor: successor!.did },
+      source: data.sourceEventCid === null ? null : observationFactId(data.sourceEventCid),
+      decision: event.cid,
+    },
+  };
 }
 
 function creationOf(entity: LocalDidEntity | undefined, role: string, missing: string[]): VaultData["did.created"] | string | null {
@@ -404,52 +373,57 @@ function creationOf(entity: LocalDidEntity | undefined, role: string, missing: s
 }
 
 /**
- * Every proof in the set against its issuer's document: each carried
- * `from_prior` against the document its issuer's long form derives or
- * a verified retained resolution of its short form retains, each
- * decision's frozen proof against the document its own long-form
- * issuer derives. A proof whose form or carrier claims fail, or a
- * decision's whose issuer is not a long form, is invalid before any
- * document is asked for; otherwise there is no verdict while the
- * issuer's document is not here. What depends on the local endpoint,
- * the entities' creations or the source is the fold's to refuse.
+ * Every proof in the set against its issuer's document, read here
+ * rather than in the fold because the material is asynchronous. A
+ * token the profile refuses without a document, or an ending, gets no
+ * verdict: the fold reads those on its own. What depends on the local
+ * endpoint, the entities' creations or the source is the fold's to
+ * refuse.
  */
-export async function verifyProofs(set: VaultEventSet, resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>, readObject: ReadObject): Promise<Map<EventCid, EvidenceCheck>> {
-  const retained: VaultData["peer.resolved"][] = [];
-  for (const event of set.of("peer.resolved")) if (resolutionChecks.get(event.cid) === "verified") retained.push(event.data);
-  const documents = new Map<Did, ReturnType<typeof issuerDocumentOf>>();
-  const documentOf = (iss: Did) => {
-    let document = documents.get(iss);
-    if (document === undefined) {
-      document = issuerDocumentOf(iss, retained, readObject);
-      documents.set(iss, document);
+export async function verifyProofs(set: VaultEventSet, resolutionChecks: ReadonlyMap<EventCid, EvidenceCheck>, readObject: ReadObject): Promise<Map<EventCid, ProofCheck>> {
+  const retained: { ref: string; data: VaultData["peer.resolved"] }[] = [];
+  for (const event of set.of("peer.resolved")) if (resolutionChecks.get(event.cid) === "verified") retained.push({ ref: event.cid, data: event.data });
+  const longForms = new Map<string, ReturnType<typeof issuerLongFormOf>>();
+  const longFormOf = (iss: Did) => {
+    let longForm = longForms.get(iss);
+    if (longForm === undefined) {
+      longForm = issuerLongFormOf(iss, retained, readObject);
+      longForms.set(iss, longForm);
     }
-    return document;
+    return longForm;
   };
-  const checks = new Map<EventCid, EvidenceCheck>();
-  const verify = async (cid: EventCid, jwt: string, claims: () => { iss: Did }) => {
+  const checks = new Map<EventCid, ProofCheck>();
+  const prechecked = (jwt: string, sender: Did | null): ReturnType<typeof precheckFromPrior>["claims"] | null => {
     try {
-      const document = await documentOf(claims().iss);
-      if (document === null) return;
-      await verifyFromPrior(jwt, document);
-      checks.set(cid, "verified");
+      return precheckFromPrior(jwt, sender === null ? undefined : { authenticatedSender: sender }).claims;
     } catch (err) {
       if (!(err instanceof InvalidFromPrior)) throw err;
-      checks.set(cid, "invalid");
+      return null;
+    }
+  };
+  const verify = async (cid: EventCid, jwt: string, iss: Did) => {
+    const evidence = await longFormOf(iss);
+    if (evidence === null) return;
+    try {
+      checks.set(cid, { status: "verified", proof: await verifyFromPrior(jwt, evidence) });
+    } catch (err) {
+      if (!(err instanceof InvalidFromPrior)) throw err;
+      checks.set(cid, { status: "invalid", because: err.message });
     }
   };
   for (const event of set.of("message.in")) {
     const { fromPrior, presentedDid } = event.data;
     if (fromPrior === null || presentedDid === null) continue;
-    await verify(event.cid, fromPrior, () => carriedClaims(fromPrior, presentedDid));
+    const claims = prechecked(fromPrior, presentedDid);
+    if (claims === null || claims.sub === undefined) continue;
+    await verify(event.cid, fromPrior, claims.iss as Did);
   }
   for (const event of set.of("did.rotationSelected")) {
     const { fromPrior } = event.data;
-    await verify(event.cid, fromPrior, () => {
-      const claims = fromPriorClaims(fromPrior);
-      if (!isLongForm(claims.iss)) throw new InvalidFromPrior("a decision's issuer is its own long form");
-      return claims;
-    });
+    const claims = prechecked(fromPrior, null);
+    if (claims === null || claims.sub === undefined) continue;
+    if (!isLongForm(claims.iss)) checks.set(event.cid, { status: "invalid", because: "a decision's issuer is its own long form" });
+    else await verify(event.cid, fromPrior, claims.iss as Did);
   }
   return checks;
 }

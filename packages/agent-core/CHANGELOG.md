@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Continuity comes from `@estoc/continuity` through the vault**
+  (behaviour change): a send, a reply or a rotation from a channel a
+  conflict lies ahead of, or whose own saved rotation the peer has not
+  confirmed, is refused by the channel policy or for want of a head;
+  before, only the head was withheld. A rotation's candidate decision
+  is folded under its real event CID before it is written.
+
 - **Events by CID.** Every `eventId` an agent-core record or option
   carried — `Received`, `LiveInput`, `AfterReceipt`, the source and
   rotation references of intents and notifications — is now `cid`, the
