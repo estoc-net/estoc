@@ -261,9 +261,10 @@ function carrierOf(source: Source, jwt: string, sender: Did, check: ProofCheck |
 
 /**
  * The identity a did:peer:4 spelling the profile has already validated
- * names. The vault's own document canonicalizer is not used on a
- * proof's issuer: a document that fails the vault's shape rules is
- * that proof's failure to report, never the fold's to throw.
+ * names. Only spellings are compared here; whether the issuer's
+ * document supports the proof is the shared proof verifier's verdict,
+ * and the vault's full document validator, which can throw, is not
+ * applied to an identity comparison.
  */
 const shortFormOf = (did: string): string => (isLongForm(did) ? longToShort(did) : did);
 
