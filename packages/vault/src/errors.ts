@@ -41,14 +41,6 @@ export class InvalidDidDocument extends Error {
   }
 }
 
-/** A `from_prior` JWT that is malformed, claims what its carrier contradicts, or that its issuer's document does not authorize. */
-export class InvalidFromPrior extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "InvalidFromPrior";
-  }
-}
-
 /** The seed in hand does not derive what the vault records: its anchor, or a DID entity's spelling. */
 export class IdentityMismatch extends Error {
   constructor(message: string) {

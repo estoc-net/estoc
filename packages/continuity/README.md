@@ -337,14 +337,11 @@ below is the host's, and the model cannot check it.
 - Usable heads and paths are not monotonic: more evidence can expose a
   conflict and withdraw an answer. A converged conflict is a converged
   state.
-- The vault implementation does not consume this package yet. Its
-  version-4 target addresses five-field event envelopes and all event
-  references by content CID, without an event UUID or nonce. Identical
-  envelopes are one event; distinct envelopes have distinct evidence
-  identities. This satisfies exact source identity without a
-  same-event-ID variant inventory. The CID event store and vault adapter
-  still need implementation; the existing UUID store and these package
-  tests do not establish host conformance.
+- The vault consumes this package through its adapter: it addresses
+  events by content CID, projects each retained receipt and saved
+  decision into facts named by those CIDs, and applies rotations only.
+  An ending token a carrier brings is retained there as an unsupported
+  proof and never becomes a fact.
 
 ## References
 

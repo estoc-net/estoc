@@ -95,7 +95,7 @@ describe("what a stranger hands the mediator", () => {
     expect(forwardsSeen(mediator)).toBe(forwards + 4);
 
     const fold = await foldOf(alice);
-    expect(fold.continuity.links).toEqual([]);
+    expect(fold.continuity.model.history(channelOf(a0, b0)).links).toEqual([]);
     expect(fold.continuity.conflicts).toEqual([]);
     expect(fold.continuity.head(channelOf(a0, b0))).toEqual(channelOf(a0, b0));
     expect(fold.outbound.outbounds.size).toBe(1);

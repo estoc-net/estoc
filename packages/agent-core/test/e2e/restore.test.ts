@@ -119,7 +119,7 @@ describe("a vault restored from a snapshot", () => {
     const fold = await foldOf(restored);
     expect(fold.set.of("message.in")).toHaveLength(1);
     expect(fold.routes.dids.has(ALICE_LATER)).toBe(false);
-    expect(fold.continuity.links).toEqual([]);
+    expect(fold.continuity.facts.filter((fact) => fact.kind !== "address-observed")).toEqual([]);
   });
 
   it("predating a rotation the peer has verified selects another successor when the message that prompted the first is still with the mediator: the peer keeps both proofs and shows the fork, with no head there and nothing sent on its authority, while what it recorded before stands", { timeout: LONG }, async () => {
@@ -158,8 +158,8 @@ describe("a vault restored from a snapshot", () => {
     expect(bob.inbounds[1]).toMatchObject({ received: { outcome: "received", live: true }, after: { proof: { status: "conflict" } }, reacted: { effects: [] } });
     expect(queuedFor(mediator, bob)).toBe(0);
     const ofBob = await foldOf(bob);
-    expect(ofBob.continuity.conflicts).toMatchObject([{ kind: "competing-peer-successors" }]);
-    expect(ofBob.continuity.links.map((link) => [link.to.peerDid, link.verified]).sort()).toEqual([[a1, false], [other, false]].sort());
+    expect(ofBob.continuity.conflicts).toMatchObject([{ conflict: { kind: "competing-changes", side: "peer" } }]);
+    expect(ofBob.continuity.model.history(channelOf(b0, a0)).links.map((link) => [link.to.peerDid, link.usable]).sort()).toEqual([[a1, false], [other, false]].sort());
     expect(ofBob.continuity.head(channelOf(b0, a0))).toBeNull();
     for (const successor of [a1, other]) await expect(bob.agent.send({ channel: channelOf(b0, successor) }, hello("which of you"))).rejects.toBeInstanceOf(Unusable);
     expect(ofBob.outbound.outbounds.get(FIRST)).toMatchObject({ outcome: { status: "submitted" } });

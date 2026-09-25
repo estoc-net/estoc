@@ -604,10 +604,10 @@ describe("an outbound message", () => {
     expect(vault.held.has(pkg.data.envelopeCid)).toBe(false);
     expect(vault.continuity.status(unconfirmed.cid)).toMatchObject({ status: "pending-history" });
     expect(outboundOf(vault, early)).toMatchObject({
-      effect: { status: "pending", because: "the rotation it names is not verified yet: no complete source from the peer or a verified successor is addressed to the predecessor" },
-      work: { kind: "none", because: "the rotation it names is not verified yet: no complete source from the peer or a verified successor is addressed to the predecessor" },
+      effect: { status: "pending", because: "the rotation it names is not verified yet: no observation addressed to the predecessor by its peer or a successor of that peer" },
+      work: { kind: "none", because: "the rotation it names is not verified yet: no observation addressed to the predecessor by its peer or a successor of that peer" },
     });
-    expect(outboundOf(vault, ackFromEarly).effect).toEqual({ status: "pending", because: "the output's channel does not continue the source's yet: no complete source from the peer or a verified successor is addressed to the predecessor" });
+    expect(outboundOf(vault, ackFromEarly).effect).toEqual({ status: "pending", because: "the output's channel does not continue the source's yet: no observation addressed to the predecessor by its peer or a successor of that peer" });
     expectSameOverEveryOrder(scene, vault.checks);
   });
 

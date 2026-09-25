@@ -1,3 +1,4 @@
+import { decodeJwt } from "jose";
 import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it } from "vitest";
 
@@ -13,7 +14,6 @@ import {
   blockChannels,
   channelKey,
   effectKey,
-  fromPriorClaims,
   scanVault,
   signFromPrior,
   unfinishedWork,
@@ -137,7 +137,7 @@ describe("a local rotation", () => {
     expect([rotation.existed, rotation.channel]).toEqual([false, { localDid: alice.did, peerDid: bob.did }]);
     const successor = await successorOf(alice, rotation);
     expect(rotation.decision.data).toMatchObject({ fromDidId: ALICE, peerDid: bob.did, toDidId: rotation.successor, sourceEventCid: null });
-    expect(fromPriorClaims(rotation.decision.data.fromPrior)).toMatchObject({ iss: alice.longFormDid, sub: successor.longFormDid, iat: IAT });
+    expect(decodeJwt(rotation.decision.data.fromPrior)).toMatchObject({ iss: alice.longFormDid, sub: successor.longFormDid, iat: IAT });
     let fold = await foldOf(alice);
     const creation = fold.set.of("did.created").find((event) => event.data.didId === rotation.successor)!;
     expect([creation.at, successor.boundRouteId]).toEqual([rotation.decision.at, fold.routes.dids.get(ALICE)!.created!.boundRouteId]);
@@ -243,7 +243,7 @@ describe("a local rotation", () => {
     await receive(bob, { type: BASIC_MESSAGE }, undefined, successor.longFormDid);
     let fold = await foldOf(alice);
     expect(fold.continuity.confirmed(successor.did, bob.did)).toBe(true);
-    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE_NEXT, peerDid: bob.did }, { ...options, didId: ALICE })).rejects.toThrow(new Unusable("DID", ALICE, ["the decision would be in conflict: its context is in conflict: cycle"]));
+    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE_NEXT, peerDid: bob.did }, { ...options, didId: ALICE })).rejects.toThrow(new Unusable("DID", ALICE, ["the decision would be in conflict: its context is in conflict"]));
     fold = await foldOf(alice);
     expect([fold.set.of("did.rotationSelected").length, fold.routes.dids.size, fold.continuity.head({ localDid: alice.did, peerDid: bob.did }), fold.continuity.conflicts, wire.posts.length]).toEqual([1, 2, { localDid: successor.did, peerDid: bob.did }, [], 1]);
     await closeAll(alice, bob);
@@ -278,7 +278,7 @@ describe("a local rotation", () => {
     const old = { localDid: alice.did, peerDid: prior.did };
     let fold = await foldOf(alice);
     expect([fold.continuity.status(pending!.cid).status, fold.continuity.confirmed(alice.did, prior.did), fold.continuity.head(old)]).toEqual(["pending-history", true, { localDid: alice.did, peerDid: bob.did }]);
-    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: prior.did }, { ...options, didId: ALICE_NEXT })).rejects.toThrow(new Unusable("DID", ALICE_NEXT, ["the decision would be in conflict: its context is in conflict: cycle"]));
+    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: prior.did }, { ...options, didId: ALICE_NEXT })).rejects.toThrow(new Unusable("DID", ALICE_NEXT, ["the decision would be in conflict: its context is in conflict"]));
     fold = await foldOf(alice);
     expect([fold.set.of("did.rotationSelected").length, fold.routes.dids.size, fold.continuity.head(old), fold.continuity.conflicts, wire.posts.length]).toEqual([1, 2, { localDid: alice.did, peerDid: bob.did }, [], 0]);
     await closeAll(alice, bob);
@@ -321,9 +321,9 @@ describe("a local rotation", () => {
     await receive(bob, { type: BASIC_MESSAGE }, fork.longFormDid, next.longFormDid);
     const healthy = { localDid: next.did, peerDid: fork.did };
     let fold = await foldOf(alice);
-    expect([fold.continuity.conflicts.map((conflict) => conflict.kind), fold.continuity.conflicted(healthy), fold.continuity.head(healthy), fold.continuity.confirmed(alice.did, prior.did)]).toEqual([["competing-peer-successors"], false, healthy, true]);
+    expect([fold.continuity.conflicts.map(({ conflict }) => conflict.kind), fold.continuity.conflicted(healthy), fold.continuity.head(healthy), fold.continuity.confirmed(alice.did, prior.did)]).toEqual([["competing-changes"], false, healthy, true]);
 
-    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: prior.did }, { ...options, didId: ALICE_NEXT })).rejects.toThrow(/^DID 019b0000-0000-7000-8000-00000000000b is not usable: the decision would put \[.*\] in conflict: competing-peer-successors$/);
+    await expect(rotate(alice.runtime, alice.keys, { localDidId: ALICE, peerDid: prior.did }, { ...options, didId: ALICE_NEXT })).rejects.toThrow(/^channel \[.*\] is not usable: the channel's continuity is in conflict$/);
     fold = await foldOf(alice);
     expect([fold.set.of("did.rotationSelected").length, fold.set.of("message.out").length, fold.routes.dids.size, fold.continuity.conflicted(healthy), fold.continuity.head(healthy), wire.posts.length]).toEqual([0, 0, 2, false, healthy, 0]);
 

@@ -170,7 +170,7 @@ describe("an inbound input", () => {
     let execution = vault.inbound.ofMessage(refused.data.messageId)!;
     expect(execution).toMatchObject({ status: { status: "pending", because: "no observation is a complete witness: the proof is not yet verified" }, intentHash: null, kind: null, firstReceiptKey: null });
     expect(execution.members.map(({ source, positive, witness }) => [source.event.cid, positive, witness])).toEqual([
-      [refused.cid, false, { status: "invalid", because: "not a compact JWT" }],
+      [refused.cid, false, { status: "invalid", because: expect.stringMatching(/^not a compact JWT/) }],
       [waiting.cid, false, { status: "pending", because: "the proof is not yet verified" }],
     ]);
     expectSameOverEveryOrder(scene, vault.checks);

@@ -80,7 +80,7 @@ describe("the contacts", () => {
         sources: channels.sources,
         carriers: channels.carriers,
         decisions: channels.decisions,
-        links: continuity.links,
+        facts: continuity.facts,
         conflicts: continuity.conflicts,
         heads: [channel(a0, b0), channel(a0, b1), channel(a1, b0)].map((c) => [continuity.head(c), continuity.blocked(c), continuity.superseded(c)]),
         executions: inbound.executions,

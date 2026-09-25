@@ -27,6 +27,7 @@ const VERIFICATION: Record<string, string> = {
   "pending-proof": "new address: the proof waits for its issuer's document",
   "pending-history": "new address: the proof waits for history",
   verified: "new address verified",
+  unsupported: "the proof ends a relationship, which is not applied",
   invalid: "new address: the proof is invalid",
   conflict: "new address: continuity is in conflict",
 };

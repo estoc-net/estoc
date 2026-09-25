@@ -64,7 +64,7 @@ export interface RemoteError {
 
 export interface ChannelView {
   readonly channel: Channel;
-  /** the unique channel forward replacements lead to; null while none is unique or authority does not grant one */
+  /** the unique usable channel forward replacements lead to, the channel itself when no fact mentions it; null while a replacement waits, conflicts or is not unique */
   readonly head: Channel | null;
   readonly superseded: boolean;
   readonly blocked: boolean;
@@ -77,7 +77,7 @@ export interface ChannelView {
   readonly errors: readonly RemoteError[];
 }
 
-/** A channel in a contact's view: selected by the contact, or reached from a selected one over verified continuity. */
+/** A channel in a contact's view: selected by the contact, or reached from a selected one over usable continuity. */
 export interface ContactChannel extends ChannelView {
   readonly selected: boolean;
 }
@@ -163,7 +163,7 @@ function byFirstReceipt(a: Execution, b: Execution): number {
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
- * From the selected channels, every channel a verified replacement
+ * From the selected channels, every channel a usable replacement
  * connects, forward or back, is related history; forward alone, the
  * local DIDs on the way to each head are where a preference may point.
  * A deleted contact selects nothing. Preferences of several contacts
@@ -181,10 +181,17 @@ function contactView(fold: ViewInputs, contactIds: readonly ContactId[], view: (
     if (entry === undefined) verified.set(key, (entry = { forward: [], back: [] }));
     return entry;
   };
-  for (const link of fold.continuity.links) {
-    if (!link.verified) continue;
-    edges(link.from).forward.push(link.to);
-    edges(link.to).back.push(link.from);
+  const seenLinks = new Set<string>();
+  for (const channel of selected.values()) {
+    for (const link of fold.continuity.model.history(channel).links) {
+      const from = link.from as Channel;
+      const to = link.to as Channel;
+      const key = `${channelKey(from)} ${channelKey(to)}`;
+      if (!link.usable || seenLinks.has(key)) continue;
+      seenLinks.add(key);
+      edges(from).forward.push(to);
+      edges(to).back.push(from);
+    }
   }
 
   const related = new Map<string, Channel>();

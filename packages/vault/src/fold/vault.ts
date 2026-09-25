@@ -15,7 +15,7 @@ import { DamagedObject, ObjectTooLarge, type Retained, type Vault, type VaultObj
 import type { Keys } from "../identity.js";
 import type { Cid, DidId, EventCid, MediationId } from "../types.js";
 import { foldAuthors, foldLabel, type AuthorActivity } from "./author.js";
-import { foldChannelEvidence, verifyProofs, type ChannelEvidence } from "./channels.js";
+import { foldChannelEvidence, verifyProofs, type ChannelEvidence, type ProofCheck } from "./channels.js";
 import { foldContacts, type ContactFold } from "./contacts.js";
 import { foldContinuity, type Continuity } from "./continuity.js";
 import { verifyResolutions, type EvidenceCheck, type ReadObject } from "./evidence.js";
@@ -33,7 +33,7 @@ export type VaultChecks = {
   mediationKeys?: ReadonlyMap<MediationId, KeyCheck>;
   didKeys?: ReadonlyMap<DidId, KeyCheck>;
   resolutionChecks?: ReadonlyMap<EventCid, EvidenceCheck>;
-  proofChecks?: ReadonlyMap<EventCid, EvidenceCheck>;
+  proofChecks?: ReadonlyMap<EventCid, ProofCheck>;
 };
 
 export interface VaultFold {

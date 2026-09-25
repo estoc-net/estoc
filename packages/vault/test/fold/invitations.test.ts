@@ -334,7 +334,7 @@ describe("the candidates", () => {
     const peerFork = follower(scene, a0, b1, oobId, 4);
     const outside = follower(scene, a1, b1, other.data.oobId!, 5);
     const vault = await fold(scene, keys);
-    expect(vault.continuity.conflicts.map(({ kind }) => kind).sort()).toEqual(["competing-local-successors", "competing-peer-successors"]);
+    expect(vault.continuity.conflicts.map(({ conflict }) => (conflict.kind === "competing-changes" ? `${conflict.kind} ${conflict.side}` : conflict.kind)).sort()).toEqual(["competing-changes local", "competing-changes peer"]);
     expect(vault.invitations.invitations.get(disclosure.cid)!.status).toEqual({ status: "available" });
     expect(vault.invitations.invitations.get(disclosure.cid)!.candidates).toMatchObject([
       { source: { event: localFork }, eligibility: { status: "refused", because: "the channel is in a continuity conflict" } },

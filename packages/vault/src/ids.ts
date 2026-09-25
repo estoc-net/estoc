@@ -13,9 +13,11 @@ import { sha256 } from "@noble/hashes/sha2";
 import { base64urlnopad } from "@scure/base";
 import { v5 as uuidv5 } from "uuid";
 
+import type { FactId } from "@estoc/continuity";
+
 import { InvalidIdentifier } from "./errors.js";
 import { isMintedId } from "./syntax.js";
-import type { Channel, Did, DidId, EffectKey, ExecutionId, KeyName, MediationId, MessageId, WireMessageId } from "./types.js";
+import type { Channel, Did, DidId, EffectKey, EventCid, ExecutionId, KeyName, MediationId, MessageId, WireMessageId } from "./types.js";
 
 export const NAMESPACE_PURPOSES = ["inbound-message", "message-execution", "automatic-mid"] as const;
 
@@ -135,6 +137,17 @@ export function automaticMessageId(key: EffectKey): MessageId {
 }
 
 export const ANCHOR_KEY_NAME = "anchor" as KeyName;
+
+/**
+ * The IDs of the continuity facts one event projects, derived from its
+ * CID so that every replica and every rebuild names the same fact: the
+ * address observation of a receipt, the peer transition its proof
+ * established, the local decision a rotation saved. They live in the
+ * derived projection only; no event or wire message carries one.
+ */
+export const observationFactId = (receipt: EventCid): FactId => `receipt:${receipt}:observation`;
+export const transitionFactId = (receipt: EventCid): FactId => `receipt:${receipt}:transition`;
+export const decisionFactId = (decision: EventCid): FactId => `decision:${decision}`;
 
 export type DidKeyRole = "authentication" | "key-agreement";
 
