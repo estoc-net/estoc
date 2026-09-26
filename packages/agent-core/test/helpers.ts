@@ -217,7 +217,8 @@ export async function sealed(from: Sealer | null, to: string, extra: Partial<IMe
 export const kidOf = (packed: string): string => (JSON.parse(packed) as { recipients: { header: { kid: string } }[] }).recipients[0]!.header.kid;
 
 /** The peer's message received at one of `party`'s DIDs: the peer's document pinned, the body stored, the observation committed under the next receipt ordinal — or the one given, to contradict a receipt — and admitted: an admitted complete witness of the peer writing to exactly that address. */
-export async function received(party: DirectParty, peer: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = party, ordinal: ReceiptOrdinal | null = null): Promise<EventReference<"message.in">> {
+/** The peer's proof-free message observed at `at`, as a receipt records it and nothing more: no admission is committed, so the observation waits for a pass. */
+export async function observed(party: DirectParty, peer: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = party, ordinal: ReceiptOrdinal | null = null): Promise<EventReference<"message.in">> {
   const outcome = await resolve(peer.longFormDid, () => null);
   if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
   const [peerPublicKey] = authorizedKeys(outcome.resolution, "keyAgreement").values();
@@ -253,7 +254,12 @@ export async function received(party: DirectParty, peer: DirectParty, wire: stri
       }),
     ]
   );
-  const cid = event!.cid as EventReference<"message.in">;
+  return event!.cid as EventReference<"message.in">;
+}
+
+/** The peer's proof-free message observed at `at` and admitted, as the receipt's own pass would leave it. */
+export async function received(party: DirectParty, peer: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = party, ordinal: ReceiptOrdinal | null = null): Promise<EventReference<"message.in">> {
+  const cid = await observed(party, peer, wire, plaintext, at, ordinal);
   await party.runtime.vault.commit([], [vaultDraft("message.admitted", { sourceEventCid: cid })]);
   return cid;
 }

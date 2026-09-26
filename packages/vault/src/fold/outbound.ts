@@ -583,10 +583,10 @@ function builtInOf(data: MessageOut, source: Source | null, execution: Execution
 /**
  * The frozen targets of a pure ACK, each against the source's request
  * and the input it names: the source must request it, and the input
- * must be established for it as when the array was frozen. An input
- * not here is still to arrive; an unrequested, ambiguous or
- * contradicted target is a conflict. The saved array is checked, never
- * rebuilt, so that later inputs do not rewrite an intent.
+ * must have a complete witness, admitted or not. An input not here is
+ * still to arrive; an unrequested, ambiguous or contradicted target is
+ * a conflict. The saved array is checked, never rebuilt, so that later
+ * inputs do not rewrite an intent.
  */
 function ackTargetsIn(targets: readonly string[], source: Source, execution: Execution | null, inputs: Inputs, missing: string[]): EffectStatus | null {
   const carried = source.event.data;
@@ -598,7 +598,7 @@ function ackTargetsIn(targets: readonly string[], source: Source, execution: Exe
     return null;
   }
   for (const target of targets) {
-    const verdict = targetOf(target as WireMessageId, source, source.channel, execution, inputs.evidence, inputs.continuity, inputs.executionsByWire);
+    const verdict = targetOf(target as WireMessageId, source, source.channel, execution, WITNESSED, inputs.evidence, inputs.continuity, inputs.executionsByWire);
     if (verdict.status === "conflict") return verdict;
     if (verdict.status === "pending") missing.push(verdict.because);
   }
@@ -607,14 +607,33 @@ function ackTargetsIn(targets: readonly string[], source: Source, execution: Exe
 
 type Target = { status: "eligible"; execution: Execution } | { status: "pending"; because: string } | { status: "conflict"; because: string };
 
+/** What an input must have to be a target: `holds` over its execution, and what it lacks while it does not. */
+type Establishment = { readonly holds: (execution: Execution) => boolean; readonly missing: string };
+
+/** The target of a new ACK: the input is established, its admitted observations agreeing and one of them a complete witness. */
+const ADMITTED: Establishment = { holds: (execution) => execution.status.status === "complete", missing: "is not established yet" };
+
+/**
+ * A frozen target of a saved ACK: any complete witness of the input,
+ * admitted or not, its admitted intents not disagreeing. A saved
+ * intent is validated by the evidence its inputs have, not by their
+ * admission: admission selects the targets of a new ACK, and a history
+ * rebuilt without its admissions revokes no intent it once produced.
+ */
+const WITNESSED: Establishment = {
+  holds: (execution) => execution.status.status !== "conflict" && execution.members.some((member) => member.witness.status === "complete"),
+  missing: "has no complete witness yet",
+};
+
 /**
  * The input a wire ID names for a carrier: the carrier's own input
- * when it is the carrier's wire ID, else the one established input of
- * that wire ID in the carrier's channel or a verified role-preserving
- * predecessor. None here is pending; more than one, or one under a
- * receipt-integrity or intent conflict, is a conflict.
+ * when it is the carrier's wire ID, else the one input of that wire ID
+ * in the carrier's channel or a verified role-preserving predecessor
+ * that has what `established` asks. None here is pending; more than
+ * one, or one under a receipt-integrity or intent conflict, is a
+ * conflict.
  */
-function targetOf(wanted: WireMessageId, source: Source, channel: Channel, own: Execution | null, evidence: ChannelEvidence, continuity: Continuity, executionsByWire: ReadonlyMap<WireMessageId, Execution[]>): Target {
+function targetOf(wanted: WireMessageId, source: Source, channel: Channel, own: Execution | null, established: Establishment, evidence: ChannelEvidence, continuity: Continuity, executionsByWire: ReadonlyMap<WireMessageId, Execution[]>): Target {
   const related =
     wanted === source.event.data.wireMessageId
       ? own === null
@@ -622,14 +641,14 @@ function targetOf(wanted: WireMessageId, source: Source, channel: Channel, own: 
         : [own]
       : (executionsByWire.get(wanted) ?? []).filter((execution) => continuity.ackPath(execution.channel, channel));
   if (related.length === 0) return { status: "pending", because: `no input of the channel or a verified predecessor has wire ID ${wanted}` };
-  const eligible = related.filter((execution) => execution.status.status === "complete" && !evidence.receipts.affected.has(execution.messageId));
+  const eligible = related.filter((execution) => established.holds(execution) && !evidence.receipts.affected.has(execution.messageId));
   if (eligible.length === 1) return { status: "eligible", execution: eligible[0]! };
   if (eligible.length > 1) return { status: "conflict", because: `wire ID ${wanted} names ${eligible.length} inputs` };
   const contradicted = related.find((execution) => execution.status.status === "conflict" || evidence.receipts.affected.has(execution.messageId));
   if (contradicted !== undefined) {
     return { status: "conflict", because: contradicted.status.status === "conflict" ? `the input with wire ID ${wanted} is in conflict: ${contradicted.status.because}` : `the input with wire ID ${wanted} is under a receipt conflict` };
   }
-  return { status: "pending", because: `the input with wire ID ${wanted} is not established yet` };
+  return { status: "pending", because: `the input with wire ID ${wanted} ${established.missing}` };
 }
 
 /**
@@ -709,7 +728,7 @@ function ackTargetsOf(sourceEventCid: EventCid, evidence: ChannelEvidence, conti
   const own = inbound.ofSource(sourceEventCid);
   const targets: Execution[] = [];
   for (const wanted of expandPleaseAck(source.event.data.wireMessageId, requested)) {
-    const target = targetOf(wanted as WireMessageId, source, source.channel, own, evidence, continuity, executionsByWire);
+    const target = targetOf(wanted as WireMessageId, source, source.channel, own, ADMITTED, evidence, continuity, executionsByWire);
     if (target.status === "eligible") targets.push(target.execution);
   }
   targets.sort((a, b) => compareReceiptKeys(a.firstReceiptKey!, b.firstReceiptKey!));

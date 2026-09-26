@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A saved pure ACK's frozen targets are validated by the witnesses
+  its inputs have, admitted or not**: an input with a complete
+  witness no admission names still stands for the target it was
+  frozen as, so a history rebuilt without its admissions keeps the
+  intent's `effect`, its package and its submission, and a manual
+  dispatch carries it at the first call; the targets of a new ACK are
+  still selected among admitted witnesses alone.
 - **One send gate at both ends, read by every path to the wire**
   (behaviour change): `senderGate` closes a channel whose local DID
   cannot send, whose pair is denied or in conflicted continuity,

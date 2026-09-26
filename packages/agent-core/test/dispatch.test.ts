@@ -2,15 +2,15 @@ import { afterEach, describe, expect, it, test, vi } from "vitest";
 
 import type { DIDDoc } from "@estoc/did-peer";
 import { parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store";
-import { channelOf, scanVault, vaultDraft, type DidId, type MessageId, type VaultEvent, type VaultFold } from "@estoc/vault";
+import { EMPTY_MESSAGE_TYPE, PURE_ACK_EFFECT, channelOf, scanVault, vaultDraft, type DidId, type MessageId, type VaultEvent, type VaultFold } from "@estoc/vault";
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { ENCRYPTED_MIME, secretsResolverFor, type IMessage } from "../src/protocol/didcomm.js";
 import { FORWARD } from "../src/protocol/spec.js";
 import { RECIPIENT, RECIPIENT_QUERY } from "../src/protocol/mediation.js";
-import { AgentTrace, Keyring, LiveAction, UnknownEntity, cancel, createVault, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../src/index.js";
+import { AgentTrace, Keyring, LiveAction, UnknownEntity, automaticDraft, cancel, createVault, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../src/index.js";
 import { MEDIATOR_HTTP } from "./fake-mediator.js";
-import { carrierWaitingForIssuer, delivered, didcomm, directParty, issuerRecovered, mediatedParty, memoryDriver, newMediator, posting, proofOfSuccession, received, refuseSubmissions, ticking, type DirectParty, type MediatedParty } from "./helpers.js";
+import { carrierWaitingForIssuer, delivered, didcomm, directParty, issuerRecovered, mediatedParty, memoryDriver, newMediator, observed, posting, proofOfSuccession, received, refuseSubmissions, ticking, type DirectParty, type MediatedParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
@@ -165,6 +165,26 @@ describe("dispatch to a direct endpoint", () => {
     f = await fold(alice);
     expect([f.dispositions.disposition(cid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.set.of("message.prepared").length, f.set.of("message.out").length]).toEqual(["admitted", [cid], 1, 1]);
     expect(wire.posts.map((post) => [post.url, post.body])).toEqual([[BOB_ENDPOINT, envelope]]);
+    await closeAll(alice, bob);
+  });
+
+  test("a saved pure ACK whose source no admission names goes out at the first manual dispatch: the intent stands on the source's witness, the pass admits the source before the call, and the package is carried once", async () => {
+    const { alice, bob } = await parties();
+    const sourceEventCid = await observed(alice, bob, "wire-1", { type: BASIC_MESSAGE, body: { content: "hi" }, please_ack: [""] });
+    let f = await fold(alice);
+    const effect = { execution: f.inbound.ofSource(sourceEventCid)!, source: f.channels.sources.get(sourceEventCid)!, effectType: PURE_ACK_EFFECT, channel: channelOf(alice.did, bob.did) };
+    const drafted = automaticDraft(f, effect, { type: EMPTY_MESSAGE_TYPE, body: {}, thid: "wire-1", ack: ["wire-1"] });
+    if (drafted.existing !== null) throw new Error("recorded already");
+    await alice.runtime.vault.commit(drafted.objects, [drafted.draft]);
+    f = await fold(alice);
+    const before = f.outbound.outbounds.get(drafted.messageId)!;
+    expect([f.dispositions.disposition(sourceEventCid).status, f.outbound.ackTargets(sourceEventCid), before.effect, before.work]).toEqual(["pending-admission", [], { status: "complete" }, { kind: "prepare" }]);
+
+    const wire = posting(accepted);
+    submitted(await dispatch(alice.runtime, alice.keys, new LiveAction(drafted.messageId, "manual"), { didcomm, fetch: wire.fetch }));
+    f = await fold(alice);
+    expect([f.dispositions.disposition(sourceEventCid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.outbound.outbounds.get(drafted.messageId)!.outcome.status]).toEqual(["admitted", [sourceEventCid], "submitted"]);
+    expect(wire.posts.map((post) => post.url)).toEqual([BOB_ENDPOINT]);
     await closeAll(alice, bob);
   });
 

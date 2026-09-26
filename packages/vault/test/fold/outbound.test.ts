@@ -491,6 +491,31 @@ describe("an outbound message", () => {
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
+  it("validates a saved pure ACK's frozen targets by the witnesses its inputs have, admitted or not: absent admissions leave the effect, the package and the submission as they are, while the source names no target for a new ACK until admitted", async () => {
+    const { scene, keys, a0, b0 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    const earlier = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 1, admitted: false });
+    const source = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 2, overrides: { pleaseAck: ["", earlier.data.wireMessageId] }, admitted: false });
+    const out = pureAck(scene, a0, b0, source, { ack: [earlier.data.wireMessageId, source.data.wireMessageId] });
+    let vault = await fold(scene, keys);
+    for (const observation of [earlier, source]) expect([vault.continuity.witness(observation.cid), vault.admissions.admitted(observation.cid)]).toEqual([{ status: "complete" }, false]);
+    expect(vault.outbound.ackTargets(source.cid)).toEqual([]);
+    expect(outboundOf(vault, out)).toMatchObject({ effect: { status: "complete" }, work: { kind: "prepare" } });
+    expectSameOverEveryOrder(scene, vault.checks);
+
+    const pkg = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    submitted(scene, out, pkg);
+    vault = await fold(scene, keys);
+    expect(outboundOf(vault, out)).toMatchObject({ effect: { status: "complete" }, submitted: true, outcome: { status: "submitted" }, work: { kind: "none", because: "submitted" } });
+    expectSameOverEveryOrder(scene, vault.checks);
+
+    for (const observation of [earlier, source]) admitted(scene, observation);
+    vault = await fold(scene, keys);
+    expect(vault.outbound.ackTargets(source.cid)).toEqual([earlier.data.wireMessageId, source.data.wireMessageId]);
+    expect(outboundOf(vault, out)).toMatchObject({ effect: { status: "complete" }, outcome: { status: "submitted" } });
+    expectSameOverEveryOrder(scene, vault.checks);
+  });
+
   it("lets an automatic output continue its source's channel at a verified local successor, and a triggered notification follow its decision", async () => {
     const { scene, keys, a0, a1, a2, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
