@@ -8,6 +8,7 @@ import { forgetSeedKey } from "../daemon/keycache.js";
 import { FOLDER_VAULT } from "../daemon/places.js";
 import { saveFile } from "./backup.js";
 import { conversationsOf } from "./conversations.js";
+import { holdOf } from "./hold.js";
 import { carryDrafts, dropDrafts } from "./drafts.js";
 import { isInstalled, setupPwa } from "./pwa.js";
 import { isStoragePersisted, persistStorage } from "./storage.js";
@@ -94,12 +95,12 @@ function connectDaemon(): Daemon {
       }
       state.phase = phase;
       state.phaseDetail = detail;
-      state.hold = hold;
+      state.hold = holdOf(hold);
     },
     opened(snapshot, hold) {
       take(snapshot);
       state.phase = "open";
-      state.hold = hold;
+      state.hold = holdOf(hold);
       // the level is the open vault's own local state
       void running().traceLevel().then((level) => (state.traceLevel = level));
       if (state.daemonAt === null) {
@@ -205,8 +206,15 @@ export async function lock(): Promise<void> {
 
 /** The vault removed: the one under `hold`, read off the screen as the person was asked, and not one that took its place since. */
 export async function forgetIdentity(hold: Hold | null): Promise<void> {
-  if (hold === null) throw new Error("no vault is held here to remove");
-  await running().forgetIdentity(hold);
+  const named = holdOf(hold);
+  if (named === null) {
+    throw new Error(
+      state.daemonAt === null
+        ? "no vault is held here to remove"
+        : `the daemon at ${new URL(state.daemonAt).host} names no vault to remove: it is an estoc-daemon of an earlier version, and nothing is removed from here until it is updated`
+    );
+  }
+  await running().forgetIdentity(named);
   state.log = [];
   state.links = {};
 }

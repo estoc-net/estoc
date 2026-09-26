@@ -229,6 +229,8 @@ describe("the daemon over a folder", () => {
     const alice = heard.hold()!;
     await ui.lock();
     expect(heard.events.at(-1)).toEqual(["phase", "locked", null, alice]);
+    await expect((ui.forgetIdentity as () => Promise<void>)()).rejects.toThrow("the removal names no vault");
+    await stat(vaultFile(root));
 
     const other = told();
     const second = connect<Daemon>(await clientPort(served.url), new Proxy({} as DaemonEvents, { get: (_, name: string) => (...args: unknown[]) => other.emit(name, ...args) }) as never);

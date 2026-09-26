@@ -789,6 +789,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     forgetIdentity: (hold) =>
       exclusively(async () => {
         const store = files();
+        if (typeof hold !== "string") throw new Error("the removal names no vault: it was asked by an app of an earlier version, and nothing is removed until the app is updated");
         if (held === null) throw new Error("there is no vault here to remove");
         if (hold !== held) throw new Error("that vault is gone already; what stands here now is another, and it is left as it is");
         await stop();

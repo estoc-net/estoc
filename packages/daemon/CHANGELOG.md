@@ -7,7 +7,8 @@
   made and kept through every phase until the file is removed; every
   `phase` event carries it, `null` while no vault stands, and `opened`
   carries it with the snapshot. A removal naming a vault since removed
-  and remade is refused and leaves the new one as it is.
+  and remade is refused and leaves the new one as it is, and so is one
+  naming none, as an app of an earlier version asks it.
 - **Phase `foreign`**, in place of `unreadable` for what the host finds
   standing where the vault would be and is no vault of this version:
   the daemon takes nothing, and the host decides what becomes of it.
