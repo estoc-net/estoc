@@ -804,8 +804,11 @@ supporting admission/source evidence, not a mutable Boolean on `message.in`.
 Ordinary conversation, profile and delivery-state projections consume only
 admitted sources. Raw pending/ignored/refused observations may be inspected
 with their status, but MUST NOT generate ordinary message notifications or
-silently become accepted history. Historical admitted sources remain visible;
-current policy still prevents new responses to a superseded peer.
+silently become accepted history. Historical admitted sources remain visible,
+their content included, even once a later continuity conflict leaves them
+without a complete witness; that state is shown beside them, and profile,
+delivery-state and new-response projections still require a complete witness.
+Current policy still prevents new responses to a superseded peer.
 
 A crash after receipt but before admission leaves no application acceptance.
 After rebuilding the full available graph, local recovery admits a still

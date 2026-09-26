@@ -99,7 +99,7 @@ function erase() {
       <span>{{ timeOf(Date.parse(message.at)) }}</span>
       <slot name="meta" />
       <span v-if="delivery" class="delivery" :class="delivery.status" :title="delivery.because ?? open?.because ?? undefined" data-delivery>{{ delivery.word }}</span>
-      <span v-if="input" class="delivery" :class="input.status" :title="input.because">{{ input.status === "pending" ? "not taken in yet" : "conflict" }}</span>
+      <span v-if="input" class="delivery" :class="input.status" :title="input.because">{{ input.status === "pending" ? "taken in, sender now unconfirmed" : "conflict" }}</span>
       <span v-if="verification" class="delivery" :class="verification.status" :title="verification.because" data-verification>{{ verification.word }}</span>
       <button v-if="message.manualAction === 'retry'" type="button" class="link-quiet" :disabled="busy || sendsClosed" data-retry @click="act(() => retry(message.messageId))">
         {{ busy ? "…" : "send again" }}

@@ -6,22 +6,26 @@ import { WebSocket } from "ws";
 import { afterEach, describe, expect, it, test } from "vitest";
 
 import type { SqliteDriver } from "@estoc/event-store";
-import { PING_TYPE, type Channel, type DidId } from "@estoc/vault";
+import { EMPTY_MESSAGE_TYPE, PING_TYPE, type Channel, type DidId } from "@estoc/vault";
 
-import { RECIPIENT_QUERY, RECIPIENT_UPDATE } from "@estoc/agent-core";
-import { newMediator } from "../../agent-core/test/helpers.js";
+import { PROFILE, RECIPIENT_QUERY, RECIPIENT_UPDATE } from "@estoc/agent-core";
+import { FORWARD } from "../../agent-core/src/protocol/spec.js";
+import { newMediator, peerSealer, sealed, type DirectParty } from "../../agent-core/test/helpers.js";
 import type { FakeMediator } from "../../agent-core/test/fake-mediator.js";
+import { channelOf, forwarded, run, stopAll } from "../../agent-core/test/e2e/running.js";
 import { connect, createDaemon, decode, encode, type Daemon, type DaemonCore, type DaemonEvents, type DaemonHost, type Lines, type Port, type Snapshot } from "../src/index.js";
 import { nodeHost, serveDaemon } from "../src/node/index.js";
 
 const BASIC_MESSAGE = "https://didcomm.org/basicmessage/2.0/message";
 const PASSPHRASE = "alice-passes-the-salt";
+const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
 const LONG = 300_000;
 
 const roots: string[] = [];
 const daemons: DaemonCore[] = [];
 
 afterEach(async () => {
+  await stopAll();
   await Promise.all(daemons.splice(0).map((daemon) => daemon.close()));
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
@@ -788,6 +792,89 @@ describe("two daemons over a mediator", () => {
       await again.daemon.forgetIdentity();
       expect(again.heard.phases().at(-1)).toBe("onboarding");
       await expect(stat(path.join(root, ".estoc", "vault.sqlite"))).rejects.toThrow();
+    },
+    LONG
+  );
+});
+
+describe("a daemon whose vault records an observation it does not admit", () => {
+  const forwardsSeen = (mediator: FakeMediator): number => mediator.seenTypes.filter((type) => type === FORWARD).length;
+  const channelIn = (snapshot: Snapshot, channel: Channel) => snapshot.channels.find((record) => record.channel.localDid === channel.localDid && record.channel.peerDid === channel.peerDid)!;
+  const liveAfter = (heard: Told, index: number): boolean => heard.events.slice(index).some(([name, lines]) => name === "lines" && (lines as Lines).connections[0]?.live === true);
+  /** The records of a snapshot as the UI is handed them. */
+  const recordsOf = (snapshot: Snapshot): unknown => JSON.parse(JSON.stringify({ channels: snapshot.channels, unplaced: snapshot.unplaced, pending: snapshot.pending }));
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  test(
+    "hands the UI the observation as no message: listed under its channel, ignored, with nothing it carries, claiming no name and earning no acknowledgement; the daemon opened again over the vault, and one restored from before it and merged, read the same records and send nothing",
+    async () => {
+      const mediator = await newMediator();
+      const root = await folder();
+      const alice = daemonOver(root, mediator);
+      await alice.daemon.boot();
+      await alice.daemon.createIdentity("Alice", PASSPHRASE);
+      await alice.daemon.setMediator(mediator.did);
+      await until("alice's line is live", () => alice.heard.lines()?.connections[0]?.live === true);
+      const { invitation, didId } = await alice.daemon.createInvitation("many");
+      const a0 = alice.heard.snapshot().dids.find((did) => did.didId === didId)!.did!;
+
+      // Bob's first word has Alice move to a private address toward him; he writes there before he moves himself.
+      const bob = await run(mediator, 2, BOB, { privateAddresses: false });
+      const b0 = bob.party.did;
+      await bob.agent.send({ channel: channelOf(b0, a0), recipientDid: invitation.from }, { type: BASIC_MESSAGE, body: { content: "hello" } });
+      await until("bob holds alice's move", () => bob.inbounds.length === 1);
+      const old = alice.heard.snapshot().channels.find((channel) => channel.channel.localDid === a0)!.head!;
+      const a1 = old.localDid;
+      await bob.agent.send({ channel: channelOf(b0, a1) }, { type: BASIC_MESSAGE, body: { content: "before I move" } });
+      await until("alice reads bob at her new address", () => channelIn(alice.heard.snapshot(), old).messages.some((message) => message.body.state === "available" && message.body.body["content"] === "before I move"));
+      expect((await alice.daemon.send({ channel: old }, { type: BASIC_MESSAGE, body: { content: "hello yourself" } })).outcome).toBe("submitted");
+      await until("bob reads the answer", () => bob.inbounds.length === 2);
+      const before = await alice.daemon.exportBackup();
+
+      await bob.agent.manual.rotate({ localDidId: BOB, peerDid: a1 });
+      await until("bob holds alice's acknowledgement of his move", () => bob.inbounds.length === 3);
+      await until("alice has the rotation", () => channelIn(alice.heard.snapshot(), old).superseded);
+
+      // Bob's acknowledgement of Alice's move and his word at her new address are admitted there; what he seals by hand from the address he left, a name for himself asking to be acknowledged, is not.
+      await forwarded(mediator, a1, await sealed(await peerSealer(bob.party as unknown as DirectParty, b0), a1, { type: PROFILE, body: { profile: { displayName: "Still Bob" } }, please_ack: [""] }));
+      const forwards = forwardsSeen(mediator);
+      const inbounds = bob.inbounds.length;
+      await until("alice holds the observation", () => channelIn(alice.heard.snapshot(), old).observations.length === 3);
+      await pause(500);
+
+      const shown = channelIn(alice.heard.snapshot(), old);
+      expect(shown.messages.filter(({ direction, msg }) => direction === "in" && msg?.type !== EMPTY_MESSAGE_TYPE).map(({ body }) => (body.state === "available" ? body.body : body.state))).toEqual([{ content: "before I move" }]);
+      expect(shown.peerName).toBeNull();
+      expect(shown.observations.map(({ standing, disposition, contradicting }) => [standing, disposition, contradicting])).toEqual([
+        [{ status: "complete" }, { status: "admitted" }, false],
+        [{ status: "complete" }, { status: "admitted" }, false],
+        [{ status: "complete" }, { status: "ignored-superseded" }, false],
+      ]);
+      for (const observation of shown.observations) expect(Object.keys(observation).sort()).toEqual(["at", "channel", "contradicting", "disposition", "messageId", "sourceEventCid", "standing", "verification"]);
+      expect(alice.heard.snapshot()).toMatchObject({ unplaced: { inputs: [] }, pending: { pendingOutbounds: [], missingResponses: [] } });
+      expect([forwardsSeen(mediator), bob.inbounds.length]).toEqual([forwards, inbounds]);
+      const settled = recordsOf(alice.heard.snapshot());
+      const after = await alice.daemon.exportBackup();
+      await alice.daemon.close();
+
+      const again = daemonOver(root, mediator);
+      await again.daemon.boot();
+      await again.daemon.unlock(PASSPHRASE);
+      await until("the line is live again", () => again.heard.lines()?.connections[0]?.live === true);
+      await pause(500);
+      expect(recordsOf(again.heard.snapshot())).toEqual(settled);
+      expect([forwardsSeen(mediator), bob.inbounds.length]).toEqual([forwards, inbounds]);
+      await again.daemon.close();
+
+      const restored = daemonOver(await folder(), mediator);
+      await restored.daemon.boot();
+      await restored.daemon.restoreIdentity(before.bytes, PASSPHRASE);
+      const merging = restored.heard.events.length;
+      expect((await restored.daemon.mergeBackup(after.bytes)).added).toBeGreaterThan(0);
+      await until("the merged vault's line is live", () => liveAfter(restored.heard, merging));
+      await pause(500);
+      expect(recordsOf(restored.heard.snapshot())).toEqual(settled);
+      expect([forwardsSeen(mediator), bob.inbounds.length]).toEqual([forwards, inbounds]);
     },
     LONG
   );
