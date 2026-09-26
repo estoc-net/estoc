@@ -60,7 +60,11 @@ on the folder says `elsewhere`, refuses what would make, open or remove
 a file, and waits. Within a daemon those calls — `createIdentity`,
 `restoreIdentity`, `unlock`, `lock`, `forgetIdentity`, `exportBackup`,
 `mergeBackup` — run one at a time in the order asked, and `close()`
-ends a wait for files held elsewhere.
+ends a wait for files held elsewhere. The vault file has a name for
+as long as it stands, the `hold` every `phase` and `opened` event
+carries; `forgetIdentity(hold)` removes the vault so named and refuses
+once another stands there, so a confirmation one UI left open while a
+second UI removed and remade the vault removes nothing.
 
 ## What the UI is told
 

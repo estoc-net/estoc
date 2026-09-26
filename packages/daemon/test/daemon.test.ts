@@ -15,7 +15,7 @@ import { FORWARD } from "../../agent-core/src/protocol/spec.js";
 import { issuerRecovered, newMediator, peerSealer, proofOfSuccession, sealed, type Addressed, type DirectParty } from "../../agent-core/test/helpers.js";
 import type { FakeMediator } from "../../agent-core/test/fake-mediator.js";
 import { channelOf, forwarded, run, stopAll } from "../../agent-core/test/e2e/running.js";
-import { connect, createDaemon, decode, encode, type Daemon, type DaemonCore, type DaemonEvents, type DaemonHost, type Lines, type Port, type Snapshot } from "../src/index.js";
+import { connect, createDaemon, decode, encode, type Daemon, type DaemonCore, type DaemonEvents, type DaemonHost, type Hold, type Lines, type Port, type Snapshot } from "../src/index.js";
 import { nodeHost, serveDaemon } from "../src/node/index.js";
 
 const BASIC_MESSAGE = "https://didcomm.org/basicmessage/2.0/message";
@@ -43,6 +43,8 @@ async function folder(): Promise<string> {
 interface Told {
   events: [string, ...unknown[]][];
   phases(): string[];
+  /** the hold the last phase or opened event carried */
+  hold(): Hold | null;
   snapshot(): Snapshot;
   lines(): Lines | null;
 }
@@ -54,6 +56,7 @@ function told(): Told & { emit: (name: string, ...args: unknown[]) => void } {
     events,
     emit: (name, ...args) => events.push([name, ...args]),
     phases: () => events.filter(([name]) => name === "phase").map(([, phase]) => phase as string),
+    hold: () => (last("phase", "opened")!.at(-1) as Hold | null | undefined) ?? null,
     snapshot: () => last("opened", "changed")![1] as Snapshot,
     lines: () => (last("lines")?.[1] as Lines | undefined) ?? null,
   };
@@ -181,7 +184,7 @@ describe("the daemon over a folder", () => {
     const daemon = createDaemon(nodeHost(root), heard.emit);
     daemons.push(daemon);
     await daemon.boot();
-    expect(heard.events).toEqual([["phase", "foreign", expect.stringMatching(/folder format/)]]);
+    expect(heard.events).toEqual([["phase", "foreign", expect.stringMatching(/folder format/), null]]);
     await expect(daemon.createIdentity("Alice", PASSPHRASE)).rejects.toThrow();
     await stat(path.join(root, ".estoc", "config.json"));
     expect(await readdir(path.join(root, ".estoc"))).toEqual(["config.json"]);
@@ -203,15 +206,48 @@ describe("the daemon over a folder", () => {
 
     const { daemon, heard } = daemonOver(root);
     await daemon.boot();
-    expect(heard.events).toEqual([["phase", "unreadable", expect.stringMatching(/^schema version 1 is not supported/)]]);
+    expect(heard.events).toEqual([["phase", "unreadable", expect.stringMatching(/^schema version 1 is not supported/), expect.any(String)]]);
     await expect(daemon.unlock(PASSPHRASE)).rejects.toThrow("nothing to unlock");
     await expect(daemon.createIdentity("Another", PASSPHRASE)).rejects.toThrow("a vault already exists here");
     expect((await stat(vaultFile(root))).size).toBe(writtenBytes);
 
-    await daemon.forgetIdentity();
-    expect(heard.phases().at(-1)).toBe("onboarding");
+    await daemon.forgetIdentity(heard.hold()!);
+    expect(heard.events.at(-1)).toEqual(["phase", "onboarding", null, null]);
     await daemon.createIdentity("Another", PASSPHRASE);
     expect(heard.snapshot()).toMatchObject({ label: "Another" });
+  });
+
+  it("removes the vault a removal names and no other: one confirmed about a vault since removed and remade leaves the new one standing", async () => {
+    const root = await folder();
+    const served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n" });
+    daemons.push(served.daemon as DaemonCore);
+    const heard = told();
+    const ui = connect<Daemon>(await clientPort(served.url), new Proxy({} as DaemonEvents, { get: (_, name: string) => (...args: unknown[]) => heard.emit(name, ...args) }) as never);
+    await ui.boot();
+    await expect(ui.forgetIdentity("019b0000-0000-7000-8000-0000000000aa")).rejects.toThrow("there is no vault here to remove");
+    await ui.createIdentity("Alice", PASSPHRASE);
+    const alice = heard.hold()!;
+    await ui.lock();
+    expect(heard.events.at(-1)).toEqual(["phase", "locked", null, alice]);
+
+    const other = told();
+    const second = connect<Daemon>(await clientPort(served.url), new Proxy({} as DaemonEvents, { get: (_, name: string) => (...args: unknown[]) => other.emit(name, ...args) }) as never);
+    await second.boot();
+    expect(other.hold()).toBe(alice);
+    await second.forgetIdentity(alice);
+    await second.createIdentity("Replacement", PASSPHRASE);
+    const replacement = other.hold()!;
+    expect(replacement).not.toBe(alice);
+    await until("the first UI is shown the replacement", () => heard.hold() === replacement);
+
+    await expect(ui.forgetIdentity(alice)).rejects.toThrow("that vault is gone already");
+    await stat(vaultFile(root));
+    await ui.refresh();
+    expect(heard.snapshot()).toMatchObject({ label: "Replacement" });
+    await ui.forgetIdentity(replacement);
+    expect(heard.events.at(-1)).toEqual(["phase", "onboarding", null, null]);
+    await expect(stat(vaultFile(root))).rejects.toThrow();
+    await served.close();
   });
 });
 
@@ -251,7 +287,7 @@ describe("a daemon's files, one operation at a time", () => {
     const waiting = other.daemon.boot();
     await until("the second daemon says the folder is held elsewhere", () => other.heard.phases().includes("elsewhere"));
     const elsewhere = /held elsewhere/;
-    await expect(other.daemon.forgetIdentity()).rejects.toThrow(elsewhere);
+    await expect(other.daemon.forgetIdentity("019b0000-0000-7000-8000-0000000000aa")).rejects.toThrow(elsewhere);
     await expect(other.daemon.createIdentity("Mallory", PASSPHRASE)).rejects.toThrow(elsewhere);
     await expect(other.daemon.lock()).rejects.toThrow(elsewhere);
     await stat(vaultFile(root));
@@ -345,13 +381,13 @@ describe("a vault whose history is damaged", () => {
     const { daemon, heard } = daemonOver(root);
     await daemon.boot();
     expect(heard.phases()).toEqual(["damaged"]);
-    expect(heard.events.at(-1)).toEqual(["phase", "damaged", expect.stringMatching(/^events\/.* is damaged/)]);
+    expect(heard.events.at(-1)).toEqual(["phase", "damaged", expect.stringMatching(/^events\/.* is damaged/), expect.any(String)]);
     expect(heard.events.some(([name]) => name === "opened" || name === "changed")).toBe(false);
     await expect(daemon.unlock(PASSPHRASE)).rejects.toThrow("nothing to unlock");
     await expect(daemon.createIdentity("Another", PASSPHRASE)).rejects.toThrow("a vault already exists here");
     expect((await stat(vaultFile(root))).size).toBe(damagedBytes);
 
-    await daemon.forgetIdentity();
+    await daemon.forgetIdentity(heard.hold()!);
     expect(heard.phases().at(-1)).toBe("onboarding");
     await daemon.restoreIdentity(backup.bytes, PASSPHRASE);
     expect(heard.snapshot()).toMatchObject({ label: "Alice", contacts: [], restoreUnexplained: true });
@@ -372,7 +408,7 @@ describe("a vault whose history is damaged", () => {
     daemons.push(daemon);
     expect(await host.cachedSeedKey()).not.toBeNull();
     await daemon.boot();
-    expect(heard.events).toEqual([["phase", "damaged", expect.stringMatching(/^events\/.* is damaged/)]]);
+    expect(heard.events).toEqual([["phase", "damaged", expect.stringMatching(/^events\/.* is damaged/), expect.any(String)]]);
   });
 
   /** A host whose daemon's own connection to the vault, the one way to the file while it holds it, cuts an accepted event's bytes short. */
@@ -440,7 +476,7 @@ describe("a vault whose history is damaged", () => {
 
     const late = told();
     await (await joined(late)).ui.boot();
-    const damaged = ["phase", "damaged", expect.stringMatching(/^events\/.* is damaged/)];
+    const damaged = ["phase", "damaged", expect.stringMatching(/^events\/.* is damaged/), expect.any(String)];
     expect(late.events.filter(([name]) => name === "opened" || name === "changed")).toEqual([]);
     expect(late.events.at(-1)).toEqual(damaged);
     await until("the UI already there is told", () => heard.phases().at(-1) === "damaged");
@@ -819,7 +855,7 @@ describe("two daemons over a mediator", () => {
       await bob.daemon.eraseMessage(reply.messageId);
       expect(await bob.daemon.mergeBackup(bobs.bytes)).toMatchObject({ added: 0, objects: 0 });
 
-      await again.daemon.forgetIdentity();
+      await again.daemon.forgetIdentity(again.heard.hold()!);
       expect(again.heard.phases().at(-1)).toBe("onboarding");
       await expect(stat(path.join(root, ".estoc", "vault.sqlite"))).rejects.toThrow();
     },

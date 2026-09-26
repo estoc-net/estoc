@@ -11,7 +11,7 @@ import { conversationsOf } from "./conversations.js";
 import { carryDrafts, dropDrafts } from "./drafts.js";
 import { isInstalled, setupPwa } from "./pwa.js";
 import { isStoragePersisted, persistStorage } from "./storage.js";
-import type { Channel, ContactId, Conversation, Did, DidId, Lines, Merged, MessageId, Phase, Snapshot } from "./types.js";
+import type { Channel, ContactId, Conversation, Did, DidId, Hold, Lines, Merged, MessageId, Phase, Snapshot } from "./types.js";
 
 /**
  * The one store: the vault as the daemon last told it, plus the runtime
@@ -34,6 +34,8 @@ export const state = shallowReactive({
   phase: "booting" as Phase,
   /** what the daemon said with the phase: what stands in the vault's place, or why the vault does not open */
   phaseDetail: null as string | null,
+  /** the daemon's name for the vault file standing there, to name it by when its removal is asked; null while none stands */
+  hold: null as Hold | null,
   snapshot: null as Snapshot | null,
   conversations: [] as Conversation[],
   lines: null as Lines | null,
@@ -83,7 +85,7 @@ function take(snapshot: Snapshot): void {
 
 function connectDaemon(): Daemon {
   const started = startDaemon({
-    phase(phase, detail) {
+    phase(phase, detail, hold) {
       if (phase === "onboarding") dropDrafts();
       if (phase !== "open") {
         state.snapshot = null;
@@ -92,10 +94,12 @@ function connectDaemon(): Daemon {
       }
       state.phase = phase;
       state.phaseDetail = detail;
+      state.hold = hold;
     },
-    opened(snapshot) {
+    opened(snapshot, hold) {
       take(snapshot);
       state.phase = "open";
+      state.hold = hold;
       // the level is the open vault's own local state
       void running().traceLevel().then((level) => (state.traceLevel = level));
       if (state.daemonAt === null) {
@@ -199,8 +203,10 @@ export async function lock(): Promise<void> {
   await running().lock();
 }
 
-export async function forgetIdentity(): Promise<void> {
-  await running().forgetIdentity();
+/** The vault removed: the one under `hold`, read off the screen as the person was asked, and not one that took its place since. */
+export async function forgetIdentity(hold: Hold | null): Promise<void> {
+  if (hold === null) throw new Error("no vault is held here to remove");
+  await running().forgetIdentity(hold);
   state.log = [];
   state.links = {};
 }

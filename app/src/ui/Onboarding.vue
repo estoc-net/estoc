@@ -14,7 +14,6 @@ import { bytesOf } from "./util.js";
 
 const mode = ref<"create" | "restore">("create");
 
-// create
 const name = ref("");
 const passphrase = ref("");
 const confirmPass = ref("");
@@ -46,7 +45,6 @@ async function create() {
   }
 }
 
-// restore
 const backupFile = ref<File | null>(null);
 const restorePass = ref("");
 const restoring = ref(false);

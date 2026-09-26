@@ -177,7 +177,7 @@ function socketPort(url: string, events: DaemonEvents & LinkEvents): SocketPort 
       away = true;
       events.away(`daemon at ${new URL(url).host} is not answering`);
       if (!heard) {
-        events.phase("unreachable", null);
+        events.phase("unreachable", null, null);
       }
       setTimeout(open, 2000);
     });

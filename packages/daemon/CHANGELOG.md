@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`forgetIdentity(hold)`** names the vault it removes. The `hold` is
+  the daemon's name for the vault file, given when the file is found or
+  made and kept through every phase until the file is removed; every
+  `phase` event carries it, `null` while no vault stands, and `opened`
+  carries it with the snapshot. A removal naming a vault since removed
+  and remade is refused and leaves the new one as it is.
 - **Phase `foreign`**, in place of `unreadable` for what the host finds
   standing where the vault would be and is no vault of this version:
   the daemon takes nothing, and the host decides what becomes of it.

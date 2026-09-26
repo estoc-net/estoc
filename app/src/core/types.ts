@@ -3,7 +3,7 @@ import type { ChannelRecord, MessageRecord, ObservationRecord } from "@estoc/age
 
 export type { Channel, ContactId, Did, DidId, MessageId } from "@estoc/vault";
 export type { ChannelRecord, MessageRecord, ObservationRecord, PendingWork } from "@estoc/agent-core";
-export type { Lines, Merged, Phase, Snapshot } from "@estoc/daemon";
+export type { Hold, Lines, Merged, Phase, Snapshot } from "@estoc/daemon";
 
 /** A channel as a conversation shows it: whether the contact selects it, or it is history reached from one it selects. */
 export interface ConversationChannel extends ChannelRecord {

@@ -47,6 +47,16 @@ import type {
  */
 export type Phase = "booting" | "elsewhere" | "onboarding" | "foreign" | "unreadable" | "damaged" | "locked" | "open" | "unreachable";
 
+/**
+ * The daemon's name for the vault file it has: given when the file is
+ * found or made, the same through every phase the file goes through,
+ * gone when the file is removed. A UI names the vault a removal is
+ * about by it, so a confirmation left open in one UI while another
+ * removed that vault and made a new one removes nothing: the name it
+ * carries is no longer the one held.
+ */
+export type Hold = string;
+
 /** An arrangement with a mediator, as the fold has it. */
 export interface MediationSummary {
   mediationId: MediationId;
@@ -102,9 +112,9 @@ export interface Lines {
 }
 
 export interface DaemonEvents {
-  /** which screen the vault dictates; `open` comes as `opened`, with the records */
-  phase(phase: Phase, detail: string | null): void;
-  opened(snapshot: Snapshot): void;
+  /** which screen the vault dictates, and the hold on the vault it is about; `open` comes as `opened`, with the records */
+  phase(phase: Phase, detail: string | null, hold: Hold | null): void;
+  opened(snapshot: Snapshot, hold: Hold): void;
   /** the vault after something was committed to it */
   changed(snapshot: Snapshot): void;
   lines(lines: Lines): void;
@@ -164,8 +174,8 @@ export interface Daemon {
   unlock(passphrase: string): Promise<void>;
   /** The agent stopped and the seed forgotten, the vault kept hold of; nothing changes for a vault locked already. */
   lock(): Promise<void>;
-  /** The vault this daemon holds, removed for good. */
-  forgetIdentity(): Promise<void>;
+  /** The vault this daemon holds, removed for good: the one named, and refused when another has taken its place. */
+  forgetIdentity(hold: Hold): Promise<void>;
   exportBackup(): Promise<{ name: string; bytes: Uint8Array }>;
   mergeBackup(snapshot: Uint8Array): Promise<Merged>;
 

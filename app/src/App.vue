@@ -7,23 +7,17 @@ import ChatPane from "./ui/ChatPane.vue";
 import Onboarding from "./ui/Onboarding.vue";
 import Rail from "./ui/Rail.vue";
 import Unlock from "./ui/Unlock.vue";
+import { useRemoval } from "./ui/removal.js";
 
-// Why the last removal a hollow screen offered did not happen; the screen shows it.
-const removalFailed = ref<string | null>(null);
-
-async function remove(question: string, removal: () => Promise<void>) {
-  if (!confirm(question)) return;
-  removalFailed.value = null;
-  try {
-    await removal();
-  } catch (err) {
-    removalFailed.value = err instanceof Error ? err.message : String(err);
-  }
-}
+const { failed: removalFailed, remove } = useRemoval();
+const removeVault = (question: string) => {
+  const hold = state.hold;
+  return remove(question, () => forgetIdentity(hold));
+};
 
 const startOver = () => remove("Delete the old vault from this browser? There is no way back except a backup made by the version that wrote it.", discardFolderVault);
-const removeUnreadable = () => remove("Remove this vault from here and begin a new identity? Nothing of it can be exported by this version; what you keep is what a backup holds.", forgetIdentity);
-const removeDamaged = () => remove("Remove the damaged vault from here? It cannot be opened again afterwards; what you keep is what your backup holds.", forgetIdentity);
+const removeUnreadable = () => removeVault("Remove this vault from here and begin a new identity? Nothing of it can be exported by this version; what you keep is what a backup holds.");
+const removeDamaged = () => removeVault("Remove the damaged vault from here? It cannot be opened again afterwards; what you keep is what your backup holds.");
 
 // A conversation is selected by its key: a contact's ID, or for one not
 // named yet the pair it leads to. That pair moves when either side
@@ -92,7 +86,7 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
           >, then <button class="link" data-start-over @click="startOver">start over</button> to delete it and begin a new identity</template
         >.
       </p>
-      <p v-if="removalFailed" class="status-line error">{{ removalFailed }}</p>
+      <p v-if="removalFailed" class="status-line error" data-removal-failed>{{ removalFailed }}</p>
     </div>
   </div>
 
@@ -108,7 +102,7 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
         <button class="link" data-remove-unreadable @click="removeUnreadable">remove it and start over</button>
         with a new identity, or restore a backup on the screen that follows.
       </p>
-      <p v-if="removalFailed" class="status-line error">{{ removalFailed }}</p>
+      <p v-if="removalFailed" class="status-line error" data-removal-failed>{{ removalFailed }}</p>
     </div>
   </div>
 
@@ -135,7 +129,7 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
         To restore, <button class="link" data-remove-damaged @click="removeDamaged">remove the damaged vault</button>
         and choose the backup on the screen that follows.
       </p>
-      <p v-if="removalFailed" class="status-line error">{{ removalFailed }}</p>
+      <p v-if="removalFailed" class="status-line error" data-removal-failed>{{ removalFailed }}</p>
     </div>
   </div>
 
