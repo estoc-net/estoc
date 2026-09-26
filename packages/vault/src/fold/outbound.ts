@@ -581,12 +581,10 @@ function builtInOf(data: MessageOut, source: Source | null, execution: Execution
 }
 
 /**
- * The frozen targets of a pure ACK, each against the source's request
- * and the input it names: the source must request it, and the input
- * must have a complete witness, admitted or not. An input not here is
- * still to arrive; an unrequested, ambiguous or contradicted target is
- * a conflict. The saved array is checked, never rebuilt, so that later
- * inputs do not rewrite an intent.
+ * The frozen targets of a pure ACK, each checked against the source's
+ * request and against the input it names as `targetOf` judges it. The
+ * saved array is checked, never rebuilt, so that later inputs do not
+ * rewrite an intent.
  */
 function ackTargetsIn(targets: readonly string[], source: Source, execution: Execution | null, inputs: Inputs, missing: string[]): EffectStatus | null {
   const carried = source.event.data;
