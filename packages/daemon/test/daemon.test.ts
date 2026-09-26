@@ -1,16 +1,18 @@
-import { cp, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it, test } from "vitest";
 
-import type { SqliteDriver } from "@estoc/event-store";
-import { EMPTY_MESSAGE_TYPE, PING_TYPE, type Channel, type DidId } from "@estoc/vault";
+import { SqliteVault, exportVault, openPortable, restoreVault, type SqliteDriver } from "@estoc/event-store";
+import { openNodeSqlite } from "@estoc/event-store/node";
+import { unlockSeedKeystore } from "@estoc/keystore";
+import { EMPTY_MESSAGE_TYPE, Keys, PING_TYPE, PURE_ACK_EFFECT, vaultHeldRoots, type Channel, type DidId, type MintedDid } from "@estoc/vault";
 
 import { PROFILE, RECIPIENT_QUERY, RECIPIENT_UPDATE } from "@estoc/agent-core";
 import { FORWARD } from "../../agent-core/src/protocol/spec.js";
-import { newMediator, peerSealer, sealed, type DirectParty } from "../../agent-core/test/helpers.js";
+import { issuerRecovered, newMediator, peerSealer, proofOfSuccession, sealed, type Addressed, type DirectParty } from "../../agent-core/test/helpers.js";
 import type { FakeMediator } from "../../agent-core/test/fake-mediator.js";
 import { channelOf, forwarded, run, stopAll } from "../../agent-core/test/e2e/running.js";
 import { connect, createDaemon, decode, encode, type Daemon, type DaemonCore, type DaemonEvents, type DaemonHost, type Lines, type Port, type Snapshot } from "../src/index.js";
@@ -19,6 +21,7 @@ import { nodeHost, serveDaemon } from "../src/node/index.js";
 const BASIC_MESSAGE = "https://didcomm.org/basicmessage/2.0/message";
 const PASSPHRASE = "alice-passes-the-salt";
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
+const BOB_PRIOR = "019b0000-0000-7000-8000-0000000000b1" as DidId;
 const LONG = 300_000;
 
 const roots: string[] = [];
@@ -875,6 +878,94 @@ describe("a daemon whose vault records an observation it does not admit", () => 
       await pause(500);
       expect(recordsOf(restored.heard.snapshot())).toEqual(settled);
       expect([forwardsSeen(mediator), bob.inbounds.length]).toEqual([forwards, inbounds]);
+    },
+    LONG
+  );
+  /** Alice's backup restored on another machine, the issuer's document brought in there, and that replica exported: the evidence comes back as a backup to merge. */
+  async function backupHoldingIssuer(backup: Uint8Array, didId: DidId, prior: MintedDid): Promise<Uint8Array> {
+    const root = await folder();
+    await writeFile(path.join(root, "backup.sqlite"), backup);
+    const source = openPortable(openNodeSqlite(path.join(root, "backup.sqlite"), { mode: "readonly" }));
+    let runtime: SqliteVault;
+    try {
+      const restored = await restoreVault(source, (mode) => openNodeSqlite(path.join(root, "replica.sqlite"), { mode }), {
+        heldRoots: vaultHeldRoots(null),
+        anchor: async (wrapped) => Keys.anchorOf(await unlockSeedKeystore(wrapped, PASSPHRASE)),
+      });
+      runtime = new SqliteVault(restored.runtime);
+    } finally {
+      source.close();
+    }
+    try {
+      await issuerRecovered({ runtime, didId } as Addressed, prior);
+      await exportVault(runtime, (mode) => openNodeSqlite(path.join(root, "evidence.sqlite"), { mode }), { heldRoots: vaultHeldRoots(null) });
+    } finally {
+      await runtime.close();
+    }
+    return new Uint8Array(await readFile(path.join(root, "evidence.sqlite")));
+  }
+
+  const inputsOf = (channel: Snapshot["channels"][number]) => channel.messages.filter(({ direction, msg }) => direction === "in" && msg?.type !== EMPTY_MESSAGE_TYPE).map(({ body, verification }) => [body.state === "available" ? body.body : body.state, verification.status]);
+
+  test(
+    "admits the observation once the evidence its proof waited for is merged in: the UI is handed the message with its content, and the acknowledgement it asks for as work owed, sent only by hand; the daemon opened again over the vault reads the same records and sends nothing",
+    async () => {
+      const mediator = await newMediator();
+      const root = await folder();
+      const alice = daemonOver(root, mediator);
+      await alice.daemon.boot();
+      await alice.daemon.createIdentity("Alice", PASSPHRASE);
+      await alice.daemon.setMediator(mediator.did);
+      await until("alice's line is live", () => alice.heard.lines()?.connections[0]?.live === true);
+      const { invitation, didId } = await alice.daemon.createInvitation("many");
+      const a0 = alice.heard.snapshot().dids.find((did) => did.didId === didId)!.did!;
+
+      const bob = await run(mediator, 2, BOB, { privateAddresses: false });
+      const b0 = bob.party.did;
+      await bob.agent.send({ channel: channelOf(b0, a0), recipientDid: invitation.from }, { type: BASIC_MESSAGE, body: { content: "hello" } });
+      await until("bob holds alice's move", () => bob.inbounds.length === 1);
+      const pair = alice.heard.snapshot().channels.find((channel) => channel.channel.localDid === a0)!.head!;
+      const a1 = alice.heard.snapshot().dids.find((did) => did.did === pair.localDid)!.didId;
+
+      // Bob's word at Alice's new address proves his address succeeds one whose document Alice has never held: the observation is recorded, its admission waiting for that document.
+      const { prior, proof } = await proofOfSuccession(bob.party, BOB_PRIOR);
+      await forwarded(mediator, pair.localDid, await sealed(await peerSealer(bob.party as unknown as DirectParty), pair.localDid, { type: BASIC_MESSAGE, body: { content: "as I was saying" }, from_prior: proof, please_ack: [""] }));
+      const forwards = forwardsSeen(mediator);
+      const inbounds = bob.inbounds.length;
+      await until("alice holds the observation", () => channelIn(alice.heard.snapshot(), pair).observations.some(({ disposition }) => disposition.status === "pending-admission"));
+      await pause(500);
+      const waiting = channelIn(alice.heard.snapshot(), pair);
+      expect(inputsOf(waiting)).toEqual([]);
+      expect(waiting.observations.at(-1)).toMatchObject({ standing: { status: "complete" }, verification: { status: "pending-proof" }, disposition: { status: "pending-admission", because: "the source's proof is not yet verified" } });
+      expect(alice.heard.snapshot().pending).toMatchObject({ missingResponses: [], pendingProofs: [{ sourceEventCid: waiting.observations.at(-1)!.sourceEventCid, channel: pair }] });
+
+      const evidence = await backupHoldingIssuer((await alice.daemon.exportBackup()).bytes, a1, prior);
+      const merging = alice.heard.events.length;
+      expect(await alice.daemon.mergeBackup(evidence)).toMatchObject({ added: 1, renewed: false });
+      await until("the agent over the merged vault is live", () => liveAfter(alice.heard, merging));
+      await pause(500);
+      await until("the UI is handed the admission", () => channelIn(alice.heard.snapshot(), pair).observations.at(-1)?.disposition.status === "admitted", 5_000);
+      const admitted = channelIn(alice.heard.snapshot(), pair);
+      expect(inputsOf(admitted)).toEqual([[{ content: "as I was saying" }, "verified"]]);
+      expect(admitted.observations.at(-1)).toMatchObject({ standing: { status: "complete" }, verification: { status: "verified" }, disposition: { status: "admitted" }, contradicting: false });
+      expect(alice.heard.snapshot().pending).toMatchObject({ missingResponses: [{ effectType: PURE_ACK_EFFECT, channel: pair }], pendingProofs: [] });
+      expect([forwardsSeen(mediator), bob.inbounds.length]).toEqual([forwards, inbounds]);
+      const settled = recordsOf(alice.heard.snapshot());
+      await alice.daemon.close();
+
+      const again = daemonOver(root, mediator);
+      await again.daemon.boot();
+      await again.daemon.unlock(PASSPHRASE);
+      await until("the line is live again", () => again.heard.lines()?.connections[0]?.live === true);
+      await pause(500);
+      expect(recordsOf(again.heard.snapshot())).toEqual(settled);
+      expect([forwardsSeen(mediator), bob.inbounds.length]).toEqual([forwards, inbounds]);
+
+      const { executionId } = again.heard.snapshot().pending.missingResponses[0]!;
+      expect(await again.daemon.completeResponse(executionId, PURE_ACK_EFFECT)).toEqual({ outcome: "submitted", because: null });
+      await until("bob holds the acknowledgement", () => bob.inbounds.length === inbounds + 1);
+      expect(forwardsSeen(mediator)).toBe(forwards + 1);
+      await until("the acknowledgement is no longer owed", () => again.heard.snapshot().pending.missingResponses.length === 0);
     },
     LONG
   );

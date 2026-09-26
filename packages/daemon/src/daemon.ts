@@ -425,10 +425,17 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     );
   }
 
-  /** The agent's lines connected, in the background: a mediator out of reach keeps no screen waiting. */
+  /**
+   * The agent's lines connected, in the background: a mediator out of
+   * reach keeps no screen waiting. The pass the agent ran as it opened
+   * may have recorded what waited for evidence the vault now holds;
+   * the records were read before that pass, so they are read again.
+   */
   function connect(running: Open): void {
     const { attached } = running;
     during(attached, async (agent) => {
+      const { admitted, consumed, acknowledged } = agent.recovered;
+      if (open === running && running.attached === attached && admitted.length + consumed.length + acknowledged.length > 0) await tell();
       await agent.connect();
       if (open === running && running.attached === attached) emit("lines", linesOf(agent));
     }).catch((err) => {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The records are read again for every listener once the agent over
+  the vault has opened, when the pass it ran as it opened admitted,
+  consumed or acknowledged anything: an observation whose admission
+  waited for evidence a merged backup brought in is shown admitted,
+  with the message it carries and the response it earns listed as
+  owed, without another change to the vault.
 - `Snapshot.channels[].observations` and `Snapshot.unplaced.inputs`
   are the agent's observation records: every observation with its
   disposition, apart from the messages, which are the admitted inputs
