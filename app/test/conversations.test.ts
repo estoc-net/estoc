@@ -100,6 +100,21 @@ describe("a conversation", () => {
     for (const listed of conversation!.unadmitted) expect(Object.keys(listed).sort()).toEqual(["at", "channel", "contradicting", "disposition", "messageId", "sourceEventCid", "standing", "verification"]);
   });
 
+  it("shows an observation admitted once the evidence it waited for came in as the message it carries, in the thread by its time, and no longer apart", () => {
+    const waiting = observation(current, "cid-waited", 11, { status: "pending-admission", because: "the source's proof is not yet verified" });
+    const before = channelRecord(current, current, [profile], [observation(current, "cid-claim", 12, { status: "admitted" }), waiting]);
+    const after = channelRecord(current, current, [profile, inbound(current, waiting.messageId, { content: "as I was saying" }, 11)], [before.observations[0]!, { ...waiting, verification: { status: "verified" }, disposition: { status: "admitted" } }]);
+    const [shownBefore] = conversationsOf(snapshotOf([before], []));
+    const [shownAfter] = conversationsOf(snapshotOf([after], []));
+    expect(shownBefore!.messages.map(({ messageId }) => messageId)).toEqual(["claim"]);
+    expect(shownBefore!.unadmitted.map(({ sourceEventCid, disposition }) => [sourceEventCid, disposition.status])).toEqual([["cid-waited", "pending-admission"]]);
+    expect(shownAfter!.messages.map(({ messageId, at }) => [messageId, at])).toEqual([
+      [waiting.messageId, at(11)],
+      ["claim", at(12)],
+    ]);
+    expect(shownAfter!.unadmitted).toEqual([]);
+  });
+
   it("shown by no contact lists the same apart under the head its channels lead to", () => {
     const [conversation] = conversationsOf(snapshotOf(channels, []));
     expect(conversation).toMatchObject({ contactId: null, claimedName: "Bob", writeTo: [current] });

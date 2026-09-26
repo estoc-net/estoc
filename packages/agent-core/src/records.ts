@@ -98,7 +98,7 @@ export interface MessageRecord {
   channel: Channel | null;
   /** the undeleted contacts that select exactly this channel */
   contactIds: ContactId[];
-  /** when this vault first recorded the message */
+  /** for an input, the time of the observation it is shown by; for an output, the time of its earliest intent */
   at: string;
   /** null while the admitted observations of an input, or the intents of an output, do not agree on one */
   msg: MessageHeaders | null;
