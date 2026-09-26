@@ -211,7 +211,7 @@ export async function forgetIdentity(hold: Hold | null): Promise<void> {
     throw new Error(
       state.daemonAt === null
         ? "no vault is held here to remove"
-        : `the daemon at ${new URL(state.daemonAt).host} names no vault to remove: it is an estoc-daemon of an earlier version, and nothing is removed from here until it is updated`
+        : `the daemon at ${new URL(state.daemonAt).host} names no vault to remove, so nothing is removed from here: an estoc-daemon of an earlier version names none, and is updated first; one that could not take its storage says so above`
     );
   }
   await running().forgetIdentity(named);
