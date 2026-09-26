@@ -8,7 +8,7 @@ import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { ENCRYPTED_MIME, secretsResolverFor, type IMessage } from "../src/protocol/didcomm.js";
 import { FORWARD } from "../src/protocol/spec.js";
 import { RECIPIENT, RECIPIENT_QUERY } from "../src/protocol/mediation.js";
-import { AgentTrace, Keyring, LiveAction, UnknownEntity, automaticDraft, cancel, createVault, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../src/index.js";
+import { AgentTrace, Keyring, LiveAction, UnknownEntity, automaticDraft, cancel, completeResponse, createVault, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../src/index.js";
 import { MEDIATOR_HTTP } from "./fake-mediator.js";
 import { carrierWaitingForIssuer, delivered, didcomm, directParty, issuerRecovered, mediatedParty, memoryDriver, newMediator, observed, posting, proofOfSuccession, received, refuseSubmissions, ticking, type DirectParty, type MediatedParty } from "./helpers.js";
 
@@ -185,6 +185,24 @@ describe("dispatch to a direct endpoint", () => {
     f = await fold(alice);
     expect([f.dispositions.disposition(sourceEventCid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.outbound.outbounds.get(drafted.messageId)!.outcome.status]).toEqual(["admitted", [sourceEventCid], "submitted"]);
     expect(wire.posts.map((post) => post.url)).toEqual([BOB_ENDPOINT]);
+    await closeAll(alice, bob);
+  });
+
+  test("a pure ACK completed by hand for a carrier whose target the replaced peer's ignored observation shares a wire ID with is made and carried at once: the target admission decided is the target, and the ignored observation adds no ambiguity", async () => {
+    const { alice, bob } = await parties();
+    const { prior, proof } = await proofOfSuccession(bob, BOB_PRIOR);
+    await delivered(alice, bob, { id: "shared", from_prior: proof });
+    const carrier = await delivered(alice, bob, { id: "carrier", please_ack: ["shared"] });
+    const ignored = await delivered(alice, { ...bob, didId: prior.didId, did: prior.did, longFormDid: prior.longFormDid }, { id: "shared" });
+    let f = await fold(alice);
+    expect([f.dispositions.disposition(ignored).status, f.outbound.ackTargets(carrier)]).toEqual(["ignored-superseded", ["shared"]]);
+
+    const wire = posting(accepted);
+    const made = await completeResponse(alice.runtime, alice.keys, f.inbound.ofSource(carrier)!.id, PURE_ACK_EFFECT, { dispatch: (action) => dispatch(alice.runtime, alice.keys, action, { didcomm, fetch: wire.fetch }) });
+    if (made.outcome !== "created") throw new Error(JSON.stringify(made));
+    expect([made.intent.data.ack, made.dispatched.outcome, wire.posts.map((post) => post.url)]).toEqual([["shared"], "submitted", [BOB_ENDPOINT]]);
+    f = await fold(alice);
+    expect(f.outbound.outbounds.get(made.messageId)!).toMatchObject({ effect: { status: "complete" }, outcome: { status: "submitted" } });
     await closeAll(alice, bob);
   });
 
