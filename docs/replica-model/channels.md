@@ -434,6 +434,8 @@ implement a second closure, fork detector or join algorithm in the vault.
 Fold the full available evidence before checking current conflicts or authorizing
 new work; enumeration order and intermediate graph rows cannot authorize dispatch.
 
+<a id="supersession-confirmation-and-authorization"></a>
+
 ### 5.2 Supersession, confirmation and authorization
 
 A verified peer link stops new application work from its old peer in
@@ -465,6 +467,14 @@ confirmation; missing independent evidence leaves the decision pending.
 Confirmation permits future newly prepared messages to omit the
 frozen proof; it does not edit a committed package or acknowledge
 any particular wire ID.
+
+For new exact-address confirmation, a source must have effective admission,
+complete authentication and any carried proof, valid exact references, and no
+receipt-integrity fault. An application intent conflict over the input's
+contents does not by itself withdraw this address-knowledge witness: each
+qualifying observation independently shows the peer addressing the same local
+DID. This exception authorizes no input-derived response, ACK attribution or
+content projection.
 
 For ACK attribution in the exact same canonical channel, compare both endpoint
 roles directly and require the admitted source's own authentication/proof,

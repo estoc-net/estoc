@@ -2140,6 +2140,11 @@ frozen intents/packages and submitted facts do not become pending or invalid
 merely because an admission is absent. A committed local decision still needs
 independent complete predecessor-confirming evidence, without an admission
 prerequisite for that witness. Missing exact evidence still defers validation.
+For a saved pure ACK, validate frozen targets under the frozen-target rules in
+[distributed-delivery.md section 8.1](distributed-delivery.md#freezing-an-ack-target-set).
+Admission-free historical evidence can fill an absent admission prerequisite;
+it does not add unadmitted inputs as competitors to an otherwise unique
+admitted target.
 These records do not grant admission to their sources or populate accepted
 chat/profile/ACK views. A saved `delivery.acknowledged` likewise cannot substitute
 for the admitted witnesses required by section 9.7.
@@ -2165,7 +2170,10 @@ for an observation received on an ordinary communication channel.
 
 Each consumer derives pending/refused/eligible status from its exact evidence
 and operation rules. At least one admitted complete source witness and no
-conflicting authenticated intent is required for application use. Raw receipt
+conflicting authenticated intent is required for application use. Exact-address
+knowledge uses the confirmation-specific checks in
+[channels.md section 5.2](channels.md#supersession-confirmation-and-authorization);
+conflicting application contents alone do not refute that knowledge. Raw receipt
 and cryptographic proof inspection remain independent of admission. Raw payload
 discrepancies are diagnostic; only independently admitted claims establish an
 application intent conflict.
