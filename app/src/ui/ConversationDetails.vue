@@ -3,13 +3,14 @@ import { computed, ref } from "vue";
 
 import { blockChannels, deleteContact, introduce, nameConversation, renameContact, rotate, state } from "../core/store.js";
 import type { Conversation, ConversationChannel, DidId } from "../core/types.js";
-import { shortDid, shortFormOf } from "./util.js";
+import { dispositionOf, shortDid, shortFormOf, timeOf } from "./util.js";
 
 /**
  * A conversation as the vault has it: the channels it shows, each a
  * pair of one DID of ours and one of theirs, with what stands in the
- * way of writing in it; and the name we give it. Rotating a channel
- * mints a DID of ours for this peer alone and tells them.
+ * way of writing in it, and everything received in it as the vault
+ * disposed of it; and the name we give it. Rotating a channel mints a
+ * DID of ours for this peer alone and tells them.
  */
 const props = defineProps<{ conversation: Conversation }>();
 const emit = defineEmits<{ named: [key: string] }>();
@@ -72,6 +73,8 @@ function remove() {
 
 const sendsClosed = computed(() => state.snapshot?.restoreUnexplained ?? false);
 const selectedChannels = computed(() => props.conversation.channels.filter(({ selected }) => selected));
+
+const admittedOf = (channel: ConversationChannel): number => channel.observations.filter(({ disposition }) => disposition.status === "admitted").length;
 </script>
 
 <template>
@@ -92,6 +95,19 @@ const selectedChannels = computed(() => props.conversation.channels.filter(({ se
         <template v-if="channel.send.status === 'closed'"> · cannot write here: {{ channel.send.because }}</template>
         <template v-if="channel.peerName"> · they call themself “{{ channel.peerName.name }}”</template>
       </p>
+      <details v-if="channel.observations.length > 0" class="receipts" data-receipts>
+        <summary class="status-line">{{ channel.observations.length }} received, {{ admittedOf(channel) }} taken in</summary>
+        <p
+          v-for="observation in channel.observations"
+          :key="observation.sourceEventCid"
+          class="status-line"
+          :class="{ error: observation.disposition.status === 'refused' }"
+          :title="observation.sourceEventCid"
+          :data-disposition="observation.disposition.status"
+        >
+          {{ timeOf(Date.parse(observation.at)) }} · {{ dispositionOf(observation) }}<template v-if="observation.contradicting"> · carries another content than the one taken in</template><template v-if="observation.verification.status !== 'not-present'"> · proof {{ observation.verification.status }}</template>
+        </p>
+      </details>
       <div v-if="channel.send.status === 'open'" class="rail-actions">
         <button v-if="localDidIdOf(channel)" class="btn-quiet" type="button" :disabled="busy || sendsClosed" data-rotate @click="act(() => rotate(localDidIdOf(channel)!, channel.channel.peerDid))">
           Rotate my DID

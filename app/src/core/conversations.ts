@@ -1,4 +1,4 @@
-import type { Channel, ChannelRecord, Conversation, ConversationChannel, MessageRecord, Snapshot, UnplacedInput } from "./types.js";
+import type { Channel, ChannelRecord, Conversation, ConversationChannel, MessageRecord, ObservationRecord, Snapshot } from "./types.js";
 
 export function pairKey(channel: Channel): string {
   return JSON.stringify([channel.localDid, channel.peerDid]);
@@ -15,10 +15,10 @@ function threadOf(channels: readonly ChannelRecord[]): MessageRecord[] {
   return [...messages.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 
-function unplacedOf(channels: readonly ChannelRecord[]): UnplacedInput[] {
-  const inputs = new Map<string, UnplacedInput>();
-  for (const channel of channels) for (const input of channel.unplaced) inputs.set(input.sourceEventCid, input);
-  return [...inputs.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+function unadmittedOf(channels: readonly ChannelRecord[]): ObservationRecord[] {
+  const observations = new Map<string, ObservationRecord>();
+  for (const channel of channels) for (const observation of channel.observations) if (observation.disposition.status !== "admitted") observations.set(observation.sourceEventCid, observation);
+  return [...observations.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 
 /**
@@ -68,7 +68,7 @@ export function conversationsOf(snapshot: Snapshot): Conversation[] {
       writeTo: contact.writeTo,
       defaultWriteTo: contact.defaultWriteTo,
       messages: threadOf(channels),
-      unplaced: unplacedOf(channels),
+      unadmitted: unadmittedOf(channels),
       diagnostics: contact.diagnostics,
     });
   }
@@ -91,7 +91,7 @@ export function conversationsOf(snapshot: Snapshot): Conversation[] {
       writeTo: open,
       defaultWriteTo: open[0] ?? null,
       messages: threadOf(channels),
-      unplaced: unplacedOf(channels),
+      unadmitted: unadmittedOf(channels),
       diagnostics: [],
     });
   }

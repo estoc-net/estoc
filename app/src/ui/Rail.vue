@@ -7,7 +7,7 @@ import { mediatorLabel } from "../core/mediators.js";
 import { chooseMediator, createInvitation, downloadBackup, forgetIdentity, invitationLink, lock, mergeBackup, reconnect, setTraceLevel, state } from "../core/store.js";
 import MediatorForm from "./MediatorForm.vue";
 import PendingWork from "./PendingWork.vue";
-import { bytesOf, shortDid } from "./util.js";
+import { bytesOf, dispositionOf, shortDid } from "./util.js";
 
 const snapshot = computed(() => state.snapshot);
 const daemonHost = computed(() => (state.daemonAt === null ? "" : new URL(state.daemonAt).host));
@@ -245,7 +245,7 @@ function forget() {
 
     <div v-if="snapshot && snapshot.unplaced.inputs.length + snapshot.unplaced.outputs.length > 0" class="rail-section">
       <div class="eyebrow">In no conversation</div>
-      <p v-for="input in snapshot.unplaced.inputs" :key="input.sourceEventCid" class="status-line" :class="{ error: input.standing === 'conflict' }">received: {{ input.because }}</p>
+      <p v-for="input in snapshot.unplaced.inputs" :key="input.sourceEventCid" class="status-line" :class="{ error: input.disposition.status === 'refused' }">received, {{ dispositionOf(input) }}</p>
       <p v-for="output in snapshot.unplaced.outputs" :key="output.message.messageId" class="status-line error">
         a message of yours names {{ output.candidates.length }} channels ({{ output.candidates.map((c) => shortDid(c.peerDid)).join(", ") }}) and goes out in none
       </p>

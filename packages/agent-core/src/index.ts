@@ -150,8 +150,9 @@ export {
   type WaitingProof,
   type PendingWork,
   type Recorder,
+  type DispositionRecord,
+  type ObservationRecord,
   type Unplaced,
-  type UnplacedInput,
   type UnplacedOutput,
   type ViewOptions,
 } from "./records.js";

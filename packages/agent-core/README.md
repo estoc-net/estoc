@@ -67,6 +67,13 @@ whatever the message comes to, and a dispatch prepares first, so a
 pass a refused commit cut short is completed by the next message
 prepared or dispatched.
 
+What an application is shown reads the same way: a message record is
+an input some admission names an observation of, its content that of
+the admitted witness, while every observation — admitted, refused,
+ignored because the peer moved on, or pending with what stands in the
+way — is listed apart with nothing it carries, so that what the
+runtime has not accepted is inspectable and never read as the peer's.
+
 Every path to the wire — a user send, a reply, a package, the first
 call and a manual retry — reads the one send gate the vault keeps at
 both ends of the channel: a channel a verified replacement of the

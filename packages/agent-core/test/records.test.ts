@@ -45,7 +45,7 @@ import {
   type MessageRecord,
   type Source,
 } from "../src/index.js";
-import { didcomm, directParty, peerSealer, posting, received, sealed, type DirectParty, type Fresh, type Post } from "./helpers.js";
+import { didcomm, directParty, observed, peerSealer, posting, received, sealed, type DirectParty, type Fresh, type Post } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const ALICE_OTHER = "019b0000-0000-7000-8000-00000000000c" as DidId;
@@ -204,7 +204,7 @@ describe("records", () => {
     await closeAll(alice, bob);
   });
 
-  test("an observation whose sender evidence is not here is shown unplaced in its pair with what it waits for, and as the one input once the evidence arrives", async () => {
+  test("an observation whose sender evidence is not here is listed in its pair as pending with what it waits for and shows no input; once the evidence arrives it is admitted and shows the one input", async () => {
     const { alice, bob } = await parties();
     const { receive } = await hosting(alice);
     const pair = { localDid: alice.did, peerDid: bob.did };
@@ -218,11 +218,22 @@ describe("records", () => {
     expect(before.channels()).toEqual([pair]);
     const record = await before.channel(pair);
     expect([record.messages, record.peerName]).toEqual([[], null]);
-    expect(record.unplaced).toEqual([{ sourceEventCid: cid, messageId: source.event.data.messageId, channel: pair, at: source.event.at, standing: "incomplete", because: expect.any(String) }]);
+    expect(record.observations).toEqual([
+      {
+        sourceEventCid: cid,
+        messageId: source.event.data.messageId,
+        channel: pair,
+        at: source.event.at,
+        standing: { status: "incomplete", because: expect.any(String) },
+        verification: { status: "not-present" },
+        disposition: { status: "pending-admission", because: expect.stringContaining("the source's authentication is incomplete") },
+        contradicting: false,
+      },
+    ]);
     expect([await before.unplaced(), before.pending().missingResponses]).toEqual([{ inputs: [], outputs: [] }, []]);
 
     const after = await (await readRecords(alice.runtime, alice.keys)).channel(pair);
-    expect(after.unplaced).toEqual([]);
+    expect(after.observations).toMatchObject([{ sourceEventCid: cid, standing: { status: "complete" }, disposition: { status: "admitted" } }]);
     expect(after.messages).toMatchObject([{ messageId: source.event.data.messageId, input: { status: "complete" }, manualAction: "complete" }]);
     expect(after.peerName).toMatchObject({ name: "Bob" });
     await closeAll(alice, bob);
@@ -339,17 +350,35 @@ describe("records", () => {
     expect(reportedProblem({ comment: 7 })).toBe("unknown");
   });
 
-  test("a receipt-integrity conflict is a diagnostic of the inputs it touches and admits neither: no manual action, no reply owed", async () => {
+  test("a receipt-integrity conflict admits neither observation it touches: each is listed refused, neither is shown as an input, and no reply is owed", async () => {
     const { alice, bob } = await parties();
     const pair = { localDid: alice.did, peerDid: bob.did };
-    await received(alice, bob, crypto.randomUUID(), { type: PING_TYPE, body: { response_requested: true }, created_time: CREATED }, alice, "1" as ReceiptOrdinal);
-    await received(alice, bob, crypto.randomUUID(), { type: BASIC_MESSAGE, body: { content: "same ordinal" } }, alice, "1" as ReceiptOrdinal);
+    const ping = await received(alice, bob, crypto.randomUUID(), { type: PING_TYPE, body: { response_requested: true }, created_time: CREATED }, alice, "1" as ReceiptOrdinal);
+    const chat = await received(alice, bob, crypto.randomUUID(), { type: BASIC_MESSAGE, body: { content: "same ordinal" } }, alice, "1" as ReceiptOrdinal);
 
     const records = await readRecords(alice.runtime, alice.keys);
     const record = await records.channel(pair);
-    expect(record.messages).toHaveLength(2);
-    for (const message of record.messages) expect(message).toMatchObject({ input: { status: "pending", because: "no observation of the input is admitted" }, manualAction: "none", completes: [], diagnostics: [{ kind: "input" }, { kind: "receipt-integrity" }] });
+    expect(record.messages).toEqual([]);
+    expect(record.observations.map(({ sourceEventCid, standing, disposition }) => [sourceEventCid, standing, disposition])).toEqual(
+      [ping, chat].map((cid) => [cid, { status: "complete" }, { status: "refused", because: "one author gave the source's ordinal to another observation" }])
+    );
     expect(records.pending().missingResponses).toEqual([]);
+    await closeAll(alice, bob);
+  });
+
+  test("an input is shown by its admitted observations alone: a later observation of it carrying another content is listed beside it, not admitted and contradicting, and the content first admitted stays", async () => {
+    const { alice, bob } = await parties();
+    const pair = { localDid: alice.did, peerDid: bob.did };
+    const wireId = crypto.randomUUID();
+    const first = await received(alice, bob, wireId, { type: BASIC_MESSAGE, body: { content: "first" }, created_time: CREATED });
+    const second = await observed(alice, bob, wireId, { type: BASIC_MESSAGE, body: { content: "second" }, created_time: CREATED });
+
+    const record = await (await readRecords(alice.runtime, alice.keys)).channel(pair);
+    expect(record.messages).toMatchObject([{ direction: "in", body: { state: "available", body: { content: "first" } }, input: { status: "complete" }, diagnostics: [{ kind: "contradicting", because: "1 authenticated observation carries another content than the one admitted" }] }]);
+    expect(record.observations.map(({ sourceEventCid, disposition, contradicting }) => [sourceEventCid, disposition, contradicting])).toEqual([
+      [first, { status: "admitted" }, false],
+      [second, { status: "pending-admission", because: "the observation contradicts the intent its input has admitted" }, true],
+    ]);
     await closeAll(alice, bob);
   });
 

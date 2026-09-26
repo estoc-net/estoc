@@ -532,6 +532,14 @@ textarea {
   font-size: 11px;
 }
 
+.details .receipts summary {
+  cursor: pointer;
+}
+
+.details .receipts p {
+  padding-left: 12px;
+}
+
 .details label {
   font-size: 12px;
   display: inline-flex;

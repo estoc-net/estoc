@@ -8,7 +8,7 @@ import type { Conversation } from "../core/types.js";
 import { rendererFor, showsInThread, typeOf } from "../renderers/index.js";
 import ConversationDetails from "./ConversationDetails.vue";
 import RestoreNotice from "./RestoreNotice.vue";
-import { shortDid, timeOf } from "./util.js";
+import { dispositionOf, shortDid, timeOf } from "./util.js";
 
 const props = defineProps<{
   conversations: Conversation[];
@@ -328,21 +328,22 @@ onMounted(() => {
       <p v-if="conversation && !mediated" class="hop-note">
         No mediator yet — choose one in the rail; without one, nothing leaves and nothing arrives.
       </p>
-      <p v-else-if="conversation && thread.length === 0 && conversation.unplaced.length === 0" class="hop-note">
+      <p v-else-if="conversation && thread.length === 0 && conversation.unadmitted.length === 0" class="hop-note">
         No messages yet. What you write crosses the mediator sealed to them,
         from a DID of yours nobody else ever sees.
       </p>
       <component :is="rendererFor(typeOf(m)).component" v-for="m in thread" :key="m.messageId" :message="m" />
       <p
-        v-for="input in conversation?.unplaced ?? []"
-        :key="input.sourceEventCid"
+        v-for="observation in conversation?.unadmitted ?? []"
+        :key="observation.sourceEventCid"
         class="hop-note"
-        :class="{ error: input.standing === 'conflict' }"
-        :title="input.channel === null ? undefined : `${input.channel.peerDid} → ${input.channel.localDid}`"
-        data-unplaced
+        :class="{ error: observation.disposition.status === 'refused' }"
+        :title="observation.channel === null ? undefined : `${observation.channel.peerDid} → ${observation.channel.localDid}`"
+        data-unadmitted
+        :data-disposition="observation.disposition.status"
       >
-        {{ timeOf(Date.parse(input.at)) }} · received<template v-if="input.channel"> as {{ shortDid(input.channel.localDid) }}</template>, not taken in ({{ input.standing }}):
-        {{ input.because }}. Nothing it carries is shown as theirs.
+        {{ timeOf(Date.parse(observation.at)) }} · received<template v-if="observation.channel"> as {{ shortDid(observation.channel.localDid) }}</template>, {{ dispositionOf(observation) }}.
+        Nothing it carries is shown as theirs.
       </p>
     </div>
 

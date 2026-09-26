@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `Snapshot.channels[].observations` and `Snapshot.unplaced.inputs`
+  are the agent's observation records: every observation with its
+  disposition, apart from the messages, which are the admitted inputs
+  alone.
 - `send` takes no `preRotation`: a channel a replacement of either end
   has moved on from takes no send, whoever asks.
 - `Merged` has no `conflicts`: the version-4 vault has no same-ID

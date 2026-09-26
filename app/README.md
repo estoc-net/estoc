@@ -184,7 +184,12 @@ at the top of the script; an optional first argument sets the app URL.
   needs the person. A renderer takes its record through props and does not
   import the store: that seam is where third-party renderers would slot
   in. The frame around it (`Bubble.vue`) is the vault's account of the
-  message and the manual steps it leaves open.
+  message and the manual steps it leaves open. A thread holds what the
+  vault admitted; what arrived and is not admitted — pending, refused,
+  or ignored because the peer moved to another address — is a note
+  under the thread saying so, with nothing it carries, and the
+  conversation's details list every observation of a channel with what
+  the vault made of it.
 - **Trace**: how much the device keeps of what its agent observes is the
   rail's level (off / normal / verbose), local state of this copy and in
   no backup. Nothing in this build reads the trace back yet.

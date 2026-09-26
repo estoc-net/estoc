@@ -1,8 +1,8 @@
 import type { Channel, ContactId } from "@estoc/vault";
-import type { ChannelRecord, MessageRecord, UnplacedInput } from "@estoc/agent-core";
+import type { ChannelRecord, MessageRecord, ObservationRecord } from "@estoc/agent-core";
 
 export type { Channel, ContactId, Did, DidId, MessageId } from "@estoc/vault";
-export type { ChannelRecord, MessageRecord, PendingWork, UnplacedInput } from "@estoc/agent-core";
+export type { ChannelRecord, MessageRecord, ObservationRecord, PendingWork } from "@estoc/agent-core";
 export type { Lines, Merged, Phase, Snapshot } from "@estoc/daemon";
 
 /** A channel as a conversation shows it: whether the contact selects it, or it is history reached from one it selects. */
@@ -28,8 +28,9 @@ export interface Conversation {
   writeTo: Channel[];
   /** the one a send goes out in when none is picked; null while several, or the only one, are not the one the contact prefers */
   defaultWriteTo: Channel | null;
+  /** the inputs the vault admitted and the outputs, read together */
   messages: MessageRecord[];
-  /** what arrived in a channel shown here and no input takes in, each once */
-  unplaced: UnplacedInput[];
+  /** what arrived in a channel shown here and is not admitted — pending, refused, or ignored since the peer moved on — each once */
+  unadmitted: ObservationRecord[];
   diagnostics: string[];
 }
