@@ -23,10 +23,18 @@ import type {
 
 /**
  * Which screen the vault dictates: booting → (elsewhere: another
- * daemon has the files) → onboarding (no vault) | unreadable | damaged
- * | locked (a vault, no cached seed) → open. `unreachable` is the one
- * phase no daemon says: a client over a socket says it when nothing
- * answers.
+ * daemon has the files) → onboarding (no vault) | foreign | unreadable
+ * | damaged | locked (a vault, no cached seed) → open. `unreachable` is
+ * the one phase no daemon says: a client over a socket says it when
+ * nothing answers.
+ *
+ * `foreign` is what the host found standing where the vault would be
+ * and is no vault of this version: the daemon takes nothing, and what
+ * becomes of it is the host's to decide. `unreadable` is a vault the
+ * daemon could not open: a file written under another version of the
+ * schema, or files that could not be taken at all. Nothing of it is
+ * exported from here; `forgetIdentity` removes a vault file the daemon
+ * holds, to make room.
  *
  * `damaged` is a vault of this version whose history no longer reads
  * whole, found as it opens or while it runs: it is not run, since it
@@ -37,7 +45,17 @@ import type {
  * what the passphrase unlocks from any readable copy of the vault or
  * snapshot. `forgetIdentity` removes the damaged vault to make room.
  */
-export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "damaged" | "locked" | "open" | "unreachable";
+export type Phase = "booting" | "elsewhere" | "onboarding" | "foreign" | "unreadable" | "damaged" | "locked" | "open" | "unreachable";
+
+/**
+ * The daemon's name for the vault file it has: given when the file is
+ * found or made, the same through every phase the file goes through,
+ * gone when the file is removed. A UI names the vault a removal is
+ * about by it, so a confirmation left open in one UI while another
+ * removed that vault and made a new one removes nothing: the name it
+ * carries is no longer the one held.
+ */
+export type Hold = string;
 
 /** An arrangement with a mediator, as the fold has it. */
 export interface MediationSummary {
@@ -94,9 +112,9 @@ export interface Lines {
 }
 
 export interface DaemonEvents {
-  /** which screen the vault dictates; `open` comes as `opened`, with the records */
-  phase(phase: Phase, detail: string | null): void;
-  opened(snapshot: Snapshot): void;
+  /** which screen the vault dictates, and the hold on the vault it is about; `open` comes as `opened`, with the records */
+  phase(phase: Phase, detail: string | null, hold: Hold | null): void;
+  opened(snapshot: Snapshot, hold: Hold): void;
   /** the vault after something was committed to it */
   changed(snapshot: Snapshot): void;
   lines(lines: Lines): void;
@@ -156,8 +174,8 @@ export interface Daemon {
   unlock(passphrase: string): Promise<void>;
   /** The agent stopped and the seed forgotten, the vault kept hold of; nothing changes for a vault locked already. */
   lock(): Promise<void>;
-  /** The vault this daemon holds, removed for good. */
-  forgetIdentity(): Promise<void>;
+  /** The vault this daemon holds, removed for good: the one named, and refused when another has taken its place. */
+  forgetIdentity(hold: Hold): Promise<void>;
   exportBackup(): Promise<{ name: string; bytes: Uint8Array }>;
   mergeBackup(snapshot: Uint8Array): Promise<Merged>;
 

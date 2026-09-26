@@ -143,7 +143,7 @@ async function reach(vault: Vault): Promise<Reached> {
 }
 
 async function refuseForeign(vault: Vault): Promise<void> {
-  const foreign = await nodeHost(vault.root).unreadable?.();
+  const foreign = await nodeHost(vault.root).foreign?.();
   if (foreign != null) throw new Error(foreign);
 }
 

@@ -31,7 +31,7 @@ async function storage(): Promise<DaemonStorage> {
 
 const host: DaemonHost = {
   storage,
-  async unreadable() {
+  async foreign() {
     const root = await navigator.storage.getDirectory();
     try {
       await root.getDirectoryHandle(FOLDER_VAULT);

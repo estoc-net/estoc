@@ -77,7 +77,7 @@ export function nodeHost(root: string, options: NodeHostOptions = {}): DaemonHos
       await mkdir(dir, { recursive: true });
       return storageUnder(takeFolder());
     },
-    async unreadable() {
+    async foreign() {
       if (!(await exists(path.join(dir, "config.json")))) return null;
       return `${dir} holds a vault of the folder format, which this version does not read or migrate; it is left as it is`;
     },

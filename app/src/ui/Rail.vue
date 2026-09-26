@@ -7,6 +7,7 @@ import { mediatorLabel } from "../core/mediators.js";
 import { chooseMediator, createInvitation, downloadBackup, forgetIdentity, invitationLink, lock, mergeBackup, reconnect, setTraceLevel, state } from "../core/store.js";
 import MediatorForm from "./MediatorForm.vue";
 import PendingWork from "./PendingWork.vue";
+import { useRemoval } from "./removal.js";
 import { bytesOf, dispositionOf, shortDid } from "./util.js";
 
 const snapshot = computed(() => state.snapshot);
@@ -102,7 +103,6 @@ async function copyInvitation(url: string) {
   setTimeout(() => (invitationCopied.value = false), 1500);
 }
 
-// backup
 const exporting = ref(false);
 async function exportBackup() {
   exporting.value = true;
@@ -116,6 +116,7 @@ async function exportBackup() {
 const importInput = ref<HTMLInputElement | null>(null);
 const importing = ref(false);
 const importNote = ref<string | null>(null);
+const { failed: removalFailed, remove } = useRemoval();
 
 async function importBackup(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0];
@@ -142,9 +143,8 @@ async function importBackup(event: Event) {
 }
 
 function forget() {
-  if (confirm("Delete this identity from this browser? Keys, contacts and messages here are gone for good — export a backup first if you want them back.")) {
-    void forgetIdentity();
-  }
+  const hold = state.hold;
+  return remove("Delete this identity from this browser? Keys, contacts and messages here are gone for good — export a backup first if you want them back.", () => forgetIdentity(hold));
 }
 </script>
 
@@ -276,8 +276,9 @@ function forget() {
       <div class="rail-actions">
         <button v-if="state.install" class="btn-quiet" @click="state.install?.()">Install app</button>
         <button class="btn-quiet" @click="lock">Lock</button>
-        <button class="btn-quiet danger" @click="forget">Forget identity</button>
+        <button class="btn-quiet danger" data-forget @click="forget">Forget identity</button>
       </div>
+      <p v-if="removalFailed" class="status-line error" data-removal-failed>{{ removalFailed }}</p>
       <p v-if="state.offlineReady && !state.installed" class="status-line">ready to work offline</p>
     </div>
 

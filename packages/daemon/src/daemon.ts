@@ -39,7 +39,7 @@ import {
   type InspectedRuntime,
 } from "@estoc/agent-core";
 
-import type { ContactSummary, Daemon, Lines, Outcome, Phase, Snapshot } from "./api.js";
+import type { ContactSummary, Daemon, Hold, Lines, Outcome, Phase, Snapshot } from "./api.js";
 import { VAULT_FILE, type DaemonHost, type DaemonStorage } from "./host.js";
 
 /** How the daemon raises an event: a name and its arguments, to whoever listens. */
@@ -192,6 +192,8 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   let booted = false;
   let current: Phase = "booting";
   let detail: string | null = null;
+  /** the vault file's name for as long as it stands, whatever phase it stands in */
+  let held: Hold | null = null;
 
   let closed: Promise<void> | null = null;
   const closing = () => closed !== null;
@@ -201,7 +203,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     if (closing()) return;
     current = p;
     detail = why;
-    emit("phase", p, why);
+    emit("phase", p, why, held);
   };
   const log = (line: string) => emit("log", line);
 
@@ -483,7 +485,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     }
     current = "open";
     detail = null;
-    emit("opened", read);
+    emit("opened", read, held);
     connect(running);
   }
 
@@ -593,7 +595,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   async function replayTo(to: Emit): Promise<void> {
     const running = open;
     if (running === null) {
-      to("phase", current, detail);
+      to("phase", current, detail, held);
       return;
     }
     const read = await snapshot(running);
@@ -601,7 +603,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       await giveUpDamaged(read);
       return replayTo(to);
     }
-    to("opened", read);
+    to("opened", read, held);
     void running.attached.agent.then(
       (agent) => to("lines", linesOf(agent)),
       () => undefined
@@ -635,9 +637,9 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       }
       booted = true;
       await inTurn(async () => {
-        const foreign = (await host.unreadable?.()) ?? null;
+        const foreign = (await host.foreign?.()) ?? null;
         if (foreign !== null) {
-          phase("unreadable", foreign);
+          phase("foreign", foreign);
           return;
         }
         try {
@@ -653,6 +655,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
           phase("onboarding");
           return;
         }
+        held = uuidv7();
         const seedKey = await host.cachedSeedKey();
         if (seedKey === null) {
           await look();
@@ -671,6 +674,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         const store = await refuseOccupied();
         const { doc, seedKey } = await createSeedKeystore(passphrase);
         const driver = await takeVault("create");
+        held = uuidv7();
         let created: Awaited<ReturnType<typeof createVault>>;
         try {
           created = await createVault(driver, { seedKey, wrapped: { version: 3, seedJwe: doc.seedJwe }, label: name, ...SCAN });
@@ -678,6 +682,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         } catch (err) {
           // The file is this call's own to remove only past the open that made it, and only once its connection is closed.
           driver.close();
+          held = null;
           await store.remove(VAULT_FILE);
           throw err;
         }
@@ -701,6 +706,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
                 async (mode) => {
                   const destination = await store.open(VAULT_FILE, mode, "runtime");
                   made = true;
+                  held = uuidv7();
                   return destination;
                 },
                 {
@@ -722,7 +728,10 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
           });
         } catch (err) {
           // A destination the restore made and failed on is closed and unready: it opens as nothing, and the next try starts from no file.
-          if (made) await store.remove(VAULT_FILE);
+          if (made) {
+            held = null;
+            await store.remove(VAULT_FILE);
+          }
           throw err;
         }
         const { seedKey } = unlocked;
@@ -731,6 +740,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
           keys = await Keys.open(seedKey, runtime.metadata.anchor);
         } catch (err) {
           await runtime.close();
+          held = null;
           await store.remove(VAULT_FILE);
           throw err;
         }
@@ -770,16 +780,23 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         if (inspected !== null) return;
         await stop();
         if (await files().has(VAULT_FILE)) await look();
-        else phase("onboarding");
+        else {
+          held = null;
+          phase("onboarding");
+        }
       }),
 
-    forgetIdentity: () =>
+    forgetIdentity: (hold) =>
       exclusively(async () => {
         const store = files();
+        if (typeof hold !== "string") throw new Error("the removal names no vault: it was asked by an app of an earlier version, and nothing is removed until the app is updated");
+        if (held === null) throw new Error("there is no vault here to remove");
+        if (hold !== held) throw new Error("that vault is gone already; what stands here now is another, and it is left as it is");
         await stop();
         await letGo();
         await host.forgetSeedKey();
         await store.remove(VAULT_FILE);
+        held = null;
         phase("onboarding");
       }),
 

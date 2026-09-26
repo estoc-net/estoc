@@ -2,6 +2,7 @@
 import { ref } from "vue";
 
 import { createIdentity, restoreIdentity, state } from "../core/store.js";
+import { useRemoval } from "./removal.js";
 import { bytesOf } from "./util.js";
 
 /**
@@ -13,8 +14,8 @@ import { bytesOf } from "./util.js";
  */
 
 const mode = ref<"create" | "restore">("create");
+const { failed: removalFailed } = useRemoval();
 
-// create
 const name = ref("");
 const passphrase = ref("");
 const confirmPass = ref("");
@@ -46,7 +47,6 @@ async function create() {
   }
 }
 
-// restore
 const backupFile = ref<File | null>(null);
 const restorePass = ref("");
 const restoring = ref(false);
@@ -86,6 +86,7 @@ async function restore() {
         sealed envelopes until you pick them up.
       </p>
       <p v-if="state.away" class="status-line error">{{ state.away }}</p>
+      <p v-if="removalFailed" class="status-line error" data-removal-failed>{{ removalFailed }}</p>
 
       <div class="tabs">
         <button class="tab" :class="{ active: mode === 'create' }" @click="mode = 'create'">
