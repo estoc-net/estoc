@@ -2,19 +2,22 @@
  * DASL CAR (https://dasl.ing/car.html): CARv1 over DASL CIDs. A header
  * — a length-prefixed DRISL map with `version: 1` and `roots`, an array
  * of CIDs — then blocks, each a length-prefixed `CID ‖ data` where the
- * CID is exactly the 36 bytes of a DASL CID. Lengths are multiformats
- * unsigned varints, minimally encoded. This is how a set of blocks
+ * CID is exactly the 36 bytes of a DASL CID. This is how a set of blocks
  * travels as one file.
  *
- * Reading checks every block against its name: a section whose 36 bytes
- * are not a DASL CID, or whose data does not hash to it, is not kept —
- * the caller trusts every byte in `blocks`. Writing puts the roots and
- * blocks in the order given, so a CAR of one closure is one byte string
- * when the caller orders it.
+ * The container is `@ipld/car`'s to write and to parse. The DASL profile
+ * over it is checked here: every root and every block's name must be a
+ * DASL CID, and every block must hash to its name, or the caller could
+ * not trust the bytes in `blocks`. The library reads a block's CID by the
+ * CID's own structure, not by the length the section declares, so that a
+ * section holds the CID it opens with and its block is checked here too.
  */
 
-import { base32Encode, checkCid, CID_LENGTH, cidFromBytes, parseCid } from "./cid.js";
-import { decodeDrisl, encodeDrisl, Float, Link, type Drisl } from "./drisl.js";
+import * as CarBufferWriter from "@ipld/car/buffer-writer";
+import { CarIndexer } from "@ipld/car/indexer";
+import { CID } from "multiformats/cid";
+
+import { base32Encode, checkCid, cidFromBytes, parseCid, type DaslCid } from "./cid.js";
 
 /** A CAR read back: what the header named, every block whose bytes match its CID, and what was dropped. */
 export interface Car {
@@ -23,113 +26,62 @@ export interface Car {
   blocks: Map<string, Uint8Array>;
   /**
    * The names of blocks dropped: a CID whose data does not hash to it, or
-   * — spelled `b` + base32 of its 36 bytes, which no DASL CID shares —
-   * a block named by something that is not a DASL CID.
+   * — spelled `b` + base32 of its bytes, which no DASL CID shares —
+   * a block named by a CID that is not a DASL CID.
    */
   bad: string[];
 }
 
 /** Encode a CAR: `roots`, then `blocks` in map order. Every CID must be a DASL CID. */
 export function encodeCar(roots: string[], blocks: Map<string, Uint8Array>): Uint8Array {
-  const header = encodeDrisl({ roots: roots.map((root) => new Link(parseCid(root))), version: 1 });
-  const parts: Uint8Array[] = [varint(header.length), header];
-  for (const [cid, bytes] of blocks) {
-    const name = parseCid(cid).bytes;
-    parts.push(varint(name.length + bytes.length), name, bytes);
-  }
-  let total = 0;
-  for (const part of parts) total += part.length;
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const part of parts) {
-    out.set(part, at);
-    at += part.length;
-  }
-  return out;
+  const named = { roots: roots.map((root) => CID.decode(parseCid(root).bytes)) };
+  const sections = [...blocks].map(([cid, bytes]) => ({ cid: CID.decode(parseCid(cid).bytes), bytes }));
+  const length = sections.reduce((total, block) => total + CarBufferWriter.blockLength(block), CarBufferWriter.headerLength(named));
+  const writer = CarBufferWriter.createWriter(new ArrayBuffer(length), named);
+  for (const block of sections) writer.write(block);
+  return writer.close();
 }
 
 /**
  * Decode a CAR and check every block against its CID. Throws on a
- * malformed container — a header that is not a DRISL map with
- * `version: 1` and `roots` of DASL CIDs, a truncated section, a section
- * shorter than a CID; a block is never a reason to throw, only to drop.
+ * malformed container — a header the library refuses, a version other
+ * than 1, a root that is not a DASL CID, a section that ends before its
+ * CID or past the file; a block is never a reason to throw, only to drop.
  */
 export async function decodeCar(bytes: Uint8Array): Promise<Car> {
-  let at = 0;
-  const section = (): Uint8Array => {
-    const [length, next] = readVarint(bytes, at);
-    if (next + length > bytes.length) throw new Error("truncated CAR");
-    at = next + length;
-    return bytes.subarray(next, at);
-  };
-  const header = section();
-  if (header.length === 0) throw new Error("CAR header is empty");
-  const roots = decodeHeader(header);
+  const index = await CarIndexer.fromBytes(bytes);
+  if (index.version !== 1) throw new Error(`CAR version ${index.version} is not 1`);
+  const roots = (await index.getRoots()).map((root) => daslRoot(root).text);
   const blocks = new Map<string, Uint8Array>();
   const bad: string[] = [];
-  while (at < bytes.length) {
-    const block = section();
-    if (block.length < CID_LENGTH) throw new Error("CAR block shorter than a CID");
-    const name = block.subarray(0, CID_LENGTH);
-    const data = block.subarray(CID_LENGTH);
-    let cid;
+  for await (const { cid, blockOffset, blockLength } of index) {
+    const end = blockOffset + blockLength;
+    if (!Number.isSafeInteger(end) || blockLength < 0 || end > bytes.length) {
+      throw new Error("a CAR section does not hold its CID and its block");
+    }
+    let name: DaslCid;
     try {
-      cid = cidFromBytes(name);
+      name = cidFromBytes(cid.bytes);
     } catch {
-      bad.push(`b${base32Encode(name)}`);
+      bad.push(`b${base32Encode(cid.bytes)}`);
       continue;
     }
-    if (blocks.has(cid.text)) continue;
+    if (blocks.has(name.text)) continue;
+    const data = bytes.subarray(blockOffset, end);
     try {
-      await checkCid(cid, data);
-      blocks.set(cid.text, data);
+      await checkCid(name, data);
+      blocks.set(name.text, data);
     } catch {
-      bad.push(cid.text);
+      bad.push(name.text);
     }
   }
   return { roots, blocks, bad };
 }
 
-function decodeHeader(bytes: Uint8Array): string[] {
-  let doc: Drisl;
+function daslRoot(root: CID): DaslCid {
   try {
-    doc = decodeDrisl(bytes);
+    return cidFromBytes(root.bytes);
   } catch (err) {
-    throw new Error(`CAR header is not DRISL: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`CAR header roots are not DASL CIDs: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (typeof doc !== "object" || doc === null || Array.isArray(doc) || doc instanceof Uint8Array || doc instanceof Link || doc instanceof Float) {
-    throw new Error("CAR header is not a map");
-  }
-  // the integer 1: the float 1.0 decodes as a Float and is refused here
-  if (doc["version"] !== 1) throw new Error(`CAR version ${String(doc["version"])} is not 1`);
-  const roots = doc["roots"];
-  if (!Array.isArray(roots) || !roots.every((root) => root instanceof Link)) throw new Error("CAR header roots are not CIDs");
-  return roots.map((root) => root.cid.text);
-}
-
-function varint(n: number): Uint8Array {
-  const out: number[] = [];
-  while (n >= 0x80) {
-    out.push((n & 0x7f) | 0x80);
-    n = Math.floor(n / 128);
-  }
-  out.push(n);
-  return new Uint8Array(out);
-}
-
-function readVarint(bytes: Uint8Array, at: number): [number, number] {
-  let n = 0;
-  let shift = 1;
-  for (let i = 0; i < 8; i++) {
-    if (at >= bytes.length) throw new Error("truncated CAR");
-    const b = bytes[at++] as number;
-    n += (b & 0x7f) * shift;
-    if (b < 0x80) {
-      // minimal encoding: the only value whose last byte may be 0x00 is 0 itself
-      if (b === 0 && i > 0) throw new Error("CAR length not minimally encoded");
-      return [n, at];
-    }
-    shift *= 128;
-  }
-  throw new Error("CAR length too long");
 }

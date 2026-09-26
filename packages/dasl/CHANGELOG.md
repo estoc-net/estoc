@@ -33,8 +33,13 @@ package reads them yet.
   the safe range (±2^53 included) comes back as a `bigint`; a leading
   U+FEFF in a text string is content, not a byte-order mark to strip.
 - DASL CAR (`encodeCar`, `decodeCar`): CARv1 whose header is a DRISL map
-  `{roots, version: 1}` — the integer 1, not the float 1.0 — and whose
-  every block is named by exactly the 36 bytes of a DASL CID; a block
-  named otherwise, or whose bytes do not hash to its name, is dropped
-  and listed in `bad`, never kept. Lengths are minimally encoded
-  unsigned varints; a non-minimal length is a malformed container.
+  `{roots, version: 1}` and whose every block is named by exactly the 36
+  bytes of a DASL CID. The container is `@ipld/car`'s to write and to
+  parse: a header it refuses, a CARv2, or a section that opens with no
+  CID fails in its words, and what it forgives — a version written as
+  the float 1.0, a length not minimally encoded, header keys out of
+  order — is read. The profile is checked here: a root that is not a
+  DASL CID is a malformed container, as is a section shorter than the
+  CID it opens with; a block named by a CID that is not a DASL CID, or
+  whose bytes do not hash to its name, is dropped and listed in `bad`,
+  never kept.

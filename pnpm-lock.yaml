@@ -231,6 +231,9 @@ importers:
 
   packages/dasl:
     dependencies:
+      '@ipld/car':
+        specifier: ^5.4.7
+        version: 5.4.7
       multiformats:
         specifier: ^14.0.5
         version: 14.0.5
