@@ -545,6 +545,33 @@ describe("an outbound message", () => {
     expectOrderFree(unadmitted.events, (set) => picture(foldVault(set, vault.checks)));
   });
 
+  it("keeps a saved pure ACK in conflict while its target is under an intent or a receipt conflict: the replaced peer's unadmitted observation of the same wire ID makes up for neither, in any order, and the new ACK names no target", async () => {
+    for (const fault of ["intent", "receipt"] as const) {
+      const { scene, keys, peerKeys, a0, b0, b1 } = await vaults();
+      const root = resolved(scene, a0.didId, b0);
+      const successorRoot = resolved(scene, a0.didId, b1);
+      const wire = uuidv7() as WireMessageId;
+      const target = receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 1, wire, fromPrior: await proof(peerKeys, b0, b1) });
+      const carrier = receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 2, overrides: { pleaseAck: [wire] } });
+      const out = pureAck(scene, a0, b1, carrier, { ack: [wire] });
+      let vault = await fold(scene, keys);
+      expect(outboundOf(vault, out)).toMatchObject({ effect: { status: "complete" }, work: { kind: "prepare" } });
+
+      if (fault === "intent") receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 3, wire, overrides: { intentHash: OTHER_HASH } });
+      else receipt(scene, { local: a0, peer: b1, resolution: successorRoot, ordinal: 1, admitted: false, overrides: { intentHash: OTHER_HASH } });
+      vault = await fold(scene, keys);
+      const conflict = fault === "intent" ? `the input with wire ID ${wire} is in conflict: 2 intents are admitted for one input` : `the input with wire ID ${wire} is under a receipt conflict`;
+      expect(fault === "intent" ? vault.inbound.ofSource(target.cid)!.status.status : vault.channels.receipts.affected.has(target.data.messageId)).toEqual(fault === "intent" ? "conflict" : true);
+      expect(outboundOf(vault, out)).toMatchObject({ effect: { status: "conflict", because: conflict }, work: { kind: "none" } });
+
+      const ignored = receipt(scene, { local: a0, peer: b0, resolution: root, ordinal: 4, wire, admitted: false });
+      vault = await fold(scene, keys);
+      expect([vault.continuity.witness(ignored.cid), vault.dispositions.disposition(ignored.cid).status, vault.outbound.ackTargets(carrier.cid)]).toEqual([{ status: "complete" }, "ignored-superseded", []]);
+      expect(outboundOf(vault, out)).toMatchObject({ effect: { status: "conflict", because: conflict }, work: { kind: "none" } });
+      expectSameOverEveryOrder(scene, vault.checks);
+    }
+  });
+
   it("lets an automatic output continue its source's channel at a verified local successor, and a triggered notification follow its decision", async () => {
     const { scene, keys, a0, a1, a2, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);

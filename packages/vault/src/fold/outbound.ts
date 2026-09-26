@@ -614,14 +614,15 @@ type Target = { status: "eligible"; execution: Execution } | { status: "pending"
  * The established input — its admitted observations agreeing, one of
  * them a complete witness — is the target, two established being a
  * conflict; an input beside it that no admission names adds no
- * ambiguity, since admission decided between them. A frozen target of
- * a saved ACK, while no input is established, is the one input with a
- * complete witness no admission names: the saved intent is validated
- * by the evidence its inputs have, not by their admission, which a
- * history rebuilt without it revokes no intent for, and two such
- * inputs wait for an admission to decide between them. None here is
- * pending; one under a receipt-integrity or intent conflict is a
- * conflict.
+ * ambiguity, since admission decided between them. While no input is
+ * established, one under a receipt-integrity or intent conflict is a
+ * conflict: contradicted evidence is never made up for by an input no
+ * admission names. Only then is a frozen target of a saved ACK the one
+ * input with a complete witness no admission names: the saved intent
+ * is validated by the evidence its inputs have, not by their
+ * admission, which a history rebuilt without it revokes no intent for,
+ * and two such inputs wait for an admission to decide between them.
+ * None here is pending.
  */
 function targetOf(wanted: WireMessageId, source: Source, channel: Channel, own: Execution | null, frozen: boolean, evidence: ChannelEvidence, continuity: Continuity, executionsByWire: ReadonlyMap<WireMessageId, Execution[]>): Target {
   const related =
@@ -631,18 +632,18 @@ function targetOf(wanted: WireMessageId, source: Source, channel: Channel, own: 
         : [own]
       : (executionsByWire.get(wanted) ?? []).filter((execution) => continuity.ackPath(execution.channel, channel));
   if (related.length === 0) return { status: "pending", because: `no input of the channel or a verified predecessor has wire ID ${wanted}` };
-  const sound = related.filter((execution) => execution.status.status !== "conflict" && !evidence.receipts.affected.has(execution.messageId));
-  const established = sound.filter((execution) => execution.status.status === "complete");
+  const contradicted = (execution: Execution) => execution.status.status === "conflict" || evidence.receipts.affected.has(execution.messageId);
+  const established = related.filter((execution) => execution.status.status === "complete" && !contradicted(execution));
   if (established.length === 1) return { status: "eligible", execution: established[0]! };
   if (established.length > 1) return { status: "conflict", because: `wire ID ${wanted} names ${established.length} inputs` };
+  const contradiction = related.find(contradicted);
+  if (contradiction !== undefined) {
+    return { status: "conflict", because: contradiction.status.status === "conflict" ? `the input with wire ID ${wanted} is in conflict: ${contradiction.status.because}` : `the input with wire ID ${wanted} is under a receipt conflict` };
+  }
   if (frozen) {
-    const witnessed = sound.filter((execution) => execution.members.some((member) => member.witness.status === "complete"));
+    const witnessed = related.filter((execution) => execution.members.some((member) => member.witness.status === "complete"));
     if (witnessed.length === 1) return { status: "eligible", execution: witnessed[0]! };
     if (witnessed.length > 1) return { status: "pending", because: `wire ID ${wanted} names ${witnessed.length} inputs no admission decides between` };
-  }
-  const contradicted = related.find((execution) => execution.status.status === "conflict" || evidence.receipts.affected.has(execution.messageId));
-  if (contradicted !== undefined) {
-    return { status: "conflict", because: contradicted.status.status === "conflict" ? `the input with wire ID ${wanted} is in conflict: ${contradicted.status.because}` : `the input with wire ID ${wanted} is under a receipt conflict` };
   }
   return { status: "pending", because: `the input with wire ID ${wanted} ${frozen ? "has no complete witness yet" : "is not established yet"}` };
 }

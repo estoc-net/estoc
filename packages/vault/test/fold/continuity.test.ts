@@ -17,6 +17,7 @@ import {
   methodPublicKey,
   type Channel,
   type Keys,
+  type MessageHash,
   type ReadObject,
   type VaultChecks,
   type VaultFold,
@@ -203,6 +204,12 @@ describe("a channel", () => {
     expect(vault.continuity.confirmedBy(a0.did, b0.did)?.event.cid).toBe(later.cid);
     expect(vault.continuity.confirmedBy(a0.did, a0.did)).toBeNull();
     expect(vault.continuity.confirmedBy(a1.did, b0.did)).toBeNull();
+    expectSameOverEveryOrder(scene, vault.checks);
+
+    receipt(scene, { local: a0, peer: b0, resolution: resolved(scene, a0.didId, b0), ordinal: 3, wire: later.data.wireMessageId, overrides: { intentHash: "Amqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA" as MessageHash } });
+    vault = await fold(scene, keys);
+    expect(vault.inbound.ofSource(later.cid)!.status).toEqual({ status: "conflict", because: "2 intents are admitted for one input" });
+    expect(vault.continuity.confirmedBy(a0.did, b0.did)?.event.cid).toBe(later.cid);
     expectSameOverEveryOrder(scene, vault.checks);
   });
 

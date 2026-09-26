@@ -6,8 +6,10 @@
   its inputs have**: the established input of a frozen wire ID is
   the target, an input beside it that no admission names — an
   observation of the replaced peer ignored as superseded, say —
-  adding no ambiguity; while no input is established, one with a
-  complete witness no admission names stands for the target, so a
+  adding no ambiguity; while no input is established, one under a
+  receipt-integrity or intent conflict keeps the intent in conflict,
+  which no unadmitted input makes up for; only then does one with a
+  complete witness no admission names stand for the target, so a
   history rebuilt without its admissions keeps the intent's
   `effect`, its package and its submission, and a manual dispatch
   carries it at the first call; two such inputs wait for an

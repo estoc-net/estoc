@@ -221,8 +221,8 @@ witness, the output's channel — the source's, or a verified local
 successor keeping the peer, a path not verified yet being pending
 unless continuity is in conflict — and the built-in operation's shape — a pure ACK's frozen
 targets each requested by the source and established for it, or, while
-no input is, witnessed for it by a complete observation no admission
-names — and a
+no input is and none is under a conflict, witnessed for it by a
+complete observation no admission names — and a
 notification against its decision's continuity and selection, a
 control input triggering none; the `outcome` in the order conflict,
 submitted, terminal, prepared, queued, and the `work` left — a package

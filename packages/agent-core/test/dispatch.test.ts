@@ -206,6 +206,35 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
+  test("a saved pure ACK whose target is under an intent or a receipt conflict is carried by no manual dispatch, before or after the replaced peer's ignored observation of the same wire ID arrives: the conflict stands, no package is prepared and nothing is posted", async () => {
+    for (const fault of ["intent", "receipt"] as const) {
+      const { alice, bob } = await parties();
+      const { prior, proof } = await proofOfSuccession(bob, BOB_PRIOR);
+      const asPrior = { ...bob, didId: prior.didId, did: prior.did, longFormDid: prior.longFormDid };
+      await delivered(alice, asPrior, { id: "before" });
+      const target = await delivered(alice, bob, { id: "shared", from_prior: proof });
+      const carrier = await delivered(alice, bob, { id: "carrier", please_ack: ["shared"] });
+      let f = await fold(alice);
+      expect([f.dispositions.disposition(target).status, f.outbound.ackTargets(carrier)]).toEqual(["admitted", ["shared"]]);
+      const effect = { execution: f.inbound.ofSource(carrier)!, source: f.channels.sources.get(carrier)!, effectType: PURE_ACK_EFFECT, channel: channelOf(alice.did, bob.did) };
+      const drafted = automaticDraft(f, effect, { type: EMPTY_MESSAGE_TYPE, body: {}, thid: "carrier", ack: ["shared"] });
+      if (drafted.existing !== null) throw new Error("recorded already");
+      await alice.runtime.vault.commit(drafted.objects, [drafted.draft]);
+
+      if (fault === "intent") await received(alice, bob, "shared", { type: BASIC_MESSAGE, body: { content: "another reading" } });
+      else await observed(alice, bob, "collision", { type: BASIC_MESSAGE, body: { content: "same ordinal" } }, alice, f.channels.sources.get(target)!.event.data.receiptOrdinal);
+      const wire = posting(accepted);
+      const blocked = await dispatch(alice.runtime, alice.keys, new LiveAction(drafted.messageId, "manual"), { didcomm, fetch: wire.fetch });
+      const ignored = await delivered(alice, asPrior, { id: "shared" });
+      const still = await dispatch(alice.runtime, alice.keys, new LiveAction(drafted.messageId, "manual"), { didcomm, fetch: wire.fetch });
+      f = await fold(alice);
+      const conflict = fault === "intent" ? "the input with wire ID shared is in conflict: 2 intents are admitted for one input" : "the input with wire ID shared is under a receipt conflict";
+      expect([blocked.outcome, still.outcome, wire.posts, f.dispositions.disposition(ignored).status, f.outbound.ackTargets(carrier)]).toEqual(["none", "none", [], "ignored-superseded", []]);
+      expect(f.outbound.outbounds.get(drafted.messageId)!).toMatchObject({ effect: { status: "conflict", because: conflict }, work: { kind: "none" }, outcome: { status: "conflict" } });
+      await closeAll(alice, bob);
+    }
+  });
+
   test("a peer address a verified replacement has moved on from is carried to no more: the queued intent gets no package, the prepared package is called by nothing, first or retried, a call already made records its acceptance, and the successor takes a new message", async () => {
     const { alice, bob } = await parties();
     const { prior, proof } = await proofOfSuccession(bob, BOB_PRIOR);
