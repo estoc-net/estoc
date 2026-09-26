@@ -36,9 +36,9 @@ package reads them yet.
   whose every block is named by exactly the 36 bytes of a DASL CID; a
   block named otherwise, or whose bytes do not hash to its name, is
   dropped and listed in `bad`, never kept. Lengths are minimally encoded
-  unsigned varints, read and written by `multiformats`; a non-minimal
-  length is a malformed container. `encodeCar` writes through
-  `@ipld/car`. `decodeCar` does not read through it: the library's reader
+  unsigned varints; a non-minimal length is a malformed container.
+  `encodeCar` writes through `@ipld/car`; `decodeCar` decodes each length
+  with `multiformats` and does not read through `@ipld/car`: the library's reader
   refuses a header with metadata beyond `roots` and `version`, lets a
   `__proto__` entry in the header become a prototype, and takes a block's
   CID by structure, past the section's end and re-encoded, where the
