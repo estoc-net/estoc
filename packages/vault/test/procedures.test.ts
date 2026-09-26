@@ -370,14 +370,14 @@ describe("unfinished work", () => {
     expectOrderFree(scene.events, (set) => workSnapshot(unfinishedWork(foldVault(set, vault.checks))));
   });
 
-  it("selects the reply address as the carrier channel while its local DID sends, else the unique verified local successor keeping the peer, and none through denial, conflict or a peer that moved on", async () => {
+  it("selects the reply address as the carrier channel while its local DID sends there, else the unique verified local successor keeping the peer, and none through denial, conflict or a peer that moved on", async () => {
     const { scene, keys, a0, a1, a2, b0 } = await vaults();
     const asking = proofFreeReceipt(scene, a0, b0, 1, { pleaseAck: [""] });
     const decision = await rotation(scene, keys, { from: a0, peer: b0, to: a1, source: asking });
     let vault = await fold(scene, keys);
     const execution = () => vault.inbound.ofMessage(asking.data.messageId)!;
     expect(vault.continuity.status(decision.cid)).toEqual({ status: "verified" });
-    expect(responseChannel(vault, execution())).toEqual({ status: "selected", channel: channel(a0, b0) });
+    expect(responseChannel(vault, execution())).toEqual({ status: "selected", channel: channel(a1, b0) });
 
     scene.add("did.retired", { didId: a0.didId, because: "rotated" });
     vault = await fold(scene, keys);

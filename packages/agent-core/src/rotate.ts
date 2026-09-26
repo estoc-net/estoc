@@ -8,9 +8,11 @@
  * nothing. A pair rotates once: the decision already recorded from
  * the predecessor anywhere in its verified peer-only context is
  * reused, and no second successor is minted while one waits for
- * evidence or two contradict each other. The peer must have written
- * to exactly the predecessor address, since a link from an address
- * the peer never used confirms nothing. A successor is a fresh entity,
+ * evidence or two contradict each other. An admitted receipt must
+ * show the peer writing to exactly the predecessor address, since a
+ * link from an address the peer never used confirms nothing, and an
+ * observation the runtime has not accepted for application use
+ * decides nothing new. A successor is a fresh entity,
  * or one recorded earlier; either way the decision is folded with the
  * evidence here before it is written, and refused when that fold puts
  * it or its context in conflict: the continuity graph keeps every
@@ -129,13 +131,13 @@ export async function decideRotation(runtime: VaultRuntime, keys: Keys, target: 
     const channel = channelOf(predecessor.created.did, peerDid);
     const key = channelKey(channel);
     const sourceEventCid = target.sourceEventCid ?? null;
-    const denied = channelPolicy(fold, channel, { automatic: sourceEventCid !== null });
+    const denied = channelPolicy(fold, channel);
     if (denied !== null) throw new Unusable("channel", key, [denied]);
     const existing = decisionFor(fold, channel.localDid, channel.peerDid);
     if (existing.status === "reuse") return { channel, decision: existing.decision.event, existed: true, drafted: recorded(fold, existing.decision.event.cid), executionId: null };
     if (existing.status !== "none") throw new Unusable("channel", key, [existing.because]);
     if (sourceEventCid !== null) assertSelectingSource(fold, channel, sourceEventCid);
-    if (!fold.continuity.confirmed(channel.localDid, channel.peerDid)) throw new Unusable("channel", key, ["the peer has not written to exactly this address"]);
+    if (fold.continuity.confirmedBy(channel.localDid, channel.peerDid) === null) throw new Unusable("channel", key, ["no admitted receipt shows the peer writing to exactly this address"]);
 
     const { drafts, successor } = await successorOf(fold, keys, predecessor, sourceEventCid !== null, options);
     const iat = Math.floor((options.now ?? Date.now)() / 1000);

@@ -17,6 +17,7 @@ import {
   methodPublicKey,
   type Channel,
   type Keys,
+  type MessageHash,
   type ReadObject,
   type VaultChecks,
   type VaultFold,
@@ -61,7 +62,7 @@ function picture(vault: VaultFold, probes: readonly Channel[] = []) {
       modelHead: continuity.model.head(c),
       superseded: continuity.superseded(c),
       conflicted: continuity.conflicted(c),
-      confirmed: continuity.confirmed(c.localDid, c.peerDid),
+      confirmedBy: continuity.confirmedBy(c.localDid, c.peerDid)?.event.cid ?? null,
       blocked: continuity.blocked(c).map((event) => event.cid),
       decisions: continuity.decisionsIn(c).map((decision) => decision.event.cid).sort(),
     })),
@@ -141,10 +142,10 @@ describe("a peer link", () => {
     expect(c.superseded(channel(a0, b1))).toBe(false);
     expect(c.head(channel(a1, b0))).toEqual(channel(a1, b0));
     expect(c.superseded(channel(a1, b0))).toBe(false);
-    expect(c.confirmed(a0.did, b1.did)).toBe(true);
-    expect(c.confirmed(a0.did, b0.did)).toBe(true);
-    expect(c.confirmed(a1.did, b1.did)).toBe(false);
-    expect(c.confirmed(a1.did, b0.did)).toBe(true);
+    expect(c.confirmedBy(a0.did, b1.did)).not.toBeNull();
+    expect(c.confirmedBy(a0.did, b0.did)).not.toBeNull();
+    expect(c.confirmedBy(a1.did, b1.did)).toBeNull();
+    expect(c.confirmedBy(a1.did, b0.did)).not.toBeNull();
     expect(c.ackPath(channel(a0, b0), channel(a0, b1))).toBe(true);
     expect(c.ackPath(channel(a0, b1), channel(a0, b0))).toBe(false);
     expect(c.ackPath(channel(a0, b0), channel(a1, b0))).toBe(false);
@@ -171,7 +172,7 @@ describe("a channel", () => {
     expect(c.head(channel(a0, b2))).toEqual(channel(a0, b2));
     expect(c.model.head(channel(a1, b2))).toEqual({ status: "no-evidence" });
     expect(c.head(channel(a1, b2))).toEqual(channel(a1, b2));
-    expect(c.confirmed(a1.did, b2.did)).toBe(false);
+    expect(c.confirmedBy(a1.did, b2.did)).toBeNull();
     expect(c.decisionsIn(channel(a0, b0)).map((decision) => decision.event)).toEqual([manual]);
     expect(c.decisionsIn(channel(a0, b2))).toEqual([]);
     expectSameOverEveryOrder(scene, vault.checks, [channel(a0, b0), channel(a1, b2)]);
@@ -182,8 +183,37 @@ describe("a channel", () => {
     expect(c.status(manual.cid)).toEqual({ status: "verified" });
     expect(c.head(channel(a0, b0))).toEqual(channel(a1, b0));
     expect(c.superseded(channel(a0, b0))).toBe(false);
-    expect(c.confirmed(a1.did, b0.did)).toBe(true);
+    expect(c.confirmedBy(a1.did, b0.did)).not.toBeNull();
     expect(c.ackPath(channel(a0, b0), channel(a1, b0))).toBe(true);
+    expectSameOverEveryOrder(scene, vault.checks);
+  });
+
+  test("an address is confirmed for new work by an admitted observation alone: the model confirms by every usable one, a saved decision rests on those, and confirmedBy names the first admitted", async () => {
+    const { scene, keys, a0, a1, b0 } = await vaults();
+    const unadmitted = receipt(scene, { local: a0, peer: b0, resolution: resolved(scene, a0.didId, b0), ordinal: 1, admitted: false });
+    const decision = await rotation(scene, keys, { from: a0, peer: b0, to: a1 });
+    let vault = await fold(scene, keys);
+    expect(vault.continuity.model.confirmation(a0.did, b0.did)).toMatchObject({ status: "confirmed", observations: [{ id: `receipt:${unadmitted.cid}:observation` }] });
+    expect(vault.continuity.confirmedBy(a0.did, b0.did)).toBeNull();
+    expect(vault.continuity.status(decision.cid)).toEqual({ status: "verified" });
+    expect(vault.continuity.head(channel(a0, b0))).toEqual(channel(a1, b0));
+    expectSameOverEveryOrder(scene, vault.checks);
+
+    const later = receipt(scene, { local: a0, peer: b0, resolution: resolved(scene, a0.didId, b0), ordinal: 2 });
+    vault = await fold(scene, keys);
+    expect(vault.continuity.confirmedBy(a0.did, b0.did)?.event.cid).toBe(later.cid);
+    expect(vault.continuity.confirmedBy(a0.did, a0.did)).toBeNull();
+    expect(vault.continuity.confirmedBy(a1.did, b0.did)).toBeNull();
+    expectSameOverEveryOrder(scene, vault.checks);
+
+    const contradicting = receipt(scene, { local: a0, peer: b0, resolution: resolved(scene, a0.didId, b0), ordinal: 3, wire: later.data.wireMessageId, overrides: { intentHash: "Amqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA" as MessageHash } });
+    vault = await fold(scene, keys);
+    expect(vault.inbound.ofSource(later.cid)!.status).toEqual({ status: "conflict", because: "2 intents are admitted for one input" });
+    const admitted = [later, contradicting].map((source) => observation(source, a0, b0).id);
+    const confirmation = vault.continuity.model.confirmation(a0.did, b0.did);
+    const firstAdmitted = confirmation.status === "confirmed" ? confirmation.observations.map(({ id }) => id).find((id) => admitted.includes(id)) : undefined;
+    expect(firstAdmitted).toBeDefined();
+    expect(observation(vault.continuity.confirmedBy(a0.did, b0.did)!.event, a0, b0).id).toBe(firstAdmitted);
     expectSameOverEveryOrder(scene, vault.checks);
   });
 
@@ -252,8 +282,8 @@ describe("a join", () => {
     expect(c.ackPath(channel(a0, b0), channel(a1, b1))).toBe(true);
     expect(c.ackPath(channel(a1, b0), channel(a0, b1))).toBe(false);
     expect(c.ackPath(channel(a0, b0), channel(a2, b1))).toBe(false);
-    expect(c.confirmed(a1.did, b1.did)).toBe(false);
-    expect(c.confirmed(a0.did, b0.did)).toBe(true);
+    expect(c.confirmedBy(a1.did, b1.did)).toBeNull();
+    expect(c.confirmedBy(a0.did, b0.did)).not.toBeNull();
     expectSameOverEveryOrder(scene, vault.checks, [channel(a0, b2)]);
   });
 
@@ -301,7 +331,7 @@ describe("a join", () => {
       expect(c.head(start)).toBeNull();
       expect(c.conflicted(start)).toBe(true);
     }
-    expect(c.confirmed(a0.did, b0.did)).toBe(false);
+    expect(c.confirmedBy(a0.did, b0.did)).toBeNull();
     expect(c.ackPath(channel(a0, b0), channel(a1, b1))).toBe(false);
     expectSameOverEveryOrder(scene, vault.checks);
   });
@@ -322,7 +352,7 @@ describe("conflicts", () => {
     }
     for (const start of [channel(a0, b0), channel(a0, b1), channel(a0, b2)]) expect(c.head(start)).toBeNull();
     expect(c.superseded(channel(a0, b0))).toBe(true);
-    expect(c.confirmed(a0.did, b0.did)).toBe(false);
+    expect(c.confirmedBy(a0.did, b0.did)).toBeNull();
     expect(c.ackPath(channel(a0, b0), channel(a0, b1))).toBe(false);
     expect(c.ackPath(channel(a0, b1), channel(a0, b1))).toBe(true);
     expectSameOverEveryOrder(direct.scene, vault.checks);
@@ -423,7 +453,7 @@ describe("authority behind a conflict", () => {
     expect(c.conflicts).toMatchObject([{ conflict: { kind: "competing-changes", side: "peer", context: [channel(a0, b0)] } }]);
     expect(c.status(beyond.cid)).toMatchObject({ status: "conflict" });
     expect(c.witness(beyond.cid)).toMatchObject({ status: "conflict" });
-    expect(c.confirmed(a0.did, b3.did)).toBe(false);
+    expect(c.confirmedBy(a0.did, b3.did)).toBeNull();
     expect(c.status(manual.cid)).toEqual({ status: "pending-history", because: "the predecessor is confirmed only through continuity that is not usable" });
     expect(c.model.head(channel(a0, b3))).toMatchObject({ status: "conflict" });
     expect(c.conflicted(channel(a0, b3))).toBe(true);
@@ -435,7 +465,7 @@ describe("authority behind a conflict", () => {
     proofFreeReceipt(scene, a0, b3, 4);
     vault = await fold(scene, keys);
     c = vault.continuity;
-    expect(c.confirmed(a0.did, b3.did)).toBe(true);
+    expect(c.confirmedBy(a0.did, b3.did)).not.toBeNull();
     expect(c.status(manual.cid)).toEqual({ status: "verified" });
     expect(c.ackPath(channel(a0, b3), channel(a1, b3))).toBe(true);
     expect(c.head(channel(a0, b3))).toEqual(channel(a1, b3));
@@ -454,7 +484,7 @@ describe("authority behind a conflict", () => {
     let vault = await fold(scene, keys);
     let c = vault.continuity;
     expect(c.conflicts).toHaveLength(1);
-    expect(c.confirmed(a0.did, b3.did)).toBe(true);
+    expect(c.confirmedBy(a0.did, b3.did)).not.toBeNull();
     expect(c.status(sourced.cid)).toMatchObject({ status: "conflict" });
     expect(c.status(onward.cid)).toEqual({ status: "verified" });
     expect(c.ackPath(channel(a0, b3), channel(a1, b4))).toBe(false);
@@ -632,7 +662,7 @@ describe("the proof boundary", () => {
     expect(c.facts).toEqual([observation(plain, a0, b0)]);
     expect(c.model.head(channel(a0, b0))).toMatchObject({ status: "head", channel: channel(a0, b0) });
     expect(c.superseded(channel(a0, b0))).toBe(false);
-    expect(c.confirmed(a0.did, b0.did)).toBe(true);
+    expect(c.confirmedBy(a0.did, b0.did)).not.toBeNull();
     expectSameOverEveryOrder(scene, vault.checks);
   });
 });

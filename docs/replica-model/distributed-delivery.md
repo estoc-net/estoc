@@ -575,7 +575,19 @@ omit it. The current carrier can identify itself by its exact source.
 
 Sort eligible targets by their minimum admitted complete receipt key, then freeze their
 wire IDs in one output. Unknown, conflicted or unauthorized targets are
-omitted and later discovery cannot change the saved array. Generic replies use
+omitted and later discovery cannot change the saved array.
+
+Validation of a saved pure ACK first resolves each frozen wire ID using
+admitted complete target witnesses under the same direction, path and
+integrity checks as new target selection. When these establish exactly one
+target input, additional unadmitted inputs do not make that target ambiguous.
+If admitted evidence establishes no target, validation may instead use complete
+observation evidence without admission to establish the historical target; when
+several such inputs remain, validation waits for an admission to decide between
+them. This fallback MUST NOT resolve an ambiguity among admitted eligible
+inputs or suppress an applicable receipt-integrity or independently admitted
+intent conflict. It grants neither admission nor eligibility for new target
+selection. The carrier's own wire ID continues to name its exact source input. Generic replies use
 `thid = carrier.thid ?? carrier.wireMessageId`, copy nullable `pthid`, and follow
 the producing protocol's response rules. No-response errors still do not reply.
 

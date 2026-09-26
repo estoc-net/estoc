@@ -247,13 +247,13 @@ export type ResponseChannel = { status: "selected"; channel: Channel } | { statu
 export function responseChannel(fold: VaultFold, execution: Execution): ResponseChannel {
   const none = (because: string): ResponseChannel => ({ status: "none", because });
   if (execution.status.status !== "complete") return none(`the input is not established: ${execution.status.because}`);
-  const denied = channelPolicy(fold, execution.channel, { automatic: true });
+  const denied = channelPolicy(fold, execution.channel);
   if (denied !== null) return none(denied);
-  const own = senderGate(fold, execution.channel, { automatic: true });
+  const own = senderGate(fold, execution.channel);
   if (own.status === "open") return { status: "selected", channel: execution.channel };
   const head = fold.continuity.head(execution.channel);
   if (head === null || sameChannel(head, execution.channel) || head.peerDid !== execution.channel.peerDid) return none(`${own.because}, and no verified local successor keeping the peer is unique`);
-  const successor = senderGate(fold, head, { automatic: true });
+  const successor = senderGate(fold, head);
   return successor.status === "open" ? { status: "selected", channel: head } : none(`${own.because}, and its successor cannot reply: ${successor.because}`);
 }
 
@@ -379,7 +379,7 @@ export function notificationChannel(fold: VaultFold, decision: Decision): Notifi
   if (execution === null) return none("the source is in no input here");
   if (execution.status.status !== "complete") return none(`the source's input is not established: ${execution.status.because}`);
   if (kindOf(source.event.data) !== "application") return none(`a control input triggers no notification: the source is ${kindOf(source.event.data)}`);
-  const denied = channelPolicy(fold, decision.channel, { automatic: true });
+  const denied = channelPolicy(fold, decision.channel);
   return denied === null ? { status: "selected", channel, source } : none(denied);
 }
 

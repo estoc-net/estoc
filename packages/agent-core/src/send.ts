@@ -75,12 +75,9 @@ export interface Content {
  * Whom to send to: a channel — one of our DIDs and the peer's, either
  * end in any spelling, the peer's kept as given for the recipient
  * unless `recipientDid` spells it otherwise — or a contact, in the
- * one head its selected channels lead to under its preference. A
- * channel a verified replacement has moved on from takes a send only
- * as an explicit pre-rotation choice, which the ordinary gates still
- * apply to.
+ * one head its selected channels lead to under its preference.
  */
-export type Target = { channel: Channel; recipientDid?: string; preRotation?: boolean; contactId?: undefined } | { contactId: ContactId; channel?: undefined };
+export type Target = { channel: Channel; recipientDid?: string; contactId?: undefined } | { contactId: ContactId; channel?: undefined };
 
 export interface SendOptions {
   /** the message ID, for a send repeated after a crash: a fresh UUIDv7 when left out */
@@ -155,7 +152,7 @@ function select(fold: VaultFold, target: Target): Selected {
   const channel = canonicalChannel(target.channel);
   const recipientDid = (target.recipientDid ?? target.channel.peerDid) as Did;
   if (canonicalDidOf(recipientDid) !== channel.peerDid) throw new Unusable("recipient", recipientDid, [`another DID than the channel's peer ${channel.peerDid}`]);
-  return inChannel(fold, channel, recipientDid, target.preRotation === true);
+  return inChannel(fold, channel, recipientDid);
 }
 
 /**
@@ -168,18 +165,14 @@ function selectContact(fold: VaultFold, contactId: ContactId): Selected {
   if (contact === undefined) throw new UnknownEntity("contact", contactId);
   if (contact.deleted) throw new Unusable("contact", contactId, ["deleted"]);
   const view = fold.views.contact(contactId);
-  if (view.defaultWriteTo !== null) return inChannel(fold, view.defaultWriteTo, view.defaultWriteTo.peerDid, false);
+  if (view.defaultWriteTo !== null) return inChannel(fold, view.defaultWriteTo, view.defaultWriteTo.peerDid);
   if (view.writeTo.length === 0) throw new NoTarget(contactId, contact.channels.length === 0 ? "it selects no channel" : "no head of its channels takes a send now");
   throw new AmbiguousTarget(contactId, view.writeTo, view.preference !== null && view.preference.matches.length === 0);
 }
 
-function inChannel(fold: VaultFold, channel: Channel, recipientDid: Did, preRotation: boolean): Selected {
+function inChannel(fold: VaultFold, channel: Channel, recipientDid: Did): Selected {
   const gate = senderGate(fold, channel);
   if (gate.status === "closed") throw new Unusable("channel", channelKey(channel), [gate.because]);
-  const head = fold.continuity.head(channel);
-  if (!preRotation && (head === null || !sameChannel(head, channel))) {
-    throw new Unusable("channel", channelKey(channel), [head === null ? "replaced, and no successor is unique" : `replaced by ${channelKey(head)}`, "an explicit pre-rotation send may still use it"]);
-  }
   return { sender: senderOf(fold, channel), channel, recipientDid };
 }
 

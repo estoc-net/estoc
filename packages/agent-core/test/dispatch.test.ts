@@ -2,15 +2,15 @@ import { afterEach, describe, expect, it, test, vi } from "vitest";
 
 import type { DIDDoc } from "@estoc/did-peer";
 import { parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store";
-import { channelOf, scanVault, vaultDraft, type DidId, type MessageId, type VaultEvent, type VaultFold } from "@estoc/vault";
+import { EMPTY_MESSAGE_TYPE, PURE_ACK_EFFECT, channelOf, scanVault, vaultDraft, type DidId, type MessageId, type VaultEvent, type VaultFold } from "@estoc/vault";
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
 import { ENCRYPTED_MIME, secretsResolverFor, type IMessage } from "../src/protocol/didcomm.js";
 import { FORWARD } from "../src/protocol/spec.js";
 import { RECIPIENT, RECIPIENT_QUERY } from "../src/protocol/mediation.js";
-import { AgentTrace, Keyring, LiveAction, UnknownEntity, cancel, createVault, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../src/index.js";
+import { AgentTrace, Keyring, LiveAction, UnknownEntity, automaticDraft, cancel, completeResponse, createVault, dispatch, pinnedResolver, prepare, reconcile, send, unpack, type Content, type DispatchOptions, type Dispatched } from "../src/index.js";
 import { MEDIATOR_HTTP } from "./fake-mediator.js";
-import { carrierWaitingForIssuer, didcomm, directParty, mediatedParty, memoryDriver, newMediator, posting, received, refuseCommits, refuseSubmissions, ticking, type DirectParty, type MediatedParty } from "./helpers.js";
+import { carrierWaitingForIssuer, delivered, didcomm, directParty, issuerRecovered, mediatedParty, memoryDriver, newMediator, observed, posting, proofOfSuccession, received, refuseSubmissions, ticking, type DirectParty, type MediatedParty } from "./helpers.js";
 
 const ALICE = "019b0000-0000-7000-8000-00000000000a" as DidId;
 const BOB = "019b0000-0000-7000-8000-0000000000b0" as DidId;
@@ -150,12 +150,12 @@ describe("dispatch to a direct endpoint", () => {
     await closeAll(alice, bob);
   });
 
-  it("records what the vault owes before the call: a carrier the preparation's pass left unadmitted, its commit refused, is admitted by the manual retry of the package it holds, once, and the package goes out as it is", async () => {
+  it("records what the vault owes before the call: a carrier the host's evidence left unadmitted is admitted by the manual retry of a package to the carrier's own address, once, and the package goes out as it is", async () => {
     const { alice, bob } = await parties();
     const { cid, prior } = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR);
-    await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, prior.did), recipientDid: prior.longFormDid }, HELLO, { messageId: MESSAGE });
-    refuseCommits(alice.runtime, "message.admitted", 1);
+    await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, bob.did), recipientDid: bob.longFormDid }, HELLO, { messageId: MESSAGE });
     expect((await prepare(alice.runtime, alice.keys, MESSAGE, { didcomm })).outcome).toBe("prepared");
+    await issuerRecovered(alice, prior);
     let f = await fold(alice);
     expect([f.continuity.status(cid), f.dispositions.disposition(cid), f.outbound.outbounds.get(MESSAGE)!.work.kind]).toEqual([{ status: "verified" }, { status: "pending-admission", because: "the observation is not yet reconciled" }, "dispatch"]);
     const envelope = await envelopeOf(alice, MESSAGE);
@@ -165,6 +165,107 @@ describe("dispatch to a direct endpoint", () => {
     f = await fold(alice);
     expect([f.dispositions.disposition(cid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.set.of("message.prepared").length, f.set.of("message.out").length]).toEqual(["admitted", [cid], 1, 1]);
     expect(wire.posts.map((post) => [post.url, post.body])).toEqual([[BOB_ENDPOINT, envelope]]);
+    await closeAll(alice, bob);
+  });
+
+  test("a saved pure ACK whose source no admission names goes out at the first manual dispatch: the intent stands on the source's witness, the pass admits the source before the call, and the package is carried once", async () => {
+    const { alice, bob } = await parties();
+    const sourceEventCid = await observed(alice, bob, "wire-1", { type: BASIC_MESSAGE, body: { content: "hi" }, please_ack: [""] });
+    let f = await fold(alice);
+    const effect = { execution: f.inbound.ofSource(sourceEventCid)!, source: f.channels.sources.get(sourceEventCid)!, effectType: PURE_ACK_EFFECT, channel: channelOf(alice.did, bob.did) };
+    const drafted = automaticDraft(f, effect, { type: EMPTY_MESSAGE_TYPE, body: {}, thid: "wire-1", ack: ["wire-1"] });
+    if (drafted.existing !== null) throw new Error("recorded already");
+    await alice.runtime.vault.commit(drafted.objects, [drafted.draft]);
+    f = await fold(alice);
+    const before = f.outbound.outbounds.get(drafted.messageId)!;
+    expect([f.dispositions.disposition(sourceEventCid).status, f.outbound.ackTargets(sourceEventCid), before.effect, before.work]).toEqual(["pending-admission", [], { status: "complete" }, { kind: "prepare" }]);
+
+    const wire = posting(accepted);
+    submitted(await dispatch(alice.runtime, alice.keys, new LiveAction(drafted.messageId, "manual"), { didcomm, fetch: wire.fetch }));
+    f = await fold(alice);
+    expect([f.dispositions.disposition(sourceEventCid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.outbound.outbounds.get(drafted.messageId)!.outcome.status]).toEqual(["admitted", [sourceEventCid], "submitted"]);
+    expect(wire.posts.map((post) => post.url)).toEqual([BOB_ENDPOINT]);
+    await closeAll(alice, bob);
+  });
+
+  test("a pure ACK completed by hand for a carrier whose target the replaced peer's ignored observation shares a wire ID with is made and carried at once: the target admission decided is the target, and the ignored observation adds no ambiguity", async () => {
+    const { alice, bob } = await parties();
+    const { prior, proof } = await proofOfSuccession(bob, BOB_PRIOR);
+    await delivered(alice, bob, { id: "shared", from_prior: proof });
+    const carrier = await delivered(alice, bob, { id: "carrier", please_ack: ["shared"] });
+    const ignored = await delivered(alice, { ...bob, didId: prior.didId, did: prior.did, longFormDid: prior.longFormDid }, { id: "shared" });
+    let f = await fold(alice);
+    expect([f.dispositions.disposition(ignored).status, f.outbound.ackTargets(carrier)]).toEqual(["ignored-superseded", ["shared"]]);
+
+    const wire = posting(accepted);
+    const made = await completeResponse(alice.runtime, alice.keys, f.inbound.ofSource(carrier)!.id, PURE_ACK_EFFECT, { dispatch: (action) => dispatch(alice.runtime, alice.keys, action, { didcomm, fetch: wire.fetch }) });
+    if (made.outcome !== "created") throw new Error(JSON.stringify(made));
+    expect([made.intent.data.ack, made.dispatched.outcome, wire.posts.map((post) => post.url)]).toEqual([["shared"], "submitted", [BOB_ENDPOINT]]);
+    f = await fold(alice);
+    expect(f.outbound.outbounds.get(made.messageId)!).toMatchObject({ effect: { status: "complete" }, outcome: { status: "submitted" } });
+    await closeAll(alice, bob);
+  });
+
+  test("a saved pure ACK whose target is under an intent or a receipt conflict is carried by no manual dispatch, before or after the replaced peer's ignored observation of the same wire ID arrives: the conflict stands, no package is prepared and nothing is posted", async () => {
+    for (const fault of ["intent", "receipt"] as const) {
+      const { alice, bob } = await parties();
+      const { prior, proof } = await proofOfSuccession(bob, BOB_PRIOR);
+      const asPrior = { ...bob, didId: prior.didId, did: prior.did, longFormDid: prior.longFormDid };
+      await delivered(alice, asPrior, { id: "before" });
+      const target = await delivered(alice, bob, { id: "shared", from_prior: proof });
+      const carrier = await delivered(alice, bob, { id: "carrier", please_ack: ["shared"] });
+      let f = await fold(alice);
+      expect([f.dispositions.disposition(target).status, f.outbound.ackTargets(carrier)]).toEqual(["admitted", ["shared"]]);
+      const effect = { execution: f.inbound.ofSource(carrier)!, source: f.channels.sources.get(carrier)!, effectType: PURE_ACK_EFFECT, channel: channelOf(alice.did, bob.did) };
+      const drafted = automaticDraft(f, effect, { type: EMPTY_MESSAGE_TYPE, body: {}, thid: "carrier", ack: ["shared"] });
+      if (drafted.existing !== null) throw new Error("recorded already");
+      await alice.runtime.vault.commit(drafted.objects, [drafted.draft]);
+
+      if (fault === "intent") await received(alice, bob, "shared", { type: BASIC_MESSAGE, body: { content: "another reading" } });
+      else await observed(alice, bob, "collision", { type: BASIC_MESSAGE, body: { content: "same ordinal" } }, alice, f.channels.sources.get(target)!.event.data.receiptOrdinal);
+      const wire = posting(accepted);
+      const blocked = await dispatch(alice.runtime, alice.keys, new LiveAction(drafted.messageId, "manual"), { didcomm, fetch: wire.fetch });
+      const ignored = await delivered(alice, asPrior, { id: "shared" });
+      const still = await dispatch(alice.runtime, alice.keys, new LiveAction(drafted.messageId, "manual"), { didcomm, fetch: wire.fetch });
+      f = await fold(alice);
+      const conflict = fault === "intent" ? "the input with wire ID shared is in conflict: 2 intents are admitted for one input" : "the input with wire ID shared is under a receipt conflict";
+      expect([blocked.outcome, still.outcome, wire.posts, f.dispositions.disposition(ignored).status, f.outbound.ackTargets(carrier)]).toEqual(["none", "none", [], "ignored-superseded", []]);
+      expect(f.outbound.outbounds.get(drafted.messageId)!).toMatchObject({ effect: { status: "conflict", because: conflict }, work: { kind: "none" }, outcome: { status: "conflict" } });
+      await closeAll(alice, bob);
+    }
+  });
+
+  test("a peer address a verified replacement has moved on from is carried to no more: the queued intent gets no package, the prepared package is called by nothing, first or retried, a call already made records its acceptance, and the successor takes a new message", async () => {
+    const { alice, bob } = await parties();
+    const { prior, proof } = await proofOfSuccession(bob, BOB_PRIOR);
+    const toPrior = { channel: channelOf(alice.did, prior.did), recipientDid: prior.longFormDid };
+    await send(alice.runtime, alice.keys, toPrior, HELLO, { messageId: MESSAGE });
+    const second = await send(alice.runtime, alice.keys, toPrior, HELLO, { messageId: SECOND });
+    const third = await send(alice.runtime, alice.keys, toPrior, HELLO, { messageId: THIRD });
+    expect((await prepare(alice.runtime, alice.keys, SECOND, { didcomm })).outcome).toBe("prepared");
+    expect((await prepare(alice.runtime, alice.keys, THIRD, { didcomm })).outcome).toBe("prepared");
+    const envelope = await envelopeOf(alice, THIRD);
+    const wire = posting(async () => {
+      await delivered(alice, bob, { from_prior: proof });
+      return accepted();
+    });
+    submitted(await dispatch(alice.runtime, alice.keys, third.action, { didcomm, fetch: wire.fetch }));
+    const replaced = (messageId: MessageId) => ({ outcome: "none", messageId, because: "the peer has replaced its DID" });
+    let f = await fold(alice);
+    expect([f.continuity.superseded(toPrior.channel), f.outbound.outbounds.get(THIRD)!.outcome, f.outbound.outbounds.get(SECOND)!.work.kind, f.outbound.outbounds.get(MESSAGE)!.work.kind]).toEqual([true, { status: "submitted" }, "none", "none"]);
+
+    expect(await prepare(alice.runtime, alice.keys, MESSAGE, { didcomm })).toEqual(replaced(MESSAGE));
+    expect(await dispatch(alice.runtime, alice.keys, second.action, { didcomm, fetch: wire.fetch })).toEqual(replaced(SECOND));
+    expect(await dispatch(alice.runtime, alice.keys, new LiveAction(SECOND, "manual"), { didcomm, fetch: wire.fetch })).toEqual(replaced(SECOND));
+    expect(await dispatch(alice.runtime, alice.keys, new LiveAction(THIRD, "manual"), { didcomm, fetch: wire.fetch })).toEqual({ outcome: "none", messageId: THIRD, because: "submitted" });
+    await expect(send(alice.runtime, alice.keys, toPrior, HELLO)).rejects.toThrow("the peer has replaced its DID");
+    f = await fold(alice);
+    expect([wire.posts.map((post) => [post.url, post.body]), second.action.spent, f.set.of("message.prepared").length, f.set.of("delivery.submitted").length, f.set.of("message.out").length]).toEqual([[[BOB_ENDPOINT, envelope]], false, 2, 1, 3]);
+    expect(f.outbound.outbounds.get(SECOND)).toMatchObject({ outcome: { status: "prepared" }, work: { kind: "none", because: "the peer has replaced its DID" } });
+
+    const moved = await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, bob.did), recipientDid: bob.longFormDid }, HELLO);
+    submitted(await dispatch(alice.runtime, alice.keys, moved.action, { didcomm, fetch: wire.fetch }));
+    expect(wire.posts).toHaveLength(2);
     await closeAll(alice, bob);
   });
 
@@ -277,7 +378,7 @@ describe("dispatch to a direct endpoint", () => {
     await prepare(alice.runtime, alice.keys, MESSAGE, before);
     const envelopeCid = (await fold(alice)).outbound.outbounds.get(MESSAGE)!.package!.event.data.envelopeCid;
     await alice.runtime.vault.commit([], [vaultDraft("channel.blocked", { localDid: alice.did, peerDid: bob.did, includeSuccessors: false })]);
-    expect(await dispatch(alice.runtime, alice.keys, blocked.action, before)).toEqual({ outcome: "none", messageId: MESSAGE, because: "the channel is blocked" });
+    expect(await dispatch(alice.runtime, alice.keys, blocked.action, before)).toEqual({ outcome: "none", messageId: MESSAGE, because: "the channel is denied" });
     expect(await dispatch(alice.runtime, alice.keys, blocked.action, after)).toMatchObject({ outcome: "expired", messageId: MESSAGE, failed: { data: { code: "expired" } } });
     expect(await dispatch(alice.runtime, alice.keys, blocked.action, after)).toEqual({ outcome: "none", messageId: MESSAGE, because: "terminated: expired" });
     let f = await fold(alice);
@@ -429,7 +530,7 @@ describe("dispatch through a mediator", () => {
     expect(wire.posts).toHaveLength(1);
 
     await received(carol as unknown as DirectParty, bob, "wire-1", { type: BASIC_MESSAGE, body: { content: "I know this address" } });
-    expect((await fold(carol)).continuity.confirmed(carol.did, bob.did)).toBe(true);
+    expect((await fold(carol)).continuity.confirmedBy(carol.did, bob.did)).not.toBeNull();
     submitted(await dispatch(carol.runtime, carol.keys, fromCarol.action, { didcomm, fetch: wire.fetch }));
     expect(wire.posts).toHaveLength(2);
     expect(mediator.recipients.has(carol.did)).toBe(false);

@@ -12,7 +12,10 @@
  * is the host's reading of that model beside the evidence's own
  * verdicts: each carrier's or decision's status and each source's
  * standing as a witness, the evidence's refusals first and the model's
- * second; which channels take no new work; the denials that cover a
+ * second; which channels take no new work; the admitted witness by
+ * which an address is confirmed for new work, since the model confirms
+ * by every usable observation and a saved decision may rest on one no
+ * admission names, while nothing new may; the denials that cover a
  * channel through the history; and the saved decisions of a context,
  * projected or not, since a decision still waiting for its evidence
  * already forbids another successor.
@@ -23,7 +26,8 @@ import { deriveContinuity, successorChannel, type Conflict, type ContinuityFact,
 import { channelKey, channelOf, compareChannels, observationFactId, sameChannel, transitionFactId } from "../ids.js";
 import type { VaultEvent } from "../schema.js";
 import type { Channel, EventCid } from "../types.js";
-import type { ChannelEvidence, Decision } from "./channels.js";
+import type { AdmissionFold } from "./admission.js";
+import type { ChannelEvidence, Decision, Source } from "./channels.js";
 import type { VaultEventSet } from "./set.js";
 
 /** The continuity a carrier's proof, or a decision, has reached; what a UI shows beside the message. */
@@ -69,8 +73,15 @@ export interface Continuity {
   superseded(channel: Channel): boolean;
   /** the unique usable channel forward replacements lead to, the channel itself when no fact mentions it; null while a replacement waits, conflicts or is not unique */
   head(channel: Channel): Channel | null;
-  /** has the peer, or a usable successor of it, written to exactly this local DID */
-  confirmed(localDid: Channel["localDid"], peerDid: Channel["peerDid"]): boolean;
+  /**
+   * The first admitted observation, in the model's order, by which the
+   * peer or a usable successor of it wrote to exactly this local DID:
+   * what a new decision, a proof-free package or a disclosure to a
+   * mediator rests on. Null while no such observation is admitted,
+   * whatever the model confirms by observations no admission names: a
+   * saved decision is validated over those, and nothing new is.
+   */
+  confirmedBy(localDid: Channel["localDid"], peerDid: Channel["peerDid"]): Source | null;
   /** may a carrier in `carrier` acknowledge an outbound of `outbound`: the same channel or a usable role-preserving path */
   ackPath(outbound: Channel, carrier: Channel): boolean;
   /** the denials that cover the channel: on the pair itself, or on a pair the history makes it succeed, conflicted or not, when that denial includes successors */
@@ -92,8 +103,8 @@ export function projectFacts(evidence: ChannelEvidence): ContinuityFact[] {
   return facts;
 }
 
-export function foldContinuity(set: VaultEventSet, evidence: ChannelEvidence): Continuity {
-  return new ContinuityFold(set, evidence, deriveContinuity(projectFacts(evidence)));
+export function foldContinuity(set: VaultEventSet, evidence: ChannelEvidence, admissions: AdmissionFold): Continuity {
+  return new ContinuityFold(set, evidence, admissions, deriveContinuity(projectFacts(evidence)));
 }
 
 /** A channel as the model returns it, which compares DIDs byte for byte and never parses them, so it is the one the fold gave it. */
@@ -106,16 +117,19 @@ class ContinuityFold implements Continuity {
   private readonly denials: readonly VaultEvent<"channel.blocked">[];
   private readonly heads = new Map<string, HeadResult>();
   private readonly covered = new Map<EventCid, ReadonlySet<string>>();
+  private readonly observed = new Map<FactId, Source>();
 
   constructor(
     set: VaultEventSet,
     private readonly evidence: ChannelEvidence,
+    private readonly admissions: AdmissionFold,
     readonly model: ContinuityModel
   ) {
     this.facts = model.facts;
     const byId = new Map(model.facts.map((fact) => [fact.id, fact]));
     this.conflicts = model.conflicts().map((conflict) => ({ conflict, channels: scopeOf(conflict, byId) }));
     this.denials = set.of("channel.blocked");
+    for (const source of evidence.sources.values()) this.observed.set(observationFactId(source.event.cid), source);
   }
 
   private headOf(channel: Channel): HeadResult {
@@ -194,8 +208,15 @@ class ContinuityFold implements Continuity {
     return head.status === "no-evidence" ? channel : null;
   }
 
-  confirmed(localDid: Channel["localDid"], peerDid: Channel["peerDid"]): boolean {
-    return localDid !== peerDid && this.model.confirmation(localDid, peerDid).status === "confirmed";
+  confirmedBy(localDid: Channel["localDid"], peerDid: Channel["peerDid"]): Source | null {
+    if (localDid === peerDid) return null;
+    const confirmation = this.model.confirmation(localDid, peerDid);
+    if (confirmation.status !== "confirmed") return null;
+    for (const { id } of confirmation.observations) {
+      const source = this.observed.get(id);
+      if (source !== undefined && this.admissions.admitted(source.event.cid)) return source;
+    }
+    return null;
   }
 
   ackPath(outbound: Channel, carrier: Channel): boolean {

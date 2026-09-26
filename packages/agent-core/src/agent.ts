@@ -16,10 +16,12 @@
  * user's send, and the first observation the vault holds of an input,
  * in the call that recorded it and had it admitted under the receipt's
  * lock as the witness its input speaks through. Such a live input has
- * what the vault owes recorded, then its automatic effects and the
- * private-address policy decided, then their calls made; each step
- * stands alone, so that one that fails leaves the others done and the
- * observation recorded all the same. A first observation the receipt
+ * what the vault owes recorded, then the private-address policy and
+ * its automatic effects decided, in that order, so that a reply to
+ * the input that selected a successor goes from the successor under
+ * its proof, then their calls made; each step stands alone, so that
+ * one that fails leaves the others done and the observation recorded
+ * all the same. A first observation the receipt
  * left waiting for evidence is not live, and stays so: the evidence,
  * whenever and however it comes, admits the observation, and what the
  * input then earns is listed for the user. Over a pickup, the local
@@ -388,10 +390,13 @@ export class Agent {
 
   /**
    * A delivery's local work: what the vault owes recorded and, for a
-   * live input, its automatic effects and the private-address policy
-   * decided under the lock, each intent committed with the action the
-   * input minted for it. What is returned makes the calls, in order,
-   * and tells the host.
+   * live input, the private-address policy and then its automatic
+   * effects decided under the lock, each intent committed with the
+   * action the input minted for it. The policy goes first so that the
+   * effects are fixed to the channel the input may still be answered
+   * in: the address the policy replaces answers nothing after, and
+   * the successor answers carrying the proof. What is returned makes
+   * the calls, in that order, and tells the host.
    */
   private async decide(received: Received): Promise<Finish> {
     const inbound: Inbound = { received, after: null, reacted: null, address: null };
@@ -400,12 +405,12 @@ export class Agent {
     inbound.after = await this.step("what the vault owes", () => afterReceipt(this.runtime, this.keys, received.cid, { trace }));
     if (!received.live) return async () => this.tell(inbound);
     const live = new LiveInput(received.cid);
-    const effects = await this.step("the automatic effects", () => decideEffects(this.runtime, this.keys, live, { handlers, acknowledge, now, trace }));
     const address = (this.options.privateAddresses ?? true) ? await this.step("the private address", () => decidePrivateAddress(this.runtime, this.keys, live, { now, trace })) : null;
+    const effects = await this.step("the automatic effects", () => decideEffects(this.runtime, this.keys, live, { handlers, acknowledge, now, trace }));
     const dispatch = (action: LiveAction): Promise<Dispatched> => this.dispatcher.run(action);
     return async () => {
-      if (effects !== null) inbound.reacted = await this.step("the calls of the automatic effects", () => callEffects(effects, { dispatch, trace }));
       if (address !== null) inbound.address = await this.step("the notification of the private address", () => callPrivateAddress(address, { dispatch, trace }));
+      if (effects !== null) inbound.reacted = await this.step("the calls of the automatic effects", () => callEffects(effects, { dispatch, trace }));
       return this.tell(inbound);
     };
   }

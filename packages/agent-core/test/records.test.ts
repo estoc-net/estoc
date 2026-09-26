@@ -19,6 +19,7 @@ import {
   type DidId,
   type EventReference,
   type MessageId,
+  type ReceiptOrdinal,
 } from "@estoc/vault";
 
 import { BASIC_MESSAGE } from "../src/protocol/basicmessage.js";
@@ -341,8 +342,8 @@ describe("records", () => {
   test("a receipt-integrity conflict is a diagnostic of the inputs it touches and admits neither: no manual action, no reply owed", async () => {
     const { alice, bob } = await parties();
     const pair = { localDid: alice.did, peerDid: bob.did };
-    await received(alice, bob, crypto.randomUUID(), { type: PING_TYPE, body: { response_requested: true }, created_time: CREATED });
-    await received(alice, bob, crypto.randomUUID(), { type: BASIC_MESSAGE, body: { content: "same ordinal" } });
+    await received(alice, bob, crypto.randomUUID(), { type: PING_TYPE, body: { response_requested: true }, created_time: CREATED }, alice, "1" as ReceiptOrdinal);
+    await received(alice, bob, crypto.randomUUID(), { type: BASIC_MESSAGE, body: { content: "same ordinal" } }, alice, "1" as ReceiptOrdinal);
 
     const records = await readRecords(alice.runtime, alice.keys);
     const record = await records.channel(pair);

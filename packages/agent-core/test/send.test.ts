@@ -157,19 +157,18 @@ describe("send to a channel", () => {
     await closeAll(alice, bob, carol);
   });
 
-  test("a channel a verified replacement moved on from takes a send only as an explicit pre-rotation choice; the successor takes it by default, and the old intent stays where it was", async () => {
+  test("a channel a decision replaced the local DID in takes no send, the successor takes it, and the intent already fixed to the old channel stays where it was, carried no further", async () => {
     const { alice, bob, carol, toBob } = await parties();
     const before = await send(alice.runtime, alice.keys, { channel: toBob }, HELLO, { messageId: MESSAGE });
     const { next } = await rotated(alice, bob);
     const f = await fold(alice);
     expect(f.continuity.head(toBob)).toEqual(channelOf(next, bob.did));
-    expect(f.outbound.outbounds.get(MESSAGE)?.channel).toEqual(toBob);
-    await expect(send(alice.runtime, alice.keys, { channel: toBob }, HELLO)).rejects.toThrow(/replaced by/);
-    const explicit = await send(alice.runtime, alice.keys, { channel: toBob, preRotation: true }, HELLO);
-    expect(explicit.channel).toEqual(toBob);
+    expect(f.outbound.outbounds.get(MESSAGE)).toMatchObject({ channel: toBob, work: { kind: "none", because: `the local DID is replaced here by ${next}` } });
+    await expect(send(alice.runtime, alice.keys, { channel: toBob }, HELLO)).rejects.toThrow(`the local DID is replaced here by ${next}`);
     const successor = await send(alice.runtime, alice.keys, { channel: channelOf(next, bob.did) }, HELLO);
     expect(successor).toMatchObject({ senderDidId: ALICE_NEXT, channel: channelOf(next, bob.did) });
     expect((await send(alice.runtime, alice.keys, { channel: toBob }, HELLO, { messageId: MESSAGE })).intent.cid).toBe(before.intent.cid);
+    expect((await fold(alice)).set.of("message.out")).toHaveLength(2);
     await closeAll(alice, bob, carol);
   });
 });

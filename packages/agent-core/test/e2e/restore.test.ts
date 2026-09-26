@@ -91,7 +91,7 @@ describe("a vault restored from a snapshot", () => {
     const b1 = didOf(await foldOf(bob), rotated.successor);
     await until("alice has bob's notification", () => alice.inbounds.length === 2);
     await until("bob has alice's acknowledgement", () => bob.inbounds.length === 2);
-    expect((await foldOf(bob)).continuity.confirmed(b1, a0)).toBe(true);
+    expect((await foldOf(bob)).continuity.confirmedBy(b1, a0)).not.toBeNull();
     await stop(alice);
 
     const toLater = await carol.agent.send({ channel: channelOf(carol.party.did, later.minted.did), recipientDid: invitation!.from as Did }, hello("to the address made later"), { messageId: THIRD });
