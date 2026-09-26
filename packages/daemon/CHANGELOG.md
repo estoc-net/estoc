@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Phase `foreign`**, in place of `unreadable` for what the host finds
+  standing where the vault would be and is no vault of this version:
+  the daemon takes nothing, and the host decides what becomes of it.
+  `unreadable` is now only a vault the daemon could not open, such as
+  one written under another schema version; `forgetIdentity` removes
+  it. The host hook is `foreign()`.
 - The records are read again for every listener once the agent over
   the vault has opened, when the pass it ran as it opened admitted,
   consumed or acknowledged anything: an observation whose admission

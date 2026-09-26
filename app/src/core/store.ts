@@ -32,7 +32,7 @@ import type { Channel, ContactId, Conversation, Did, DidId, Lines, Merged, Messa
 
 export const state = shallowReactive({
   phase: "booting" as Phase,
-  /** what the daemon said with the phase: why a vault is unreadable */
+  /** what the daemon said with the phase: what stands in the vault's place, or why the vault does not open */
   phaseDetail: null as string | null,
   snapshot: null as Snapshot | null,
   conversations: [] as Conversation[],

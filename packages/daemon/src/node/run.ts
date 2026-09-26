@@ -43,7 +43,7 @@ export async function runDaemon(options: RunOptions): Promise<Served> {
   const root = path.resolve(options.root);
   const log = options.log ?? ((line) => process.stderr.write(line + "\n"));
   const files = nodeHost(root, { fetch: options.fetch, WebSocket: options.WebSocket });
-  const refusal = await files.unreadable?.();
+  const refusal = await files.foreign?.();
   if (refusal != null) throw new Error(refusal);
   const dir = await vaultDir(root);
   const socketFile = path.join(dir, SOCKET_FILE);

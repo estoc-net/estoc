@@ -181,10 +181,37 @@ describe("the daemon over a folder", () => {
     const daemon = createDaemon(nodeHost(root), heard.emit);
     daemons.push(daemon);
     await daemon.boot();
-    expect(heard.events).toEqual([["phase", "unreadable", expect.stringMatching(/folder format/)]]);
+    expect(heard.events).toEqual([["phase", "foreign", expect.stringMatching(/folder format/)]]);
     await expect(daemon.createIdentity("Alice", PASSPHRASE)).rejects.toThrow();
     await stat(path.join(root, ".estoc", "config.json"));
     expect(await readdir(path.join(root, ".estoc"))).toEqual(["config.json"]);
+  });
+
+  it("does not open a vault written under another schema version, says which, leaves it as it is, and removes it only when asked", async () => {
+    const root = await folder();
+    const first = daemonOver(root);
+    await first.daemon.boot();
+    await first.daemon.createIdentity("Alice", PASSPHRASE);
+    await first.daemon.close();
+    const db = new DatabaseSync(vaultFile(root));
+    try {
+      db.exec("PRAGMA user_version = 1");
+    } finally {
+      db.close();
+    }
+    const writtenBytes = (await stat(vaultFile(root))).size;
+
+    const { daemon, heard } = daemonOver(root);
+    await daemon.boot();
+    expect(heard.events).toEqual([["phase", "unreadable", expect.stringMatching(/^schema version 1 is not supported/)]]);
+    await expect(daemon.unlock(PASSPHRASE)).rejects.toThrow("nothing to unlock");
+    await expect(daemon.createIdentity("Another", PASSPHRASE)).rejects.toThrow("a vault already exists here");
+    expect((await stat(vaultFile(root))).size).toBe(writtenBytes);
+
+    await daemon.forgetIdentity();
+    expect(heard.phases().at(-1)).toBe("onboarding");
+    await daemon.createIdentity("Another", PASSPHRASE);
+    expect(heard.snapshot()).toMatchObject({ label: "Another" });
   });
 });
 

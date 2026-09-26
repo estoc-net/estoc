@@ -23,10 +23,18 @@ import type {
 
 /**
  * Which screen the vault dictates: booting → (elsewhere: another
- * daemon has the files) → onboarding (no vault) | unreadable | damaged
- * | locked (a vault, no cached seed) → open. `unreachable` is the one
- * phase no daemon says: a client over a socket says it when nothing
- * answers.
+ * daemon has the files) → onboarding (no vault) | foreign | unreadable
+ * | damaged | locked (a vault, no cached seed) → open. `unreachable` is
+ * the one phase no daemon says: a client over a socket says it when
+ * nothing answers.
+ *
+ * `foreign` is what the host found standing where the vault would be
+ * and is no vault of this version: the daemon takes nothing, and what
+ * becomes of it is the host's to decide. `unreadable` is a vault the
+ * daemon could not open: a file written under another version of the
+ * schema, or files that could not be taken at all. Nothing of it is
+ * exported from here; `forgetIdentity` removes a vault file the daemon
+ * holds, to make room.
  *
  * `damaged` is a vault of this version whose history no longer reads
  * whole, found as it opens or while it runs: it is not run, since it
@@ -37,7 +45,7 @@ import type {
  * what the passphrase unlocks from any readable copy of the vault or
  * snapshot. `forgetIdentity` removes the damaged vault to make room.
  */
-export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "damaged" | "locked" | "open" | "unreachable";
+export type Phase = "booting" | "elsewhere" | "onboarding" | "foreign" | "unreadable" | "damaged" | "locked" | "open" | "unreachable";
 
 /** An arrangement with a mediator, as the fold has it. */
 export interface MediationSummary {

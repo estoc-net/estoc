@@ -635,9 +635,9 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       }
       booted = true;
       await inTurn(async () => {
-        const foreign = (await host.unreadable?.()) ?? null;
+        const foreign = (await host.foreign?.()) ?? null;
         if (foreign !== null) {
-          phase("unreadable", foreign);
+          phase("foreign", foreign);
           return;
         }
         try {

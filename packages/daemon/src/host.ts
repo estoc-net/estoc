@@ -42,7 +42,7 @@ export interface DaemonHost {
   /** The files taken as a whole, until the storage is closed; `DatabaseBusy` while another daemon has them. */
   storage(): Promise<DaemonStorage>;
   /** What stands where the vault would be and is no vault of this version, in words for the person; null when nothing does. Asked before the files are taken, and nothing is taken or written where it answers. */
-  unreadable?(): Promise<string | null>;
+  foreign?(): Promise<string | null>;
   cachedSeedKey(): Promise<SeedKey | null>;
   cacheSeedKey(key: SeedKey): Promise<void>;
   forgetSeedKey(): Promise<void>;

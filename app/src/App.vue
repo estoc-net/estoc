@@ -8,17 +8,22 @@ import Onboarding from "./ui/Onboarding.vue";
 import Rail from "./ui/Rail.vue";
 import Unlock from "./ui/Unlock.vue";
 
-function startOver() {
-  if (confirm("Delete the old vault from this browser? There is no way back except a backup made by the version that wrote it.")) {
-    void discardFolderVault();
+// Why the last removal a hollow screen offered did not happen; the screen shows it.
+const removalFailed = ref<string | null>(null);
+
+async function remove(question: string, removal: () => Promise<void>) {
+  if (!confirm(question)) return;
+  removalFailed.value = null;
+  try {
+    await removal();
+  } catch (err) {
+    removalFailed.value = err instanceof Error ? err.message : String(err);
   }
 }
 
-function removeDamaged() {
-  if (confirm("Remove the damaged vault from here? It cannot be opened again afterwards; what you keep is what your backup holds.")) {
-    void forgetIdentity();
-  }
-}
+const startOver = () => remove("Delete the old vault from this browser? There is no way back except a backup made by the version that wrote it.", discardFolderVault);
+const removeUnreadable = () => remove("Remove this vault from here and begin a new identity? Nothing of it can be exported by this version; what you keep is what a backup holds.", forgetIdentity);
+const removeDamaged = () => remove("Remove the damaged vault from here? It cannot be opened again afterwards; what you keep is what your backup holds.", forgetIdentity);
 
 // A conversation is selected by its key: a contact's ID, or for one not
 // named yet the pair it leads to. That pair moves when either side
@@ -75,19 +80,35 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
 
   <Onboarding v-else-if="state.phase === 'onboarding'" />
 
-  <div v-else-if="state.phase === 'unreadable'" class="hollow" style="height: 100%">
+  <div v-else-if="state.phase === 'foreign'" class="hollow" style="height: 100%" data-foreign>
     <div class="hollow-card">
       <div class="eyebrow">Estoc</div>
       <h1>Vault not readable</h1>
       <p>This version of the app cannot open what is here{{ state.phaseDetail === null ? "." : `: ${state.phaseDetail}` }}</p>
       <p class="fine">
-        Nothing has been changed. If it came from a newer version, update the
-        app. A vault of the earlier folder format is not read or converted:
-        export a backup with the app version that wrote it if you want to keep
-        it<template v-if="state.daemonAt === null"
-          >, then <button class="link" @click="startOver">start over</button> to delete it and begin a new identity</template
+        Nothing has been changed. A vault of the earlier folder format is not
+        read or converted: export a backup with the app version that wrote it
+        if you want to keep it<template v-if="state.daemonAt === null"
+          >, then <button class="link" data-start-over @click="startOver">start over</button> to delete it and begin a new identity</template
         >.
       </p>
+      <p v-if="removalFailed" class="status-line error">{{ removalFailed }}</p>
+    </div>
+  </div>
+
+  <div v-else-if="state.phase === 'unreadable'" class="hollow" style="height: 100%" data-unreadable>
+    <div class="hollow-card">
+      <div class="eyebrow">Estoc</div>
+      <h1>Vault not readable</h1>
+      <p>This version of the app cannot open what is here{{ state.phaseDetail === null ? "." : `: ${state.phaseDetail}` }}</p>
+      <p class="fine">
+        Nothing has been changed. If the vault came from a newer version,
+        update the app. One written by an earlier version is not read or
+        converted, and nothing of it can be exported from here:
+        <button class="link" data-remove-unreadable @click="removeUnreadable">remove it and start over</button>
+        with a new identity, or restore a backup on the screen that follows.
+      </p>
+      <p v-if="removalFailed" class="status-line error">{{ removalFailed }}</p>
     </div>
   </div>
 
@@ -114,6 +135,7 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
         To restore, <button class="link" data-remove-damaged @click="removeDamaged">remove the damaged vault</button>
         and choose the backup on the screen that follows.
       </p>
+      <p v-if="removalFailed" class="status-line error">{{ removalFailed }}</p>
     </div>
   </div>
 
