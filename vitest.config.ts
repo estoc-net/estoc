@@ -5,6 +5,6 @@ import { defineConfig } from "vitest/config";
 // A package's own vitest.config.ts still applies to its project.
 export default defineConfig({
   test: {
-    projects: ["packages/*"],
+    projects: ["packages/*", "app"],
   },
 });

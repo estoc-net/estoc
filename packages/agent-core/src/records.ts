@@ -6,9 +6,13 @@
  * authority: a message stays in the channel it was observed or sent
  * in, whichever contact shows it; what a peer claims of itself is
  * shown beside the exact channel it came by and names no contact; and
- * whatever is read from a body is gone with the body's erasure. The
- * manual step a record names is the one current evidence leaves open,
- * and the procedure behind it checks again under the lock.
+ * whatever is read from a body is gone with the body's erasure. An
+ * input is shown by its admitted observations alone, as the runtime
+ * reads it: what was received and not admitted — still pending,
+ * refused, or ignored because the peer moved on — is listed apart,
+ * with what the runtime made of it and nothing of what it carries.
+ * The manual step a record names is the one current evidence leaves
+ * open, and the procedure behind it checks again under the lock.
  */
 
 import { InvalidJson, parseStrict, type JsonObject } from "@estoc/event-store";
@@ -21,7 +25,9 @@ import {
   channelKey,
   channelOf,
   compareChannels,
+  compareReceiptKeys,
   readStoredDocument,
+  receiptOrderKey,
   responseChannel,
   sameChannel,
   unfinishedWork,
@@ -51,6 +57,7 @@ import {
   type ReadObject,
   type SendGate,
   type Source,
+  type Standing,
   type Status,
   type StoredAttachment,
   type VaultFold,
@@ -75,7 +82,7 @@ export interface MessageHeaders {
 /** `missing` is content that is not here, is damaged, is too large to read or is no stored message document. */
 export type BodyRecord = { state: "available"; body: JsonObject; attachments: StoredAttachment[] } | { state: "erased" } | { state: "missing" };
 
-export type DiagnosticKind = "input" | "observations" | "receipt-integrity" | "intent" | "outcome" | "effect" | "work" | "remote-error";
+export type DiagnosticKind = "input" | "observations" | "contradicting" | "receipt-integrity" | "intent" | "outcome" | "effect" | "work" | "remote-error";
 
 export interface Diagnostic {
   kind: DiagnosticKind;
@@ -91,9 +98,9 @@ export interface MessageRecord {
   channel: Channel | null;
   /** the undeleted contacts that select exactly this channel */
   contactIds: ContactId[];
-  /** when this vault first recorded the message */
+  /** for an input, the time of the observation it is shown by; for an output, the time of its earliest intent */
   at: string;
-  /** null while the authenticated observations of an input, or the intents of an output, do not agree on one */
+  /** null while the admitted observations of an input, or the intents of an output, do not agree on one */
   msg: MessageHeaders | null;
   body: BodyRecord;
   /** what an input is to the protocols the vault speaks; null for an output, and while the input's intent is not agreed on */
@@ -116,18 +123,31 @@ export interface MessageRecord {
 }
 
 /**
- * An authenticated observation no input takes in: the evidence of its
- * sender is not here, or is contradicted. It stays visible with what it
- * waits for, and nothing it carries is shown as the peer's.
+ * What the runtime made of one observation: admitted for application
+ * use; refused for good; ignored because the peer has replaced its
+ * DID and no admission of it stands; or still pending, with the
+ * evidence it lacks or the blocker current policy holds against it.
  */
-export interface UnplacedInput {
+export type DispositionRecord = { status: "admitted" } | { status: "refused"; because: string } | { status: "ignored-superseded" } | { status: "pending-admission"; because: string };
+
+/**
+ * One observation as it was received, apart from the input it may be
+ * shown by: how far its sender is authenticated, what became of a
+ * proof it brought, and its disposition. Nothing it carries is shown
+ * here; a content is read from an admitted observation, by the record
+ * of its input.
+ */
+export interface ObservationRecord {
   sourceEventCid: EventCid;
   messageId: MessageId;
-  /** the pair its endpoints form; null while the local endpoint is unknown, and under contradicted evidence */
+  /** the pair its endpoints form; null for an anonymous observation, while the local endpoint is unknown, and under contradicted evidence */
   channel: Channel | null;
   at: string;
-  standing: "incomplete" | "conflict";
-  because: string;
+  standing: Standing;
+  verification: Status;
+  disposition: DispositionRecord;
+  /** it carries another content than the one its input has admitted */
+  contradicting: boolean;
 }
 
 /** An output no one pair is fixed for, with the pairs its recorded intents would each fix. */
@@ -137,8 +157,8 @@ export interface UnplacedOutput {
 }
 
 export interface Unplaced {
-  /** the observations whose pair is not known */
-  inputs: UnplacedInput[];
+  /** the observations whose pair is not known, in first-receipt order */
+  inputs: ObservationRecord[];
   outputs: UnplacedOutput[];
 }
 
@@ -153,10 +173,10 @@ export interface ChannelRecord {
   peerName: { name: string; messageId: MessageId } | null;
   /** the last profile of ours a transport accepted in exactly this channel, whether or not its content is still here */
   profileSubmitted: MessageId | null;
-  /** with the outputs whose intents disagree while every one of them names this pair */
+  /** the inputs an admission names an observation of, with the outputs whose intents disagree while every one of them names this pair */
   messages: MessageRecord[];
-  /** the observations of this pair no input takes in */
-  unplaced: UnplacedInput[];
+  /** every observation of this pair, in first-receipt order, whether or not an input shows it */
+  observations: ObservationRecord[];
 }
 
 export interface ContactChannelRecord extends ChannelRecord {
@@ -260,8 +280,7 @@ export function recorder(fold: VaultFold, readObject: ReadObject, options: ViewO
   const placed = new Map<string, Outbound[]>();
   const pairs = new Map<string, Channel>();
   const adrift: { outbound: Outbound; candidates: Channel[] }[] = [];
-  for (const execution of fold.inbound.executions.values()) pairs.set(channelKey(execution.channel), execution.channel);
-  for (const source of fold.inbound.unplaced) if (source.channel !== null) pairs.set(channelKey(source.channel), source.channel);
+  for (const source of fold.channels.sources.values()) if (source.channel !== null) pairs.set(channelKey(source.channel), source.channel);
   for (const outbound of fold.outbound.outbounds.values()) {
     const { channel: pair, candidates } = placeOf(fold, outbound);
     if (pair === null) adrift.push({ outbound, candidates });
@@ -282,7 +301,7 @@ export function recorder(fold: VaultFold, readObject: ReadObject, options: ViewO
   return {
     channels: () => [...pairs.values()].sort(compareChannels),
     unplaced: async () => ({
-      inputs: unplacedInputs(fold.inbound.unplaced.filter((source) => source.channel === null)),
+      inputs: observationRecords(fold, [...fold.channels.sources.values()].filter((source) => source.channel === null)),
       outputs: await Promise.all(adrift.map(async ({ outbound, candidates }) => ({ candidates, message: await outboundRecord(context, outbound, null, [], []) }))),
     }),
     contactIds: () => [...fold.contacts.contacts.values()].filter((contact) => !contact.deleted).map((contact) => contact.contactId).sort(),
@@ -355,8 +374,23 @@ function canonicalOrNull(did: Did): Did | null {
   }
 }
 
-function unplacedInputs(sources: readonly Source[]): UnplacedInput[] {
-  return sources.flatMap(({ event, channel, standing }) => (standing.status === "complete" ? [] : [{ sourceEventCid: event.cid, messageId: event.data.messageId, channel, at: event.at, standing: standing.status, because: standing.because }]));
+function observationRecords(fold: VaultFold, sources: readonly Source[]): ObservationRecord[] {
+  return sources
+    .slice()
+    .sort((a, b) => compareReceiptKeys(receiptOrderKey(a.event), receiptOrderKey(b.event)))
+    .map(({ event, channel, standing }) => {
+      const disposition = fold.dispositions.disposition(event.cid);
+      return {
+        sourceEventCid: event.cid,
+        messageId: event.data.messageId,
+        channel,
+        at: event.at,
+        standing,
+        verification: fold.continuity.status(event.cid),
+        disposition: disposition.status === "admitted" ? { status: "admitted" } : disposition,
+        contradicting: fold.inbound.ofSource(event.cid)?.contradicting.some((member) => member.source.event.cid === event.cid) ?? false,
+      };
+    });
 }
 
 interface Context {
@@ -390,20 +424,7 @@ function document(context: Context, erased: boolean, bodyCid: Cid): Promise<Body
 
 const headersOf = (data: MessageIn | MessageOut): MessageHeaders => ({ type: data.msgType, thid: data.thid, pthid: data.pthid, createdTime: data.createdTime, expiresTime: data.expiresTime });
 
-/**
- * The observation an input is shown by: its admitted complete witness,
- * else the first admitted, else the first whose proof counts, else the
- * first. Its content is shown when the admitted observations agree on
- * it, as the fold reads the input's intent; while none is admitted
- * yet, only when every authenticated observation carries the same
- * content.
- */
-function shown(execution: Execution): { member: Member; agreed: boolean } {
-  const member = execution.firstWitness ?? execution.members.find((m) => m.admitted) ?? execution.members.find((m) => m.positive) ?? execution.members[0]!;
-  const intentHash = execution.intentHash ?? member.source.event.data.intentHash;
-  const agreed = execution.status.status !== "conflict" && (execution.intentHash !== null || execution.members.every((m) => m.source.event.data.intentHash === intentHash));
-  return { member, agreed };
-}
+const shownBy = (execution: Execution): Member => execution.firstWitness ?? execution.members.find((member) => member.admitted)!;
 
 const INTEGRITY = "one author gave the receipt's ordinal to another observation";
 
@@ -425,7 +446,7 @@ async function remoteErrors(context: Context): Promise<ReadonlyMap<MessageId, Di
   const reports = new Map<MessageId, Diagnostic[]>();
   const executions = [...fold.inbound.executions.values()].filter((execution) => execution.kind === "error" && execution.status.status === "complete");
   for (const execution of executions.sort((a, b) => (a.messageId < b.messageId ? -1 : 1))) {
-    const { source } = shown(execution).member;
+    const { source } = execution.firstWitness!;
     const outbound = fold.outbound.inReplyTo(source.event.cid);
     if (outbound === null) continue;
     const body = await document(context, execution.erased, source.event.data.bodyCid);
@@ -442,6 +463,7 @@ async function channelRecord(context: Context, view: ChannelView): Promise<Chann
   const messages: MessageRecord[] = [];
   let peerName: ChannelRecord["peerName"] = null;
   for (const execution of view.inbound) {
+    if (!execution.members.some((member) => member.admitted)) continue;
     const record = await inboundRecord(context, execution, contactIds);
     messages.push(record);
     if (execution.status.status !== "complete" || record.msg?.type !== PROFILE || record.body.state !== "available") continue;
@@ -453,19 +475,24 @@ async function channelRecord(context: Context, view: ChannelView): Promise<Chann
     messages.push(await outboundRecord(context, outbound, view.channel, contactIds, reports.get(outbound.messageId) ?? []));
     if (outbound.intent.status === "consistent" && outbound.intent.data.msgType === PROFILE && outbound.submitted) profileSubmitted = outbound.messageId;
   }
-  const unplaced = unplacedInputs(fold.inbound.unplaced.filter((source) => source.channel !== null && sameChannel(source.channel, view.channel)));
+  const observations = observationRecords(
+    fold,
+    [...fold.channels.sources.values()].filter((source) => source.channel !== null && sameChannel(source.channel, view.channel))
+  );
   messages.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   const { channel, head, superseded, blocked, conflicted, send } = view;
-  return { channel, head, superseded, blocked, conflicted, send, peerName, profileSubmitted, messages, unplaced };
+  return { channel, head, superseded, blocked, conflicted, send, peerName, profileSubmitted, messages, observations };
 }
 
 async function inboundRecord(context: Context, execution: Execution, contactIds: ContactId[]): Promise<MessageRecord> {
   const { fold } = context;
-  const { member, agreed } = shown(execution);
+  const member = shownBy(execution);
+  const agreed = execution.intentHash !== null;
   const { data } = member.source.event;
   const diagnostics: Diagnostic[] = [];
   if (execution.status.status !== "complete") diagnostics.push({ kind: "input", because: execution.status.because });
   if (execution.siblings.length > 0) diagnostics.push({ kind: "observations", because: `${execution.siblings.length} observations claiming this input are not authenticated` });
+  if (execution.contradicting.length > 0) diagnostics.push({ kind: "contradicting", because: `${execution.contradicting.length} authenticated ${execution.contradicting.length === 1 ? "observation carries" : "observations carry"} another content than the one admitted` });
   const integrity = fold.channels.receipts.affected.has(execution.messageId);
   if (integrity) diagnostics.push({ kind: "receipt-integrity", because: INTEGRITY });
   const completes = integrity ? [] : (context.completes.get(execution.messageId) ?? []);
@@ -474,7 +501,7 @@ async function inboundRecord(context: Context, execution: Execution, contactIds:
     direction: "in",
     channel: execution.channel,
     contactIds,
-    at: execution.members.reduce((at, m) => (m.source.event.at < at ? m.source.event.at : at), member.source.event.at),
+    at: member.source.event.at,
     msg: agreed ? headersOf(data) : null,
     body: agreed ? await document(context, execution.erased, data.bodyCid) : execution.erased ? { state: "erased" } : { state: "missing" },
     kind: execution.kind,

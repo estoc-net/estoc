@@ -98,7 +98,8 @@ describe("what a stranger hands the mediator", () => {
     expect(fold.continuity.head(channelOf(a0, b0))).toEqual(channelOf(a0, b0));
     expect(fold.outbound.outbounds.size).toBe(1);
     const claimed = await (await alice.agent.records()).channel(channelOf(a0, mallory.party.did));
-    expect(claimed.messages).toMatchObject([{ direction: "in", verification: { status: "invalid" }, input: { status: "pending" }, manualAction: "none" }]);
+    expect(claimed.messages).toEqual([]);
+    expect(claimed.observations).toMatchObject([{ standing: { status: "complete" }, verification: { status: "invalid" }, disposition: { status: "refused", because: expect.stringContaining("the source's proof is invalid") } }]);
     expect((await alice.agent.pending()).missingResponses).toEqual([]);
     await expect(alice.agent.send({ channel: channelOf(a0, mallory.party.did) }, hello("who are you"))).resolves.toMatchObject({ dispatched: { outcome: "submitted" } });
   });
