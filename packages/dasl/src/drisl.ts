@@ -11,9 +11,8 @@
  * same as DAG-CBOR's length-first order), no tag but 42, no simple value
  * but false/true/null, floats only as 64-bit finite non-negative-zero
  * values, valid UTF-8, no trailing bytes. A block that decodes here is a
- * block whose bytes are the only bytes its value can have — and what it
- * decodes to reserializes to those bytes: a float stays a float even when
- * its value is an integer (CBOR/c-42 §2.2), a leading U+FEFF stays text.
+ * block whose bytes are the only bytes its value can have, and what it
+ * decodes to reserializes to those bytes (see `Float`).
  */
 
 import { cidFromBytes, compareBytes, type DaslCid } from "./cid.js";
