@@ -30,6 +30,7 @@
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
+    "@ipld/car": "^5.4.7",
     "multiformats": "^14.0.5"
   },
   "devDependencies": {

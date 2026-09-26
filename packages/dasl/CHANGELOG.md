@@ -13,8 +13,7 @@ package reads them yet.
   or drisl (0x71), 36 bytes, base32 lower in the one canonical spelling;
   anything else — CIDv0, dag-pb, another hash, another base, uppercase,
   padding — is not a DASL CID. The CID, multihash, base32 and sha-256
-  machinery is `multiformats`', the package's one dependency; what is
-  here is the profile: the checks, and a round trip through the encoder
+  machinery is `multiformats`'; what is here is the profile: the checks, and a round trip through the encoder
   so that a spelling multiformats would forgive (base32 padding) is
   refused.
 - DRISL (`encodeDrisl`, `decodeDrisl`, `Link`): the CBOR/c-42 profile.
@@ -33,8 +32,14 @@ package reads them yet.
   the safe range (±2^53 included) comes back as a `bigint`; a leading
   U+FEFF in a text string is content, not a byte-order mark to strip.
 - DASL CAR (`encodeCar`, `decodeCar`): CARv1 whose header is a DRISL map
-  `{roots, version: 1}` — the integer 1, not the float 1.0 — and whose
-  every block is named by exactly the 36 bytes of a DASL CID; a block
-  named otherwise, or whose bytes do not hash to its name, is dropped
-  and listed in `bad`, never kept. Lengths are minimally encoded
+  with the integer `version: 1`, `roots` and any other metadata, and
+  whose every block is named by exactly the 36 bytes of a DASL CID; a
+  block named otherwise, or whose bytes do not hash to its name, is
+  dropped and listed in `bad`, never kept. Lengths are minimally encoded
   unsigned varints; a non-minimal length is a malformed container.
+  `encodeCar` writes through `@ipld/car`; `decodeCar` decodes each length
+  with `multiformats` and does not read through `@ipld/car`: the library's reader
+  refuses a header with metadata beyond `roots` and `version`, lets a
+  `__proto__` entry in the header become a prototype, and takes a block's
+  CID by structure, past the section's end and re-encoded, where the
+  profile fixes the name to the block's first 36 bytes.

@@ -1,15 +1,8 @@
 /**
- * @estoc/dasl — DASL (https://dasl.ing). CIDs, multihashes, base32 and
- * sha-256 are multiformats'; the DASL profile over them, the DRISL codec
- * and CAR are here.
- *
- * - cid: DASL CIDs — CIDv1, sha-256, codec raw (0x55) or drisl (0x71),
- *   base32 lower, always 36 bytes, one canonical spelling;
- * - drisl: the DRISL codec — deterministic CBOR with CIDs as tag 42; the
- *   encoder writes the one byte string a value has, the decoder refuses
- *   every other form, so a document's CID is a function of its content;
- * - car: DASL CAR — CARv1 whose blocks are named by DASL CIDs, checked
- *   against them on read.
+ * @estoc/dasl — DASL (https://dasl.ing). CIDs, multihashes, base32,
+ * sha-256 and varints are multiformats', a CAR is written by @ipld/car;
+ * the DASL profile over them and the DRISL codec are here, one module
+ * each: cid, drisl, car.
  *
  * Everything here is pure: bytes in, bytes out, no IO, no policy. It runs
  * in Node, workerd and the browser. What a DRISL document *means* — a

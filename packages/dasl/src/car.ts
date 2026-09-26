@@ -1,20 +1,27 @@
 /**
- * DASL CAR (https://dasl.ing/car.html): CARv1 over DASL CIDs. A header
- * — a length-prefixed DRISL map with `version: 1` and `roots`, an array
- * of CIDs — then blocks, each a length-prefixed `CID ‖ data` where the
- * CID is exactly the 36 bytes of a DASL CID. Lengths are multiformats
- * unsigned varints, minimally encoded. This is how a set of blocks
- * travels as one file.
+ * DASL CAR (https://dasl.ing/car.html): CARv1 over DASL CIDs. A header —
+ * a length-prefixed DRISL map with `version: 1`, `roots` (an array of
+ * CIDs) and whatever other metadata the writer put there — then blocks,
+ * each a length-prefixed `CID ‖ data` where the CID is exactly the 36
+ * bytes of a DASL CID. This is how a set of blocks travels as one file.
  *
- * Reading checks every block against its name: a section whose 36 bytes
- * are not a DASL CID, or whose data does not hash to it, is not kept —
- * the caller trusts every byte in `blocks`. Writing puts the roots and
- * blocks in the order given, so a CAR of one closure is one byte string
- * when the caller orders it.
+ * `@ipld/car` writes the container. It does not read it here: its reader
+ * refuses a header with any member beyond `version` and `roots`, decodes
+ * the header into an object whose `__proto__` entry becomes a prototype
+ * rather than a key, and takes a block's CID by the CID's own structure,
+ * past the end of the section if need be and re-encoded, so a name that
+ * is not the 36 bytes of a DASL CID can come back as one. Reading is the
+ * profile's own definition instead: multiformats' varint for every
+ * length, the DRISL codec for the header, the first 36 bytes of a block
+ * for its name.
  */
 
+import * as CarBufferWriter from "@ipld/car/buffer-writer";
+import { CID } from "multiformats/cid";
+import { varint } from "multiformats";
+
 import { base32Encode, checkCid, CID_LENGTH, cidFromBytes, parseCid } from "./cid.js";
-import { decodeDrisl, encodeDrisl, Float, Link, type Drisl } from "./drisl.js";
+import { decodeDrisl, Float, Link, type Drisl } from "./drisl.js";
 
 /** A CAR read back: what the header named, every block whose bytes match its CID, and what was dropped. */
 export interface Car {
@@ -31,36 +38,29 @@ export interface Car {
 
 /** Encode a CAR: `roots`, then `blocks` in map order. Every CID must be a DASL CID. */
 export function encodeCar(roots: string[], blocks: Map<string, Uint8Array>): Uint8Array {
-  const header = encodeDrisl({ roots: roots.map((root) => new Link(parseCid(root))), version: 1 });
-  const parts: Uint8Array[] = [varint(header.length), header];
-  for (const [cid, bytes] of blocks) {
-    const name = parseCid(cid).bytes;
-    parts.push(varint(name.length + bytes.length), name, bytes);
-  }
-  let total = 0;
-  for (const part of parts) total += part.length;
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const part of parts) {
-    out.set(part, at);
-    at += part.length;
-  }
-  return out;
+  const named = { roots: roots.map((root) => CID.decode(parseCid(root).bytes)) };
+  const sections = [...blocks].map(([cid, bytes]) => ({ cid: CID.decode(parseCid(cid).bytes), bytes }));
+  const length = sections.reduce((total, block) => total + CarBufferWriter.blockLength(block), CarBufferWriter.headerLength(named));
+  const writer = CarBufferWriter.createWriter(new ArrayBuffer(length), named);
+  for (const block of sections) writer.write(block);
+  return writer.close();
 }
 
 /**
  * Decode a CAR and check every block against its CID. Throws on a
- * malformed container — a header that is not a DRISL map with
- * `version: 1` and `roots` of DASL CIDs, a truncated section, a section
- * shorter than a CID; a block is never a reason to throw, only to drop.
+ * malformed container — a header that is not a DRISL map with the integer
+ * `version: 1` and `roots` of DASL CIDs, a length that is not a minimal
+ * varint, a truncated section, a section shorter than a CID; a block is
+ * never a reason to throw, only to drop.
  */
 export async function decodeCar(bytes: Uint8Array): Promise<Car> {
   let at = 0;
   const section = (): Uint8Array => {
-    const [length, next] = readVarint(bytes, at);
-    if (next + length > bytes.length) throw new Error("truncated CAR");
-    at = next + length;
-    return bytes.subarray(next, at);
+    const [length, prefix] = varint.decode(bytes, at);
+    const start = at + prefix;
+    if (start + length > bytes.length) throw new Error("truncated CAR");
+    at = start + length;
+    return bytes.subarray(start, at);
   };
   const header = section();
   if (header.length === 0) throw new Error("CAR header is empty");
@@ -105,31 +105,4 @@ function decodeHeader(bytes: Uint8Array): string[] {
   const roots = doc["roots"];
   if (!Array.isArray(roots) || !roots.every((root) => root instanceof Link)) throw new Error("CAR header roots are not CIDs");
   return roots.map((root) => root.cid.text);
-}
-
-function varint(n: number): Uint8Array {
-  const out: number[] = [];
-  while (n >= 0x80) {
-    out.push((n & 0x7f) | 0x80);
-    n = Math.floor(n / 128);
-  }
-  out.push(n);
-  return new Uint8Array(out);
-}
-
-function readVarint(bytes: Uint8Array, at: number): [number, number] {
-  let n = 0;
-  let shift = 1;
-  for (let i = 0; i < 8; i++) {
-    if (at >= bytes.length) throw new Error("truncated CAR");
-    const b = bytes[at++] as number;
-    n += (b & 0x7f) * shift;
-    if (b < 0x80) {
-      // minimal encoding: the only value whose last byte may be 0x00 is 0 itself
-      if (b === 0 && i > 0) throw new Error("CAR length not minimally encoded");
-      return [n, at];
-    }
-    shift *= 128;
-  }
-  throw new Error("CAR length too long");
 }
