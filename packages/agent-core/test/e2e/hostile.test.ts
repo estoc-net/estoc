@@ -7,7 +7,6 @@ import { didKeyName, type Did, type DidId, type MessageId, type VaultFold } from
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
 import type { IMessage } from "../../src/protocol/didcomm.js";
 import { FORWARD } from "../../src/protocol/spec.js";
-import { Unusable } from "../../src/index.js";
 import type { FakeMediator } from "../fake-mediator.js";
 import { newMediator, peerSealer, sealed, type DirectParty, type Sealer } from "../helpers.js";
 import { LONG, channelOf, foldOf, forwarded, run, stopAll, until, type Running } from "./running.js";
@@ -18,7 +17,6 @@ const CAROL = "019b0000-0000-7000-8000-0000000000c0" as DidId;
 const MALLORY = "019b0000-0000-7000-8000-0000000000d0" as DidId;
 const FIRST = "019b0000-0000-7000-8000-000000000101" as MessageId;
 const SECOND = "019b0000-0000-7000-8000-000000000102" as MessageId;
-const THIRD = "019b0000-0000-7000-8000-000000000103" as MessageId;
 const IAT = 1_790_000_000;
 
 afterEach(stopAll);
@@ -107,7 +105,7 @@ describe("what a stranger hands the mediator", () => {
 });
 
 describe("a peer that writes from the address it rotated away from", () => {
-  it("is recorded and answered with nothing, and the channel it moved to stays the head", { timeout: LONG }, async () => {
+  it("is refused a send by its own agent, and what it seals by hand is recorded by the peer and answered with nothing, the channel it moved to staying the head", { timeout: LONG }, async () => {
     const mediator = await newMediator();
     const alice = await run(mediator, 1, ALICE, { privateAddresses: false });
     const bob = await run(mediator, 2, BOB, { privateAddresses: false });
@@ -122,16 +120,14 @@ describe("a peer that writes from the address it rotated away from", () => {
     await until("alice has the notification", () => alice.inbounds.length === 2);
     await until("bob has the acknowledgement", () => bob.inbounds.length === 2);
 
-    await expect(bob.agent.send({ channel: channelOf(b0, a0) }, hello("from the old address"))).rejects.toBeInstanceOf(Unusable);
+    await expect(bob.agent.send({ channel: channelOf(b0, a0) }, hello("from the old address"))).rejects.toThrow(`the local DID is replaced here by ${b1}`);
     const forwards = forwardsSeen(mediator);
-    const old = await bob.agent.send({ channel: channelOf(b0, a0), preRotation: true }, { ...hello("from the old address"), pleaseAck: [""] }, { messageId: THIRD });
-    expect(old.dispatched).toMatchObject({ outcome: "submitted" });
+    await forwarded(mediator, a0, await sealed(await sealerOf(bob, b0), a0, { ...hello("from the old address"), please_ack: [""] }));
     await until("alice has the message from the old address", () => alice.inbounds.length === 3);
     expect(alice.inbounds[2]).toMatchObject({ received: { outcome: "received", live: false }, after: { proof: { status: "not-present" }, disposition: { status: "ignored-superseded" } }, reacted: null, address: null });
     expect(forwardsSeen(mediator)).toBe(forwards + 1);
     const fold = await foldOf(alice);
     expect(fold.continuity.head(channelOf(a0, b0))).toEqual(channelOf(a0, b1));
     expect((await alice.agent.pending()).missingResponses).toEqual([]);
-    expect((await foldOf(bob)).outbound.outbounds.get(THIRD)).toMatchObject({ outcome: { status: "submitted" }, acknowledged: false });
   });
 });

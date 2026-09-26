@@ -169,16 +169,16 @@ async function ready(held: Held, keys: Keys, messageId: MessageId, options: Disp
 
 /**
  * A mediated sender's address is to be held by its mediator before a
- * package discloses it. Until the peer has written to the address, the
- * peer may be learning it from this package, and an answer to an
- * address the mediator does not hold is lost. A direct sender needs no
- * mediator.
+ * package discloses it. Until an admitted receipt shows the peer has
+ * written to the address, the peer may be learning it from this
+ * package, and an answer to an address the mediator does not hold is
+ * lost. A direct sender needs no mediator.
  */
 function unconfirmedMediatedSender(fold: VaultFold, sender: LocalDidEntity, channel: Channel): Ready["registerWith"] {
   const created = sender.created as NonNullable<LocalDidEntity["created"]>;
   const route = fold.routes.routes.get(created.boundRouteId)?.configured;
   if (route === undefined || route === null || route.kind !== "mediated") return null;
-  if (fold.continuity.confirmed(channel.localDid, channel.peerDid)) return null;
+  if (fold.continuity.confirmedBy(channel.localDid, channel.peerDid) !== null) return null;
   return { mediationId: route.mediationId, did: created.did };
 }
 

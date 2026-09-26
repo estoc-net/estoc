@@ -216,20 +216,21 @@ export async function sealed(from: Sealer | null, to: string, extra: Partial<IMe
 
 export const kidOf = (packed: string): string => (JSON.parse(packed) as { recipients: { header: { kid: string } }[] }).recipients[0]!.header.kid;
 
-/** The peer's message received at one of `party`'s DIDs: the peer's document pinned, the body stored, the observation committed and admitted — an admitted complete witness of the peer writing to exactly that address. */
-export async function received(party: DirectParty, peer: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = party): Promise<EventReference<"message.in">> {
+/** The peer's message received at one of `party`'s DIDs: the peer's document pinned, the body stored, the observation committed under the next receipt ordinal — or the one given, to contradict a receipt — and admitted: an admitted complete witness of the peer writing to exactly that address. */
+export async function received(party: DirectParty, peer: DirectParty, wire: string, plaintext: Record<string, unknown>, at: { didId: DidId; did: Did } = party, ordinal: ReceiptOrdinal | null = null): Promise<EventReference<"message.in">> {
   const outcome = await resolve(peer.longFormDid, () => null);
   if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
   const [peerPublicKey] = authorizedKeys(outcome.resolution, "keyAgreement").values();
   const resolved = await commitResolution(party.runtime, { resolution: outcome.resolution, localKeyName: didKeyName(at.didId, "key-agreement"), peerPublicKey: peerPublicKey as PublicKey });
   const read = readPlaintext({ typ: PLAINTEXT_TYP, id: wire, from: peer.longFormDid, to: [at.did], ...plaintext });
+  const receiptOrdinal = ordinal ?? (String((await scanVault(party.runtime.vault, party.keys)).channels.receipts.nextReceiptOrdinal) as ReceiptOrdinal);
   const [event] = await party.runtime.vault.commit(
     [{ cid: read.stored.bodyCid, source: read.stored.bytes }],
     [
       vaultDraft("message.in", {
         messageId: inboundMessageId(peer.did, at.did, wire as WireMessageId),
         wireMessageId: wire as WireMessageId,
-        receiptOrdinal: "1" as ReceiptOrdinal,
+        receiptOrdinal,
         intentHash: read.intentHash,
         plaintextHash: read.plaintextHash,
         localKeyName: didKeyName(at.didId, "key-agreement"),
@@ -280,11 +281,16 @@ export async function proofOfSuccession(peer: Addressed, priorDidId: DidId): Pro
  */
 export async function carrierWaitingForIssuer(holder: Addressed, peer: Addressed, priorDidId: DidId, plaintext: Partial<IMessage> = {}): Promise<{ cid: EventReference<"message.in">; prior: MintedDid; proof: string }> {
   const { prior, proof } = await proofOfSuccession(peer, priorDidId);
+  return { cid: await delivered(holder, peer, { ...plaintext, from_prior: proof }), prior, proof };
+}
+
+/** The peer's message received at the holder's long form through a receiver of the holder's, as a direct delivery: the observation committed and the receipt's own admission pass run. */
+export async function delivered(holder: Addressed, peer: Addressed, plaintext: Partial<IMessage> = {}): Promise<EventReference<"message.in">> {
   const receiver = new Receiver(holder.runtime, holder.keys, await Keyring.load(holder.keys, await scanVault(holder.runtime.vault, holder.keys)), { didcomm, receipt: receiptOf(holder.runtime, holder.keys) });
   try {
-    const carried = await receiver.receive({ packed: await sealed(await peerSealer(peer), holder.longFormDid, { ...plaintext, from_prior: proof }), source: { kind: "direct" } });
+    const carried = await receiver.receive({ packed: await sealed(await peerSealer(peer), holder.longFormDid, plaintext), source: { kind: "direct" } });
     if (carried.outcome !== "received") throw new Error(`not received: ${JSON.stringify(carried)}`);
-    return { cid: carried.cid, prior, proof };
+    return carried.cid;
   } finally {
     receiver.close();
   }

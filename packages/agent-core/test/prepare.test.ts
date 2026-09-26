@@ -183,7 +183,7 @@ describe("prepare", () => {
     expect((await opened(alice, bob, (await envelopeOf(alice, before)).packed)).plaintext.from).toBe(alice.longFormDid);
 
     await received(alice, bob, "wire-1", { type: BASIC_MESSAGE, body: { content: "hi" } });
-    expect((await fold(alice)).continuity.confirmed(alice.did, bob.did)).toBe(true);
+    expect((await fold(alice)).continuity.confirmedBy(alice.did, bob.did)).not.toBeNull();
     expect(await prepare(alice.runtime, alice.keys, MESSAGE, options())).toMatchObject({ outcome: "reused" });
     await send(alice.runtime, alice.keys, { channel: toBob, recipientDid: bob.longFormDid }, HELLO, { messageId: SECOND });
     const after = prepared(await prepare(alice.runtime, alice.keys, SECOND, options()));
@@ -193,7 +193,7 @@ describe("prepare", () => {
     await closeAll(alice, bob);
   });
 
-  test("an unconfirmed successor carries the decision's frozen proof under its long form; once the peer writes to the successor, new packages go proof-free; the pre-rotation address stays as it was", async () => {
+  test("an unconfirmed successor carries the decision's frozen proof under its long form; once the peer writes to the successor, new packages go proof-free; the pre-rotation address takes no new message", async () => {
     const { alice, bob, toBob } = await parties();
     const { next, longFormDid, fromPrior } = await rotated(alice, bob);
     const toBobNext = channelOf(next, bob.did);
@@ -207,7 +207,7 @@ describe("prepare", () => {
     expect(plaintextHash(first.plaintext as unknown as JsonObject)).toBe(proven.prepared.data.plaintextHash);
 
     await received(alice, bob, "wire-2", { type: BASIC_MESSAGE, body: { content: "got your new address" } }, { didId: ALICE_NEXT, did: next });
-    expect((await fold(alice)).continuity.confirmed(next, bob.did)).toBe(true);
+    expect((await fold(alice)).continuity.confirmedBy(next, bob.did)).not.toBeNull();
     expect(await prepare(alice.runtime, alice.keys, MESSAGE, options())).toMatchObject({ outcome: "reused", package: { event: { cid: proven.prepared.cid } } });
     await send(alice.runtime, alice.keys, { channel: toBobNext, recipientDid: bob.longFormDid }, HELLO, { messageId: SECOND });
     const confirmed = prepared(await prepare(alice.runtime, alice.keys, SECOND, options()));
@@ -216,11 +216,27 @@ describe("prepare", () => {
     expect(second.plaintext.from).toBe(next);
     expect(second.plaintext).not.toHaveProperty("from_prior");
 
-    await send(alice.runtime, alice.keys, { channel: toBob, recipientDid: bob.longFormDid, preRotation: true }, HELLO, { messageId: THIRD });
-    const old = prepared(await prepare(alice.runtime, alice.keys, THIRD, options()));
-    expect(old.prepared.data).toMatchObject({ senderDidId: ALICE, fromPrior: null });
-    expect((await opened(alice, bob, (await envelopeOf(alice, old)).packed)).plaintext.from).toBe(alice.did);
+    await expect(send(alice.runtime, alice.keys, { channel: toBob, recipientDid: bob.longFormDid }, HELLO, { messageId: THIRD })).rejects.toThrow(`the local DID is replaced here by ${next}`);
     await closeAll(alice, bob);
+  });
+
+  test("a message queued or prepared from an address a decision then replaced is carried no further: the queued one gets no package, the prepared one's package stands uncalled, and the same address still writes to an unrelated peer", async () => {
+    const { alice, bob, toBob } = await parties();
+    const carol = await directParty(3, "https://carol.example/didcomm", CAROL);
+    await send(alice.runtime, alice.keys, { channel: toBob, recipientDid: bob.longFormDid }, HELLO, { messageId: MESSAGE });
+    await send(alice.runtime, alice.keys, { channel: toBob, recipientDid: bob.longFormDid }, HELLO, { messageId: SECOND });
+    const held = prepared(await prepare(alice.runtime, alice.keys, SECOND, options()));
+    await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, carol.did), recipientDid: carol.longFormDid }, HELLO, { messageId: THIRD });
+    const { next } = await rotated(alice, bob);
+    const because = `the local DID is replaced here by ${next}`;
+    expect(await prepare(alice.runtime, alice.keys, MESSAGE, options())).toEqual({ outcome: "none", messageId: MESSAGE, because });
+    expect(await prepare(alice.runtime, alice.keys, SECOND, options())).toEqual({ outcome: "none", messageId: SECOND, because });
+    const f = await fold(alice);
+    expect(f.outbound.outbounds.get(MESSAGE)).toMatchObject({ package: null, outcome: { status: "queued" }, work: { kind: "none", because } });
+    expect(f.outbound.outbounds.get(SECOND)).toMatchObject({ package: { event: { cid: held.prepared.cid } }, outcome: { status: "prepared" }, work: { kind: "none", because } });
+    expect(f.set.of("message.prepared")).toHaveLength(1);
+    expect((await prepare(alice.runtime, alice.keys, THIRD, options())).outcome).toBe("prepared");
+    await closeAll(alice, bob, carol);
   });
 
   test("a rotation to the sender whose predecessor creation has not arrived is history still to come, not no rotation: the package waits, then carries the frozen proof once", async () => {
@@ -321,7 +337,7 @@ describe("prepare", () => {
     await closeAll(alice, bob);
   });
 
-  it("owes that pass at every preparation: a commit refused once the resolution is durable — the package's, or the pass's own — leaves the carrier to the next preparation, which admits it once, whether it makes the package or reuses it", async () => {
+  it("owes that pass at every preparation: a commit refused once the resolution is durable — the package's, or the pass's own — leaves the carrier to the next preparation, which admits it once, and the address the carrier replaced takes no package and carries none already made", async () => {
     for (const refused of ["message.prepared", "message.admitted"] as const) {
       const { alice, bob } = await parties();
       const { cid, prior } = await carrierWaitingForIssuer(alice, bob, BOB_PRIOR);
@@ -333,11 +349,13 @@ describe("prepare", () => {
       let f = await fold(alice);
       expect([f.continuity.status(cid), f.dispositions.disposition(cid), f.set.of("peer.resolved").filter(({ data }) => data.did === prior.did).length, f.set.of("message.prepared").length]).toEqual([{ status: "verified" }, { status: "pending-admission", because: "the observation is not yet reconciled" }, 1, refused === "message.prepared" ? 0 : 1]);
       expect((await trace.read({ type: "diag.admission" })).map((entry) => entry.data)).toEqual(refused === "message.prepared" ? [] : [{ messageId: MESSAGE, reason: "the pass the preparation runs stopped: the disk is full for now" }]);
+      const replaced = { outcome: "none", messageId: MESSAGE, because: "the peer has replaced its DID" };
+      expect(f.outbound.outbounds.get(MESSAGE)!.work).toEqual({ kind: "none", because: replaced.because });
 
-      expect((await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).outcome).toBe(refused === "message.prepared" ? "prepared" : "reused");
+      expect(await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).toEqual(replaced);
       f = await fold(alice);
-      expect([f.dispositions.disposition(cid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.set.of("message.prepared").length, f.set.of("message.out").length]).toEqual(["admitted", [cid], 1, 1]);
-      expect((await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).outcome).toBe("reused");
+      expect([f.dispositions.disposition(cid).status, f.set.of("message.admitted").map(({ data }) => data.sourceEventCid), f.set.of("message.prepared").length, f.set.of("message.out").length]).toEqual(["admitted", [cid], refused === "message.prepared" ? 0 : 1, 1]);
+      expect(await prepare(alice.runtime, alice.keys, MESSAGE, options({ trace }))).toEqual(replaced);
       expect((await fold(alice)).set.of("message.admitted")).toHaveLength(1);
       await closeAll(alice, bob);
     }
@@ -349,7 +367,7 @@ describe("prepare", () => {
     await expect(prepare(alice.runtime, alice.keys, MESSAGE, options())).rejects.toBeInstanceOf(UnknownEntity);
     await send(alice.runtime, alice.keys, { channel: toBob, recipientDid: bob.longFormDid }, HELLO, { messageId: MESSAGE });
     await alice.runtime.vault.commit([], [vaultDraft("channel.blocked", { localDid: alice.did, peerDid: bob.did, includeSuccessors: false })]);
-    expect(await prepare(alice.runtime, alice.keys, MESSAGE, options())).toEqual({ outcome: "none", messageId: MESSAGE, because: "the channel is blocked" });
+    expect(await prepare(alice.runtime, alice.keys, MESSAGE, options())).toEqual({ outcome: "none", messageId: MESSAGE, because: "the channel is denied" });
 
     const timed: Content = { ...HELLO, createdTime: 1_000, expiresTime: 2_000 };
     await send(alice.runtime, alice.keys, { channel: channelOf(alice.did, carol.did), recipientDid: carol.longFormDid }, timed, { messageId: SECOND });

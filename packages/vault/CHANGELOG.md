@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **One send gate at both ends, read by every path to the wire**
+  (behaviour change): `senderGate` closes a channel whose local DID
+  cannot send, whose pair is denied or in conflicted continuity,
+  whose peer has replaced its DID in that context, or whose local DID
+  a decision has replaced there — or still waits to, a saved decision
+  the fold cannot project yet included — and `channelPolicy` holds
+  the pair's part of it: denied, in conflict, or its peer replaced,
+  for automatic and user work alike; the `automatic` option is gone.
+  An outbound's `work` reads that gate, so a message a replacement of
+  either endpoint caught queued or prepared takes no package and no
+  call, first or retried, and keeps its intent, its package and
+  whatever call was made before; `responseChannel` answers an input
+  at a replaced local DID from the unique verified successor keeping
+  the peer, retired or not.
+- **An address is confirmed for new work by an admitted observation**:
+  `Continuity.confirmedBy(localDid, peerDid)` is the first admitted
+  observation, in the model's order, by which the peer or a usable
+  successor of it wrote to exactly this local DID, or null while the
+  model confirms by observations no admission names; it replaces
+  `confirmed`. A saved decision is still validated over the model's
+  confirmation; `foldContinuity` takes the admissions.
+- **A receipt is read as the peer acknowledging, answering or asking
+  only once admitted**: `ackWitnesses`, `ackTargets` and `inReplyTo`
+  require an admitted complete witness of an input whose admitted
+  intents agree, and a `delivery.acknowledged` naming an observation
+  no admission names is pending as such; a same-channel witness is
+  read under a peer fork ahead of it, one whose path runs through the
+  fork is not. `InboundFold.memberOf` gives an observation as a
+  member of its input.
 - **`message.admitted`**, the runtime's durable acceptance of one exact
   observation for application use: `{ sourceEventCid }`, no roots.
   `foldAdmissions` reads each record against its source into

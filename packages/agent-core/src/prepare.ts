@@ -2,10 +2,11 @@
  * Preparing turns a queued intent into the one exact envelope every
  * transport call of it will carry. The intent fixed the channel;
  * preparing chooses nothing about it, only reads what the channel
- * needs on the wire: the sender under its long form until the peer has
- * written to that address and under its short form after, with the
- * frozen proof of the rotation that made it a successor while that
- * address is unconfirmed; the recipient under its short form, at a
+ * needs on the wire: the sender under its long form until an admitted
+ * receipt shows the peer has written to that address and under its
+ * short form after, with the frozen proof of the rotation that made
+ * it a successor while that address is unconfirmed; the recipient
+ * under its short form, at a
  * key-agreement key its retained document authorizes and the sender's
  * key can agree with. The intent keeps the spelling it was given so
  * that a long form resolves offline; once resolved, the wire names the
@@ -18,14 +19,16 @@
  * from then on, whatever rotates, confirms or resolves later. A
  * resolution committed here is evidence an observation may have
  * waited for — the document of the issuer of the proof it carried —
- * so what the vault owes is recorded under the same lock once the
- * message has its package, made now or held already, before the
+ * so what the vault owes is recorded under the same lock by every
+ * preparation of an open message, whether it made the package, found
+ * it held already or found the message takes none now, before the
  * package's dispatch or any other work reads the fold. That pass is
  * owed by every preparation, not only the one that committed the
  * resolution: a commit refused after the resolution was durable, the
  * package's or the pass's own, leaves the resolution in the fold and
  * the work over it undone, and the next preparation or dispatch of
- * any message completes it.
+ * any message completes it — the very evidence may show the message's
+ * own peer replaced, and the package it made stands uncarried.
  */
 
 import { v7 as uuidv7 } from "uuid";
@@ -169,20 +172,24 @@ export async function expireUnderLock(held: Held, messageId: MessageId, phase: "
 
 /** `prepare` for a caller that already holds the message's turn and the writer lock. */
 export async function prepareUnderLock(held: Held, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Settled<Prepared>> {
-  const notes: Note[] = [];
   const fold = await scanVault(held, keys, scanOptions(options));
   const outbound = fold.outbound.outbounds.get(messageId);
   if (outbound === undefined) throw new UnknownEntity("message", messageId);
   const closed = closedBecause(outbound);
-  if (closed !== null) return { result: { outcome: "none", messageId, because: closed }, notes };
+  if (closed !== null) return { result: { outcome: "none", messageId, because: closed }, notes: [] };
   const intent = (outbound.intent as { data: MessageOut }).data;
   if (hasExpired(intent, options.now ?? Date.now)) return expireUnderLock(held, messageId, expiryPhase(outbound));
-  const { work } = outbound;
+  const settled = await packageOf(held, keys, fold, outbound, intent, options);
+  settled.notes.push(...(await owedRecorded(held, keys, messageId)));
+  return settled;
+}
+
+/** The package of an open message: the one the fold holds, the one made and committed now, or why there is none yet or none at all. */
+async function packageOf(held: Held, keys: Keys, fold: VaultFold, outbound: Outbound, intent: MessageOut, options: PrepareOptions): Promise<Settled<Prepared>> {
+  const { messageId, work } = outbound;
+  const notes: Note[] = [];
   if (work.kind === "none") return { result: { outcome: "none", messageId, because: work.because }, notes };
-  if (work.kind === "dispatch") {
-    notes.push(...(await owedRecorded(held, keys, messageId)));
-    return { result: { outcome: "reused", messageId, package: work.package }, notes };
-  }
+  if (work.kind === "dispatch") return { result: { outcome: "reused", messageId, package: work.package }, notes };
   const sender = outbound.sender as LocalDidEntity;
   const channel = outbound.channel as Channel;
   const ends = await endsOf(fold, keys, sender, channel, intent.recipientDid);
@@ -218,17 +225,17 @@ export async function prepareUnderLock(held: Held, keys: Keys, messageId: Messag
     )
   ).map(readVaultEvent);
   notes.push({ stream: "envelope", what: "seal", data: { ...sealData(packed, plaintext as unknown as IMessage), messageId, packageId } });
-  notes.push(...(await owedRecorded(held, keys, messageId)));
   return { result: { outcome: "prepared", messageId, packageId, prepared: prepared as VaultEvent<"message.prepared">, resolved }, notes };
 }
 
 /**
- * The pass over what the vault owes, once the message has its package:
- * an admission whose proof waited for the document a preparation
- * resolved, and what follows one, recorded before the lock is released
- * and dispatched by nothing. The package stands whether the pass ran
- * through or stopped; one that stopped is noted, and left to the next
- * pass, which the next preparation, dispatch, receipt or open runs.
+ * The pass over what the vault owes, run by every preparation of an
+ * open message whatever it came to: an admission whose proof waited
+ * for the document a preparation resolved, and what follows one,
+ * recorded before the lock is released and dispatched by nothing.
+ * What was decided stands whether the pass ran through or stopped;
+ * one that stopped is noted, and left to the next pass, which the
+ * next preparation, dispatch, receipt or open runs.
  */
 async function owedRecorded(held: Held, keys: Keys, messageId: MessageId): Promise<Note[]> {
   try {
@@ -241,7 +248,7 @@ async function owedRecorded(held: Held, keys: Keys, messageId: MessageId): Promi
 
 interface Ends {
   senderKeys: DidKeys;
-  /** the sender's spelling on the wire: the long form until the peer has written to the address, the short form after */
+  /** the sender's spelling on the wire: the long form until an admitted receipt shows the peer has written to the address, the short form after */
   from: Did;
   fromPrior: string | null;
   /** the recipient's document, resolved from the long form in evidence */
@@ -270,7 +277,7 @@ async function endsOf(fold: VaultFold, keys: Keys, sender: LocalDidEntity, chann
   const [methodId, peerPublicKey] = chosen;
   const created = sender.created as NonNullable<LocalDidEntity["created"]>;
   const ends = { senderKeys, resolution, methodId, peerPublicKey };
-  if (fold.continuity.confirmed(channel.localDid, channel.peerDid)) return { ...ends, from: created.did, fromPrior: null };
+  if (fold.continuity.confirmedBy(channel.localDid, channel.peerDid) !== null) return { ...ends, from: created.did, fromPrior: null };
   const proof = proofOf(fold, sender, channel);
   if (proof !== null && typeof proof === "object") return proof;
   return { ...ends, from: created.longFormDid, fromPrior: proof };

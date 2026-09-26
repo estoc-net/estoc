@@ -133,7 +133,9 @@ authentication alone, whether a channel is `conflicted` — a conflict
 reaches it or what lies ahead of it — or `superseded` in its
 local-only context, its `head`, the channel itself when no fact
 mentions it and none while a replacement ahead waits, conflicts or is
-not unique, whether a local DID is `confirmed` toward a peer, the
+not unique, the admitted observation a local DID is `confirmedBy`
+toward a peer for new work — the model confirms by every usable one,
+and a saved decision rests on those — the
 role-preserving `ackPath` from an outbound to a carrier, the denials
 that cover a channel through the history and the decisions of a
 peer-only context whether or not they are projected; the package's
@@ -208,7 +210,7 @@ preparation carries its package ID, so that under a consistent intent
 `submitted` is a fact no unrelated, competing or later evidence
 withdraws; each `delivery.failed`, an expiry counting only against an
 intent that expires; the `ackWitnesses`, once a complete package is
-here, the complete witnesses whose `ack` names the message in its
+here, the admitted witnesses whose `ack` names the message in its
 channel or over a verified role-preserving path, the recorded
 `delivery.acknowledged` checked against the carriers each names — any
 one under the peer's authorized keys matching in full, one still short
@@ -241,9 +243,11 @@ objects with absence, damage and excess size each as no verdict;
 (`fold/views.ts`, reached as `fold.views`: a channel with its inputs in
 first-receipt order, the outbounds fixed to it, the problem reports
 peers sent beside the outbound each one's thread names when the carrier
-may answer it, and its send gate — the local DID live, the pair not
-denied, its continuity not in conflict, and for automatic work the
-peer not moved on, which `senderGate` / `channelPolicy` decide; and a
+may answer it, and its send gate — the local DID live and not
+replaced here by a decision, made or still waiting, the pair not
+denied, its continuity not in conflict and its peer not moved on,
+which `senderGate` / `channelPolicy` decide for every path to the
+wire, a user send, a reply, a package and a call alike; and a
 contact, or several shown as one, as the channels it selected followed
 by the related history verified continuity connects to them, each
 message once and each in its own channel, with `writeTo` the distinct

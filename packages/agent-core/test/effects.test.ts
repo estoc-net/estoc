@@ -453,7 +453,7 @@ describe("the automatic effects of a live input", () => {
     await closeAll(alice, bob);
   });
 
-  test("the reply goes by the carrier's channel while its local DID sends, even with a successor selected; once that DID is retired, by the unique verified successor keeping the peer, carrying the rotation's proof; a competing successor leaves no channel", async () => {
+  test("the reply goes by the carrier's channel until a decision replaces its local DID there, then by the unique verified successor keeping the peer, carrying the rotation's proof, whether or not the predecessor is retired; a competing successor leaves no channel", async () => {
     const { alice, bob } = await parties();
     const { options, receive, executionOf } = await reacting(alice);
     const executionId = await executionOf(await receive(bob, ping(crypto.randomUUID())));
@@ -464,7 +464,8 @@ describe("the automatic effects of a live input", () => {
     expect((await foldOf(alice)).continuity.status(decision!.cid)).toEqual({ status: "verified" });
 
     const ack = created(await completeResponse(alice.runtime, alice.keys, executionId, PURE_ACK_EFFECT, options));
-    expect([ack.intent.data.senderDidId, ack.intent.data.recipientDid, ack.dispatched.outcome]).toEqual([ALICE, bob.did, "submitted"]);
+    expect([ack.intent.data.senderDidId, ack.intent.data.recipientDid, ack.dispatched.outcome]).toEqual([ALICE_NEXT, bob.did, "submitted"]);
+    expect(await openedByBob(bob, alice, ack.messageId)).toMatchObject({ type: EMPTY_MESSAGE_TYPE, from: next.longFormDid, from_prior: fromPrior });
 
     await retireDid(alice.runtime, alice.keys, ALICE, "rotated");
     const reply = created(await completeResponse(alice.runtime, alice.keys, executionId, PING_RESPONSE_EFFECT, options));

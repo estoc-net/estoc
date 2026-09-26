@@ -62,10 +62,24 @@ off its turn, so the delivery behind it is received meanwhile.
 Evidence that arrives outside a receipt — the document a preparation
 resolves, an import the host tells the agent of — is reconciled when
 it arrives, admitting what waited for it and dispatching nothing:
-a preparation runs that pass under its lock once the message has a
-package to send, made then or held already, and a dispatch prepares
-first, so a pass a refused commit cut short is completed by the next
-message that reaches that point.
+every preparation of an open message runs that pass under its lock,
+whatever the message comes to, and a dispatch prepares first, so a
+pass a refused commit cut short is completed by the next message
+prepared or dispatched.
+
+Every path to the wire — a user send, a reply, a package, the first
+call and a manual retry — reads the one send gate the vault keeps at
+both ends of the channel: a channel a verified replacement of the
+peer, or a decision replacing the local DID, has moved on from takes
+no new message and carries no old one; the intent, the package and a
+call already made stay as they are, and the successor takes a new
+message under a new ID. New work that needs the peer to know an
+address — a proof-free package, a rotation from the address, a
+mediated sender's registration — needs an admitted receipt showing
+the peer wrote to exactly it; a receipt the runtime has not admitted
+confirms nothing new. A live input at a disclosed address has the
+private-address policy decided before its effects, so its reply goes
+from the successor the policy selected, carrying the proof.
 
 ## Usage
 

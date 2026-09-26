@@ -2,7 +2,7 @@ import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it } from "vitest";
 
 import { PROBLEM_REPORT_TYPE, compareChannels, foldVault, foldVaultChecked, type ContactId, type ContactView, type Keys } from "../../src/index.js";
-import { expectOrderFree, type Scene } from "./helpers.js";
+import { expectOrderFree, fakeEventCid, type Scene } from "./helpers.js";
 import { blocked, channel, intent, noObjects, proof, receipt, resolved, rotation, vaults, type Local, type Peer } from "./scene.js";
 
 const fold = (scene: Scene, keys: Keys | null) => foldVaultChecked(scene.set(), keys, noObjects);
@@ -52,7 +52,7 @@ describe("a channel view", () => {
     expect(vault.views.channel(channel(a0, b0))).toBe(view);
   });
 
-  it("closes the gate for a local DID that cannot send, a denied pair or conflicted continuity, and only for automatic work once the peer has moved on", async () => {
+  it("closes the gate for a local DID that cannot send, a denied pair, conflicted continuity, a peer that has moved on, and a local DID a decision replaced here or still waits to", async () => {
     const { scene, keys, peerKeys, a0, a1, b0, b1 } = await vaults();
     proofFreeReceipt(scene, a0, b0, 1);
     await receiptCarryingProof(scene, peerKeys, a0, b0, b1, 2);
@@ -71,8 +71,21 @@ describe("a channel view", () => {
     await receiptCarryingProof(fresh, freshPeerKeys, c0, d0, d1, 2);
     vault = await fold(fresh, freshKeys);
     const old = vault.views.channel(channel(c0, d0));
-    expect(old).toMatchObject({ superseded: true, send: { status: "open" }, head: channel(c0, d1) });
+    expect(old).toMatchObject({ superseded: true, send: { status: "closed", because: "the peer has replaced its DID" }, head: channel(c0, d1) });
     expect(vault.views.channel(channel(c0, d1))).toMatchObject({ superseded: false, send: { status: "open" }, head: channel(c0, d1) });
+
+    const { scene: ours, keys: ourKeys, a0: e0, a1: e1, a2: e2, b0: f0, b1: f1 } = await vaults();
+    proofFreeReceipt(ours, e0, f0, 1);
+    await rotation(ours, ourKeys, { from: e0, peer: f0, to: e1 });
+    proofFreeReceipt(ours, e2, f0, 2);
+    await rotation(ours, ourKeys, { from: e2, peer: f0, to: e1, overrides: { sourceEventCid: fakeEventCid() as never } });
+    proofFreeReceipt(ours, e0, f1, 3);
+    vault = await fold(ours, ourKeys);
+    expect(vault.views.channel(channel(e0, f0))).toMatchObject({ superseded: false, head: channel(e1, f0), send: { status: "closed", because: `the local DID is replaced here by ${e1.did}` } });
+    expect(vault.views.channel(channel(e1, f0)).send).toEqual({ status: "open" });
+    expect(vault.channels.decisions.size).toBe(2);
+    expect(vault.views.channel(channel(e2, f0))).toMatchObject({ head: channel(e2, f0), send: { status: "closed", because: "a rotation of the local DID here waits for its evidence" } });
+    expect(vault.views.channel(channel(e0, f1)).send).toEqual({ status: "open" });
   });
 });
 
@@ -149,7 +162,7 @@ describe("a contact view", () => {
     expect(view.channels[0]!.inbound.map((e) => e.messageId)).toEqual([source.data.messageId]);
     expect(view.writeTo).toEqual([]);
     expect(view.defaultWriteTo).toBeNull();
-    expect(vault.views.channel(channel(a0, b0)).send).toEqual({ status: "open" });
+    expect(vault.views.channel(channel(a0, b0)).send).toEqual({ status: "closed", because: "the peer has replaced its DID" });
   });
 
   it("selects nothing for a deleted contact or one no event names, shows a selection no creation resolves with its origin missing, and applies the preferences of several contacts only when they agree", async () => {

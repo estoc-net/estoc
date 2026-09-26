@@ -111,6 +111,8 @@ export interface InboundFold {
   ofMessage(messageId: MessageId): Execution | null;
   /** the execution of the input an observation claims, whether it is a member or a sibling of it */
   ofSource(sourceEventCid: EventCid): Execution | null;
+  /** the observation as a member of its input; null for a sibling, an anonymous observation or one not here */
+  memberOf(sourceEventCid: EventCid): Member | null;
 }
 
 export function foldInbound(evidence: ChannelEvidence, continuity: Continuity, admissions: AdmissionFold, erasures: Erasures): InboundFold {
@@ -137,15 +139,17 @@ export function foldInbound(evidence: ChannelEvidence, continuity: Continuity, a
   }
   const unplaced: Source[] = [];
   for (const [messageId, sources] of siblings) if (!members.has(messageId)) unplaced.push(...sources);
+  const ofSource = (sourceEventCid: EventCid): Execution | null => {
+    const source = evidence.sources.get(sourceEventCid);
+    return source === undefined || source.event.data.peerResolutionEventCid === null ? null : (byMessage.get(source.event.data.messageId) ?? null);
+  };
   return {
     executions,
     anonymous: anonymous.sort(byReceipt),
     unplaced: unplaced.sort(byReceipt),
     ofMessage: (messageId) => byMessage.get(messageId) ?? null,
-    ofSource: (sourceEventCid) => {
-      const source = evidence.sources.get(sourceEventCid);
-      return source === undefined || source.event.data.peerResolutionEventCid === null ? null : (byMessage.get(source.event.data.messageId) ?? null);
-    },
+    ofSource,
+    memberOf: (sourceEventCid) => ofSource(sourceEventCid)?.members.find((member) => member.source.event.cid === sourceEventCid) ?? null,
   };
 }
 

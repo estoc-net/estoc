@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Both endpoints gate every path to the wire** (behaviour change):
+  a user send, a preparation, a first dispatch and a manual retry all
+  read the vault's one send gate, so a channel a verified replacement
+  of the peer or a decision replacing the local DID has moved on from
+  takes no new message and carries no old one — the intent, the
+  package and a call already made stay as they are, `Prepared` and
+  `Dispatched` say `none` with the reason, and a call answered after
+  the replacement still records its acceptance. `Target.preRotation`
+  is gone: nothing sends to a replaced endpoint. A reply to an input at
+  a local DID a decision replaced goes from the successor, carrying
+  the proof; the private-address policy is therefore decided before
+  the input's effects, so the reply to the input that selected the
+  successor goes from it.
+- **New work needs an admitted witness of the address**: a proof-free
+  package, a rotation from an address and a mediated sender's
+  registration read `confirmedBy`, so an observation the runtime has
+  not admitted — left by a crash before its pass, or refused by
+  policy — confirms nothing new, however the model reads it.
+- The after-receipt pass runs on every preparation of an open message,
+  whether it makes the package, finds it held already or finds the
+  message takes none now, so evidence a refused commit left
+  unreconciled is reconciled by the next preparation or dispatch of
+  any message whatever that message's own fate.
 - **Every receipt is admitted, or told why not, before its lock is
   released** (behaviour change): the receipt commits the observation,
   reads the fold again and runs the vault's ordered admission pass, so
@@ -29,9 +52,8 @@
   manual completion.
 - **Evidence recovered during normal operation is reconciled at
   once**: every preparation runs the after-receipt pass under its
-  lock once the message has its package, made now or held already
-  (`recordOwedUnderLock`), and so does every dispatch, which prepares
-  first; a carrier whose proof waited for the document the
+  lock (`recordOwedUnderLock`), and so does every dispatch, which
+  prepares first; a carrier whose proof waited for the document the
   preparation resolved is admitted then, dispatching nothing, and a
   pass a commit refused after the resolution was durable — the
   package's or the pass's own — is completed by the next preparation

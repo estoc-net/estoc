@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `send` takes no `preRotation`: a channel a replacement of either end
+  has moved on from takes no send, whoever asks.
 - `Merged` has no `conflicts`: the version-4 vault has no same-ID
   conflicts to count. Records name events by `cid`.
 

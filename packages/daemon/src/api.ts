@@ -174,7 +174,7 @@ export interface Daemon {
   blockChannels(channels: Channel[], includeSuccessors: boolean): Promise<void>;
   eraseMessage(messageId: MessageId): Promise<void>;
 
-  send(target: { channel: Channel; preRotation?: boolean } | { contactId: ContactId }, content: Content): Promise<SendResult>;
+  send(target: { channel: Channel } | { contactId: ContactId }, content: Content): Promise<SendResult>;
   retry(messageId: MessageId): Promise<Outcome>;
   cancel(messageId: MessageId): Promise<Outcome>;
   completeResponse(executionId: ExecutionId, effectType: string): Promise<Outcome>;
