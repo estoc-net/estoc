@@ -16,8 +16,9 @@
   proof's `verification`, the runtime's `disposition` of it
   (`admitted`, `refused`, `ignored-superseded` or `pending-admission`
   with what stands in the way) and whether it is `contradicting`;
-  nothing it carries is shown. `UnplacedInput` and
-  `ChannelRecord.unplaced` are gone.
+  nothing it carries is shown; a message's `at` is the time of the
+  observation it is shown by, so an unadmitted observation moves it
+  nowhere. `UnplacedInput` and `ChannelRecord.unplaced` are gone.
 - **Both endpoints gate every path to the wire** (behaviour change):
   a user send, a preparation, a first dispatch and a manual retry all
   read the vault's one send gate, so a channel a verified replacement

@@ -21,7 +21,6 @@ export function shortFormOf(did: string): string {
   return did.startsWith("did:peer:4") ? did.split(":").slice(0, 3).join(":") : did;
 }
 
-/** What the vault made of an observation, in a phrase: whether it is taken in, and what stands in the way when it is not. */
 export function dispositionOf({ disposition }: ObservationRecord): string {
   switch (disposition.status) {
     case "admitted":

@@ -1,6 +1,7 @@
 import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it, test } from "vitest";
 
+import { envelopeOf, eventCidOf, type Event } from "@estoc/event-store";
 import {
   EMPTY_MESSAGE_TYPE,
   PING_RESPONSE_EFFECT,
@@ -378,6 +379,33 @@ describe("records", () => {
     expect(record.observations.map(({ sourceEventCid, disposition, contradicting }) => [sourceEventCid, disposition, contradicting])).toEqual([
       [first, { status: "admitted" }, false],
       [second, { status: "pending-admission", because: "the observation contradicts the intent its input has admitted" }, true],
+    ]);
+    await closeAll(alice, bob);
+  });
+
+  test("an input takes the time of the observation it is shown by: an observation not admitted that was recorded under an earlier time is listed under that time and moves the input nowhere", async () => {
+    const { alice, bob } = await parties();
+    const pair = { localDid: alice.did, peerDid: bob.did };
+    const wireId = crypto.randomUUID();
+    const first = await received(alice, bob, wireId, { type: BASIC_MESSAGE, body: { content: "first" }, created_time: CREATED });
+    const second = await observed(alice, bob, wireId, { type: BASIC_MESSAGE, body: { content: "second" }, created_time: CREATED });
+
+    const read = objectReader(alice.runtime.vault.objects);
+    const whole = await scanVault(alice.runtime.vault, alice.keys);
+    const events = [...whole.set.all()];
+    const shownAt = events.find((event) => event.cid === first)!.at;
+    const earlier = "2026-09-01T00:00:00.000Z";
+    const retimed = events.map((event): Event => {
+      if (event.cid !== second) return event;
+      const envelope = { ...envelopeOf(event), at: earlier };
+      return { ...envelope, cid: eventCidOf(envelope) };
+    });
+    const set = VaultEventSet.of(retimed);
+    const record = await recorder(foldVault(set, await checkVault(set, alice.keys, read)), read).channel(pair);
+    expect(record.messages.map(({ at, body }) => [at, body.state === "available" ? body.body : body.state])).toEqual([[shownAt, { content: "first" }]]);
+    expect(record.observations.map(({ at, disposition }) => [at, disposition.status])).toEqual([
+      [shownAt, "admitted"],
+      [earlier, "pending-admission"],
     ]);
     await closeAll(alice, bob);
   });

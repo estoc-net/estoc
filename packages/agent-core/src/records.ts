@@ -424,7 +424,6 @@ function document(context: Context, erased: boolean, bodyCid: Cid): Promise<Body
 
 const headersOf = (data: MessageIn | MessageOut): MessageHeaders => ({ type: data.msgType, thid: data.thid, pthid: data.pthid, createdTime: data.createdTime, expiresTime: data.expiresTime });
 
-/** The observation an input's fields are read from: its first admitted complete witness, else its first admitted observation. */
 const shownBy = (execution: Execution): Member => execution.firstWitness ?? execution.members.find((member) => member.admitted)!;
 
 const INTEGRITY = "one author gave the receipt's ordinal to another observation";
@@ -502,7 +501,7 @@ async function inboundRecord(context: Context, execution: Execution, contactIds:
     direction: "in",
     channel: execution.channel,
     contactIds,
-    at: execution.members.reduce((at, m) => (m.source.event.at < at ? m.source.event.at : at), member.source.event.at),
+    at: member.source.event.at,
     msg: agreed ? headersOf(data) : null,
     body: agreed ? await document(context, execution.erased, data.bodyCid) : execution.erased ? { state: "erased" } : { state: "missing" },
     kind: execution.kind,
