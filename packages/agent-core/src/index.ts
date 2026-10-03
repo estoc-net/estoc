@@ -127,8 +127,9 @@ export {
   type Watch,
 } from "./receive/receiver.js";
 export { receiptOf, recordReceipt } from "./receive/receipt.js";
-export { acknowledgementDrafts, recordAcks } from "./receive/acks.js";
-export { afterReceipt, recordOwed, recordOwedUnderLock, type AfterReceipt, type AfterReceiptOptions, type Owed } from "./receive/after.js";
+export { acknowledgementDrafts, recordAcks } from "./acknowledgements.js";
+export { recordOwed, recordOwedUnderLock, type Owed } from "./reconcile.js";
+export { afterReceipt, type AfterReceipt, type AfterReceiptOptions } from "./receive/after.js";
 export { callEffects, completeResponse, decideEffects, reactTo, type Called, type DecidedEffects, type EffectOptions, type EffectOutcome, type Reacted } from "./effects.js";
 export { callRotation, completeNotification, decideRotation, rotate, type RotateOptions, type Rotated, type RotationDecided, type RotationTarget } from "./rotate.js";
 export { callPrivateAddress, decidePrivateAddress, privacyPolicy, privateAddress, type PrivacyPolicy, type PrivateAddress, type PrivateAddressDecided } from "./privacy.js";

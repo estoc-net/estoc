@@ -32,10 +32,10 @@ import { compareEvents } from "@estoc/event-store";
 
 import type { VaultEvent } from "../schema.js";
 import type { EventCid } from "../types.js";
-import type { ChannelEvidence, Source } from "./channels.js";
-import type { Continuity } from "./continuity.js";
-import type { InboundFold } from "./inbound.js";
-import { groupBy, type VaultEventSet } from "./set.js";
+import type { ChannelEvidence, Source } from "../fold/channels.js";
+import type { Continuity } from "../fold/continuity.js";
+import type { InboundFold } from "../fold/inbound.js";
+import { groupBy, type VaultEventSet } from "../fold/set.js";
 
 /**
  * What one `message.admitted` establishes on its own. Effective admits

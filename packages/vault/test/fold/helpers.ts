@@ -1,4 +1,4 @@
-import { eventCidOf, type AuthorId, type Event, type EventCid, type EventEnvelope, type JsonObject } from "@estoc/event-store";
+import { MemoryVault, eventCidOf, type AuthorId, type Event, type EventCid, type EventEnvelope, type JsonObject } from "@estoc/event-store";
 import { importSeed } from "@estoc/keystore";
 import { expect } from "vitest";
 
@@ -45,6 +45,14 @@ export const HASH = "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA";
 
 const encoder = new TextEncoder();
 export const cidOf = (text: string) => rawCidOfBytes(encoder.encode(text));
+
+/** A vault in memory holding the scene's events and the bytes of every text named. */
+export async function vaultOf(scene: Scene, texts: readonly string[] = []): Promise<MemoryVault> {
+  const vault = new MemoryVault({ metadata: { version: 4, anchor: await Keys.anchorOf(await importSeed(SEED)) } });
+  for (const text of texts) await vault.stores.objects.putObject(cidOf(text), encoder.encode(text));
+  await vault.ingest(scene.events);
+  return vault;
+}
 
 /** A raw CID no event here hashes to: what a reference to an event that is not in the set looks like. */
 export const fakeEventCid = (): EventCid => rawCidOfBytes(crypto.getRandomValues(new Uint8Array(32))) as unknown as EventCid;

@@ -189,7 +189,7 @@ export {
   verifyProofs,
 } from "./fold/channels.js";
 export { type Status, type Witness, type ScopedConflict, type Continuity, projectFacts, foldContinuity } from "./fold/continuity.js";
-export { type AdmissionStatus, type Admission, type AdmissionFold, type Eligibility, type AdmissionCandidate, type Disposition, type Dispositions, foldAdmissions, foldDispositions } from "./fold/admission.js";
+export { type AdmissionStatus, type Admission, type AdmissionFold, type Eligibility, type AdmissionCandidate, type Disposition, type Dispositions, foldAdmissions, foldDispositions } from "./admission/model.js";
 export { EMPTY_MESSAGE_TYPE, PING_RESPONSE_TYPE, PROBLEM_REPORT_TYPE, EMPTY_CONTENT_CID, type InboundKind, kindOf, type Member, type ExecutionStatus, type Execution, type InboundFold, foldInbound } from "./fold/inbound.js";
 export { type InvitationStatus, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type Contact, type ContactFold, foldContacts } from "./fold/contacts.js";
@@ -221,7 +221,8 @@ export {
   foldOutbound,
 } from "./fold/outbound.js";
 export { type Erasures, type Released, type ReadState, foldErasures, erased, retainedRoots, heldRoots, readState } from "./fold/held.js";
-export { type ViewInputs, type SendGate, type RemoteError, type ChannelView, type ContactChannel, type Preference, type ContactView, type Views, senderGate, channelPolicy, foldViews, messageIdsOf } from "./fold/views.js";
+export { type SendGate, senderGate, channelPolicy } from "./channel-policy.js";
+export { type ViewInputs, type RemoteError, type ChannelView, type ContactChannel, type Preference, type ContactView, type Views, foldViews, messageIdsOf } from "./fold/views.js";
 export { type VaultChecks, type VaultFold, type FoldOptions, type ScanOptions, MAX_READ_BYTES, foldVault, objectReader, checkVault, foldVaultChecked, scanVault } from "./fold/vault.js";
 export {
   type Committed,
@@ -241,9 +242,6 @@ export {
   erasureClosure,
   eraseMessage,
   closeErasures,
-  admissionDrafts,
-  admitReceipts,
-  reconcileAdmissions,
   automaticIntent,
   responseChannel,
   notificationChannel,
@@ -254,3 +252,4 @@ export {
   deleteContactDrafts,
   deleteContact,
 } from "./procedures.js";
+export { type Admitted, admissionDrafts, admitReceipts, reconcileAdmissions } from "./admission/record.js";

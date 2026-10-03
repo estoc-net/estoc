@@ -18,7 +18,7 @@
 import type { VaultRuntime } from "@estoc/event-store";
 import { vaultDraft, type Keys, type VaultData, type VaultDraft, type VaultEvent, type VaultFold } from "@estoc/vault";
 
-import { decide } from "../procedure.js";
+import { decide } from "./procedure.js";
 
 /** The acknowledgements the complete witnesses earn and no record repeats yet, in message order, then canonical event order. */
 export function acknowledgementDrafts(fold: VaultFold): VaultDraft<"delivery.acknowledged">[] {

@@ -12,9 +12,9 @@
 
 import { DamagedObject, ObjectTooLarge, type Retained, type Vault, type VaultObjects } from "@estoc/event-store";
 
+import { foldAdmissions, foldDispositions, type AdmissionFold, type Dispositions } from "../admission/model.js";
 import type { Keys } from "../identity.js";
 import type { Cid, DidId, EventCid, MediationId, ReplicaId } from "../types.js";
-import { foldAdmissions, foldDispositions, type AdmissionFold, type Dispositions } from "./admission.js";
 import { foldAuthors, foldLabel, type AuthorActivity } from "./author.js";
 import { foldChannelEvidence, verifyProofs, type ChannelEvidence, type ProofCheck } from "./channels.js";
 import { foldContacts, type ContactFold } from "./contacts.js";

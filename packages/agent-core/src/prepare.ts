@@ -75,7 +75,7 @@ import { packEncrypted, secretsResolverFor, type DidcommApi, type IMessage } fro
 import { recordOwedAcceptance } from "./acceptance.js";
 import { UnknownEntity } from "./errors.js";
 import { authorizedKeys, commitResolution, didcommDocumentOf, pinnedResolver } from "./evidence.js";
-import { recordOwedUnderLock } from "./receive/after.js";
+import { recordOwedUnderLock } from "./reconcile.js";
 import { secretsOf } from "./keyring.js";
 import { sealData } from "./link.js";
 import { serially } from "./procedure.js";

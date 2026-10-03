@@ -689,7 +689,7 @@ These are identifier fixtures, not authentication/proof fixtures.
 
 ### Execution prerequisites
 
-Automatic work requires [an admitted witness](../../packages/vault/src/fold/admission.ts)
+Automatic work requires [an admitted witness](../../packages/vault/src/admission/model.ts)
 and [a live action](../../packages/agent-core/src/action.ts), independently of
 ID derivation. Source/endpoint/proof dependencies must already be committed.
 Anonymous and mediator-control input have no application execution.

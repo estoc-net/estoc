@@ -152,7 +152,7 @@ role-preserving `ackPath` from an outbound to a carrier, the denials
 that cover a channel through the history and the decisions of a
 peer-only context whether or not they are projected; the package's
 `model` is exposed for what those do not summarize), the
-admissions (`fold/admission.ts`: `foldAdmissions` reads each
+admissions (`admission/model.ts`: `foldAdmissions` reads each
 `message.admitted`, the runtime's acceptance of one exact observation
 for application use, against its source — `effective` when the source
 is positive evidence on its own, `pending` while the source or its evidence is
@@ -165,7 +165,15 @@ admission names, in canonical event order, each `eligible`, `deferred`
 for evidence, `refused` by current policy — the peer's replacement, the
 channel's denial, a conflict in the continuity its proof needs, a
 contradiction of the intent its input admitted — or `invalid`, for the
-runtime to walk when it records admissions, the fold recording none), the
+runtime to walk when it records admissions, the fold recording none;
+`admission/record.ts` is that walk: `reconcileAdmissions` records the
+admissions the observations are owed, in canonical event order and
+round by round under the lock, each round the first eligible candidate
+of each input and the fold read again over the extended set before the
+next, so that a consistent duplicate is admitted after the first and a
+contradicting one refused against it, `admissionDrafts` being one
+round's decision and `admitReceipts` the pass under a lock already
+held), the
 invitations (`fold/invitations.ts`: `foldInvitations` reads each OOB
 disclosure as an address handed out, which whoever holds it writes to
 in a pair of their own, no receipt under it taking anything from the
@@ -246,8 +254,9 @@ peers sent beside the outbound each one's thread names when the carrier
 may answer it, and its send gate — the local DID live and not
 replaced here by a decision, made or still waiting, the pair not
 denied, its continuity not in conflict and its peer not moved on,
-which `senderGate` / `channelPolicy` decide for every path to the
-wire, a user send, a reply, a package and a call alike; and a
+which `senderGate` / `channelPolicy` in `channel-policy.ts` decide for
+every path to the wire, a user send, a reply, a package and a call
+alike; and a
 contact, or several shown as one, as the channels it selected followed
 by the related history verified continuity connects to them, each
 message once and each in its own channel, with `writeTo` the distinct
@@ -262,13 +271,7 @@ validation and import, and `collectGarbage` is one pass;
 packages still name, in one commit, and `closeErasures` appends the
 equivalent erases a later observation or package made an erased
 message owed, `eraseDrafts` / `erasureClosure` being the decisions;
-`reconcileAdmissions` records the admissions the observations are
-owed, in canonical event order and round by round under the lock, each
-round the first eligible candidate of each input and the fold read
-again over the extended set before the next, so that a consistent
-duplicate is admitted after the first and a contradicting one refused
-against it, `admissionDrafts` being one round's decision and
-`admitReceipts` the pass under a lock already held; `unfinishedWork`
+`unfinishedWork`
 lists what an open finds and dispatches nothing of — the outbounds
 still to prepare or dispatch, the pure ACKs and Ping replies
 established inputs may still be given, each a candidate the manual

@@ -1742,7 +1742,7 @@ Sensitive strings remain in local trace; `code` is a stable non-secret value.
 ```
 
 The exact carrier is an admitted complete source witness under
-[the admission fold](../../packages/vault/src/fold/admission.ts). Its explicit `ack`
+[the admission model](../../packages/vault/src/admission/model.ts). Its explicit `ack`
 names this outbound wire ID. Its channel must be the
 outbound's fixed channel or a verified role-preserving successor under
 [channels.md](channels.md#continuity). Validate the outbound intent and exact
@@ -1914,7 +1914,7 @@ does not prove that every historical author is fork-free.
 Commit the observation with its objects after its exact resolution evidence.
 Pickup ACK follows [the receive procedure](distributed-delivery.md#receive-a-message),
 including its separate hard-rejection path. Subsequent consumers independently
-check [admission](../../packages/vault/src/fold/admission.ts).
+check [admission](../../packages/vault/src/admission/model.ts).
 
 <a id="message-admitted"></a>
 

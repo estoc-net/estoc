@@ -3,8 +3,8 @@ import { v7 as uuidv7 } from "uuid";
 import { describe, expect, it } from "vitest";
 
 import { AUTHENTICATION_METHOD, anonymousMessageId, didKeyName, foldVault, foldVaultChecked, type DidId, type EventReference, type Keys, type MessageHash, type ReadObject, type VaultChecks, type VaultData, type VaultFold, type WireMessageId } from "../../src/index.js";
-import { AUTHOR, AUTHOR2, HASH, expectOrderFree, fakeEventCid, type Scene } from "./helpers.js";
-import { IAT, admitted, blocked, invitation, noObjects, observation, peerDid, proof, receipt, resolved, vaults, type Local, type Peer } from "./scene.js";
+import { AUTHOR, AUTHOR2, HASH, expectOrderFree, fakeEventCid, type Scene } from "../fold/helpers.js";
+import { IAT, admitted, blocked, invitation, noObjects, observation, peerDid, proof, receipt, resolved, vaults, type Local, type Peer } from "../fold/scene.js";
 
 const fold = (scene: Scene, keys: Keys | null, readObject: ReadObject = noObjects) => foldVaultChecked(scene.set(), keys, readObject);
 

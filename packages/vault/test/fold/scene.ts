@@ -8,9 +8,11 @@
 import type { ContinuityFact } from "@estoc/continuity";
 import { encodeLongForm } from "@estoc/did-peer";
 import type { Event, JsonObject } from "@estoc/event-store";
+import { SignJWT, importJWK } from "jose";
 import { v7 as uuidv7 } from "uuid";
 
 import {
+  AUTHENTICATION_METHOD,
   VaultEventSet,
   authorizedMethodIds,
   automaticMessageId,
@@ -187,6 +189,14 @@ export const IAT = 1_757_700_000;
 
 /** The proof that `successor` continues `predecessor`, signed by whichever seed minted the predecessor. */
 export const proof = (keys: Keys, predecessor: { didId: DidId; longFormDid: Did }, successor: { longFormDid: Did }, iat = IAT) => signFromPrior(keys, predecessor, successor.longFormDid, iat);
+
+/** A proof whose issuer is spelled in short form: verified only once a retained resolution of the predecessor brings its document. */
+export async function shortIssuerProof(keys: Keys, predecessor: { didId: DidId; did: Did }, successor: { longFormDid: Did }): Promise<string> {
+  const key = await keys.signing(didKeyName(predecessor.didId, "authentication"));
+  return new SignJWT({ iss: predecessor.did, sub: successor.longFormDid, iat: IAT })
+    .setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: `${predecessor.did}${AUTHENTICATION_METHOD}` })
+    .sign(await importJWK(key.privateJwk(), "EdDSA"));
+}
 
 export const channel = (local: { did: Did }, peer: { did: Did }): Channel => channelOf(local.did, peer.did);
 

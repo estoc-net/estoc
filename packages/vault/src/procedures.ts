@@ -2,28 +2,28 @@
  * What the runtime does over the whole fold: the retention it hands
  * the event store for collection, export and import; the erasure of a
  * message and the closure that keeps an erasure complete when a later
- * event names roots the erase did not; the admissions the observations
- * are owed, recorded in order; the work an open finds unfinished, which it lists
- * and never dispatches; the decisions a send, a reply and a rotation
- * take before they commit; the denial of channels and the deletion of
- * a contact. Each decision is a pure function of the fold, exported as
- * such, and each procedure takes the writer lock, scans, decides,
- * commits what it decided in one batch and, when the batch may
- * release a root, collects.
+ * event names roots the erase did not; the work an open finds
+ * unfinished, which it lists and never dispatches; the decisions a
+ * send, a reply and a rotation take before they commit; the denial of
+ * channels and the deletion of a contact. Each decision is a pure
+ * function of the fold, exported as such, and each procedure takes the
+ * writer lock, scans, decides, commits what it decided in one batch
+ * and, when the batch may release a root, collects.
  */
 
-import { heldRootsOf, type Collected, type Event, type Held, type HeldRoots, type RetainedRoots, type VaultRuntime } from "@estoc/event-store";
+import { heldRootsOf, type Collected, type Event, type HeldRoots, type RetainedRoots, type VaultRuntime } from "@estoc/event-store";
 
+import { channelPolicy, senderGate } from "./channel-policy.js";
 import type { Carrier, Decision, Source } from "./fold/channels.js";
 import { erased } from "./fold/held.js";
 import { kindOf, type Execution } from "./fold/inbound.js";
 import { PING_RESPONSE_EFFECT, PING_TYPE, PURE_ACK_EFFECT, type Notification, type Outbound } from "./fold/outbound.js";
-import { foldVault, scanVault, type FoldOptions, type ScanOptions, type VaultFold } from "./fold/vault.js";
-import { channelPolicy, messageIdsOf, senderGate } from "./fold/views.js";
+import { scanVault, type ScanOptions, type VaultFold } from "./fold/vault.js";
+import { messageIdsOf } from "./fold/views.js";
 import type { Keys } from "./identity.js";
 import { automaticMessageId, channelKey, channelOf, compareChannels, effectKey, sameChannel } from "./ids.js";
-import { readVaultEvent, vaultDraft, type VaultDraft, type VaultEvent } from "./schema.js";
-import type { Channel, Cid, ContactId, Did, EffectKey, EventCid, EventReference, ExecutionId, MessageId } from "./types.js";
+import { vaultDraft, type VaultDraft } from "./schema.js";
+import type { Channel, Cid, ContactId, Did, EffectKey, EventCid, ExecutionId, MessageId } from "./types.js";
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -122,68 +122,6 @@ export function eraseMessage(runtime: VaultRuntime, keys: Keys | null, messageId
 /** Append the equivalent erases later events made erased messages owed, then collect. */
 export function closeErasures(runtime: VaultRuntime, keys: Keys | null, options: ScanOptions = {}): Promise<Committed> {
   return decide(runtime, keys, options, erasureClosure);
-}
-
-// ---- application admission ---------------------------------------------
-
-/**
- * The admissions one round of the ordered pass records: of each
- * input, the first candidate observation in canonical event order that
- * may be admitted now. Only one observation of an input is taken per
- * round, since the next of the same input is judged against the
- * intent this one admits — the same intent is admitted in the next
- * round, another is refused as the contradiction it is — while
- * observations of different inputs are independent. A refused or
- * invalid candidate is passed over, and one waiting for evidence holds
- * up nothing behind it.
- */
-export function admissionDrafts(fold: VaultFold): VaultDraft<"message.admitted">[] {
-  const drafts: VaultDraft<"message.admitted">[] = [];
-  const taken = new Set<MessageId>();
-  for (const { source, eligibility } of fold.dispositions.candidates) {
-    if (eligibility.status !== "eligible" || taken.has(source.event.data.messageId)) continue;
-    taken.add(source.event.data.messageId);
-    drafts.push(vaultDraft("message.admitted", { sourceEventCid: source.event.cid as EventReference<"message.in"> }));
-  }
-  return drafts;
-}
-
-export interface Admitted {
-  /** the fold over the set as the pass left it: what any dependent decision under the same lock reads */
-  readonly fold: VaultFold;
-  readonly events: VaultEvent<"message.admitted">[];
-}
-
-/**
- * The ordered pass under a lock already held: round after round, the
- * admissions the fold owes are committed, the committed events added
- * to the fold's set and the fold read again over it, until a round
- * owes none. Each round is one commit, so a crash leaves whole rounds
- * and the next pass starts from what is durable; a commit that fails
- * ends the pass where it is. The fold handed in is superseded by the
- * one returned. An admission that is not effective once committed is
- * a fault of the fold, not something to record again.
- */
-export async function admitReceipts(held: Held, fold: VaultFold, options: FoldOptions = {}): Promise<Admitted> {
-  const events: VaultEvent<"message.admitted">[] = [];
-  const drafted = new Set<EventCid>();
-  for (;;) {
-    const drafts = admissionDrafts(fold);
-    if (drafts.length === 0) return { fold, events };
-    for (const draft of drafts) {
-      if (drafted.has(draft.data.sourceEventCid)) throw new Error(`the admission of ${draft.data.sourceEventCid} was recorded and did not take effect`);
-      drafted.add(draft.data.sourceEventCid);
-    }
-    const committed = (await held.commit([], drafts)).map(readVaultEvent) as VaultEvent<"message.admitted">[];
-    events.push(...committed);
-    for (const event of committed) fold.set.add(event);
-    fold = foldVault(fold.set, fold.checks, options);
-  }
-}
-
-/** Record the admissions the observations are owed, in order under the lock: what an open, every receipt and every recovery of evidence run, dispatching nothing. */
-export function reconcileAdmissions(runtime: VaultRuntime, keys: Keys | null, options: ScanOptions = {}): Promise<VaultEvent<"message.admitted">[]> {
-  return runtime.locked(async (held) => (await admitReceipts(held, await scanVault(held, keys, options), options)).events);
 }
 
 // ---- automatic effects ---------------------------------------------------

@@ -22,6 +22,7 @@ import { canonicalDidOf } from "../peer-document.js";
 import { requestsAck } from "../projection.js";
 import { agreementKey } from "../public-key.js";
 import type { VaultEvent } from "../schema.js";
+import { senderGate } from "../channel-policy.js";
 import type { Channel, Did, EventCid, MessageId, MessageOut, WireMessageId } from "../types.js";
 import { keyAgreementTypeOf, type ChannelEvidence, type Source } from "./channels.js";
 import type { Continuity } from "./continuity.js";
@@ -30,7 +31,6 @@ import type { Erasures } from "./held.js";
 import { EMPTY_CONTENT_CID, EMPTY_MESSAGE_TYPE, PING_RESPONSE_TYPE, kindOf, type Execution, type InboundFold } from "./inbound.js";
 import type { LocalDidEntity, DidFold } from "./dids.js";
 import { groupBy, samePayload, type VaultEventSet } from "./set.js";
-import { senderGate } from "./views.js";
 
 export const PURE_ACK_EFFECT = "https://estoc.dev/distributed-delivery/1.0#pure-ack";
 export const PING_RESPONSE_EFFECT = PING_RESPONSE_TYPE;

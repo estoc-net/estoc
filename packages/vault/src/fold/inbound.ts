@@ -20,7 +20,7 @@ import { compareEvents } from "@estoc/event-store";
 import { storeMessage } from "../document.js";
 import { executionId } from "../ids.js";
 import type { Channel, EventCid, ExecutionId, MessageHash, MessageId, MessageIn, WireMessageId } from "../types.js";
-import type { AdmissionFold } from "./admission.js";
+import type { AdmissionFold } from "../admission/model.js";
 import type { ChannelEvidence, Source } from "./channels.js";
 import type { Continuity, Witness } from "./continuity.js";
 import type { Erasures } from "./held.js";

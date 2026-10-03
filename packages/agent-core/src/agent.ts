@@ -62,7 +62,8 @@ import { callPrivateAddress, decidePrivateAddress, type PrivateAddress } from ".
 import { STATUS } from "./protocol/mediation.js";
 import { enroll, transientConfirmations, type Confirmations, type Enrolled } from "./replica-enrollment.js";
 import { addRecipients, type RecipientsAdded } from "./replica-recipients.js";
-import { afterReceipt, recordOwed, type AfterReceipt, type Owed } from "./receive/after.js";
+import { afterReceipt, type AfterReceipt } from "./receive/after.js";
+import { recordOwed, type Owed } from "./reconcile.js";
 import { receiptOf } from "./receive/receipt.js";
 import { Receiver, type Discarded, type Received, type ReceiverOptions, type WaitingDelivery } from "./receive/receiver.js";
 import type { PendingWork, Recorder } from "./records.js";

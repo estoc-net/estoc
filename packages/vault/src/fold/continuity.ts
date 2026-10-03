@@ -26,7 +26,7 @@ import { deriveContinuity, successorChannel, type Conflict, type ContinuityFact,
 import { channelKey, channelOf, compareChannels, observationFactId, sameChannel, transitionFactId } from "../ids.js";
 import type { VaultEvent } from "../schema.js";
 import type { Channel, EventCid } from "../types.js";
-import type { AdmissionFold } from "./admission.js";
+import type { AdmissionFold } from "../admission/model.js";
 import type { ChannelEvidence, Decision, Source } from "./channels.js";
 import type { VaultEventSet } from "./set.js";
 
